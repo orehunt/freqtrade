@@ -62,15 +62,22 @@ def analyze_trade_parallelism(results: pd.DataFrame, timeframe: str) -> pd.DataF
     """
     from freqtrade.exchange import timeframe_to_minutes
     timeframe_min = timeframe_to_minutes(timeframe)
+    # compute how long each trade was left outstanding as date indexes
     dates = [pd.Series(pd.date_range(row[1].open_time, row[1].close_time,
                                      freq=f"{timeframe_min}min"))
              for row in results[['open_time', 'close_time']].iterrows()]
+    # track the lifetime of each trade in number of candles
     deltas = [len(x) for x in dates]
+    # concat expands and flattens the list of lists of dates
     dates = pd.Series(pd.concat(dates).values, name='date')
+    # trades are repeated (column wise) according to their lifetime
     df2 = pd.DataFrame(np.repeat(results.values, deltas, axis=0), columns=results.columns)
 
+    # the expanded dates list is added as a new column to the repeated trades (df2)
     df2 = pd.concat([dates, df2], axis=1)
     df2 = df2.set_index('date')
+    # duplicate dates entries represent trades on the same candle
+    # which resampling resolves through the applied function (count)
     df_final = df2.resample(f"{timeframe_min}min")[['pair']].count()
     df_final = df_final.rename({'pair': 'open_trades'}, axis=1)
     return df_final
