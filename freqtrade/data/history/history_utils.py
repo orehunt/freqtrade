@@ -80,7 +80,6 @@ def load_data(datadir: Path,
         logger.info(f'Using indicator startup period: {startup_candles} ...')
 
     data_handler = get_datahandler(datadir, data_format)
-
     for pair in pairs:
         hist = load_pair_history(pair=pair, timeframe=timeframe,
                                  datadir=datadir, timerange=timerange,

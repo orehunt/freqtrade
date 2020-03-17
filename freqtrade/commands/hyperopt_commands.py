@@ -7,6 +7,7 @@ from colorama import init as colorama_init
 from freqtrade.configuration import setup_utils_configuration
 from freqtrade.exceptions import OperationalException
 from freqtrade.state import RunMode
+from freqtrade.optimize.hyperopt_backend import filter_trials, filter_options
 
 logger = logging.getLogger(__name__)
 
@@ -25,18 +26,7 @@ def start_hyperopt_list(args: Dict[str, Any]) -> None:
     no_details = config.get('hyperopt_list_no_details', False)
     no_header = False
 
-    filteroptions = {
-        'only_best': config.get('hyperopt_list_best', False),
-        'only_profitable': config.get('hyperopt_list_profitable', False),
-        'filter_min_trades': config.get('hyperopt_list_min_trades', 0),
-        'filter_max_trades': config.get('hyperopt_list_max_trades', 0),
-        'filter_min_avg_time': config.get('hyperopt_list_min_avg_time', None),
-        'filter_max_avg_time': config.get('hyperopt_list_max_avg_time', None),
-        'filter_min_avg_profit': config.get('hyperopt_list_min_avg_profit', None),
-        'filter_max_avg_profit': config.get('hyperopt_list_max_avg_profit', None),
-        'filter_min_total_profit': config.get('hyperopt_list_min_total_profit', None),
-        'filter_max_total_profit': config.get('hyperopt_list_max_total_profit', None)
-    }
+    filteroptions = _hyperopt_filter_options(config)
 
     trials_file = (config['user_data_dir'] /
                    'hyperopt_results' / 'hyperopt_results.pickle')
@@ -46,6 +36,7 @@ def start_hyperopt_list(args: Dict[str, Any]) -> None:
     total_epochs = len(trials)
 
     trials = _hyperopt_filter_trials(trials, filteroptions)
+    trials = filter_trials(trials, config)
 
     if print_colorized:
         colorama_init(autoreset=True)
@@ -67,6 +58,19 @@ def start_hyperopt_list(args: Dict[str, Any]) -> None:
             config, trials, total_epochs, not filteroptions['only_best'], export_csv
         )
 
+def _hyperopt_filter_options(config: Dict[str, Any]):
+    return {
+        'only_best': config.get('hyperopt_list_best', False),
+        'only_profitable': config.get('hyperopt_list_profitable', False),
+        'filter_min_trades': config.get('hyperopt_list_min_trades', 0),
+        'filter_max_trades': config.get('hyperopt_list_max_trades', 0),
+        'filter_min_avg_time': config.get('hyperopt_list_min_avg_time', None),
+        'filter_max_avg_time': config.get('hyperopt_list_max_avg_time', None),
+        'filter_min_avg_profit': config.get('hyperopt_list_min_avg_profit', None),
+        'filter_max_avg_profit': config.get('hyperopt_list_max_avg_profit', None),
+        'filter_min_total_profit': config.get('hyperopt_list_min_total_profit', None),
+        'filter_max_total_profit': config.get('hyperopt_list_max_total_profit', None)
+    }
 
 def start_hyperopt_show(args: Dict[str, Any]) -> None:
     """
@@ -82,21 +86,15 @@ def start_hyperopt_show(args: Dict[str, Any]) -> None:
                    'hyperopt_results' / 'hyperopt_results.pickle')
     n = config.get('hyperopt_show_index', -1)
 
-    filteroptions = {
-        'only_best': config.get('hyperopt_list_best', False),
-        'only_profitable': config.get('hyperopt_list_profitable', False),
-        'filter_min_trades': config.get('hyperopt_list_min_trades', 0),
-        'filter_max_trades': config.get('hyperopt_list_max_trades', 0),
-        'filter_min_avg_time': config.get('hyperopt_list_min_avg_time', None),
-        'filter_max_avg_time': config.get('hyperopt_list_max_avg_time', None),
-        'filter_min_avg_profit': config.get('hyperopt_list_min_avg_profit', None),
-        'filter_max_avg_profit': config.get('hyperopt_list_max_avg_profit', None),
-        'filter_min_total_profit': config.get('hyperopt_list_min_total_profit', None),
-        'filter_max_total_profit': config.get('hyperopt_list_max_total_profit', None)
-    }
+    filteroptions = _hyperopt_filter_options(config)
 
     # Previous evaluations
     trials = Hyperopt.load_previous_results(trials_file)
+    i = 1
+    for c, t in enumerate(trials):
+        if t["current_epoch"] == trials[c-1]["current_epoch"]:
+            print(t["current_epoch"], i, trials[c-1]["current_epoch"])
+        i += 1
     total_epochs = len(trials)
 
     trials = _hyperopt_filter_trials(trials, filteroptions)

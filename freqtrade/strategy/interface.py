@@ -241,8 +241,8 @@ class IStrategy(ABC):
 
         return dataframe
 
-    def get_signal(self, pair: str, interval: str,
-                   dataframe: DataFrame) -> Tuple[bool, bool]:
+    def get_signal(self, pair: str, interval: str, dataframe: DataFrame,
+                   queue=None) -> Tuple[bool, bool]:
         """
         Calculates current signal based several technical analysis indicators
         :param pair: pair in format ANT/BTC
@@ -254,8 +254,11 @@ class IStrategy(ABC):
             logger.warning('Empty candle (OHLCV) data for pair %s', pair)
             return False, False
 
+        latest_date = dataframe['date'].max()
         try:
+            df_len, df_close, df_date = self.preserve_df(dataframe)
             dataframe = self._analyze_ticker_internal(dataframe, {'pair': pair})
+            self.assert_df(dataframe, df_len, df_close, df_date)
         except ValueError as error:
             logger.warning(
                 'Unable to analyze candle (OHLCV) data for pair %s: %s',
@@ -269,34 +272,34 @@ class IStrategy(ABC):
                 pair,
                 str(error)
             )
+            if queue is not None:
+                queue.put((pair, (False, False)))
             return False, False
 
         if dataframe.empty:
             logger.warning('Empty dataframe for pair %s', pair)
+            if queue is not None:
+                queue.put((pair, (False, False)))
             return False, False
 
-        latest = dataframe.iloc[-1]
+        latest = dataframe.loc[dataframe['date'] == latest_date].iloc[-1]
 
         # Check if dataframe is out of date
         signal_date = arrow.get(latest['date'])
         interval_minutes = timeframe_to_minutes(interval)
         offset = self.config.get('exchange', {}).get('outdated_offset', 5)
-        if signal_date < (arrow.utcnow().shift(minutes=-(interval_minutes * 2 + offset))):
-            logger.warning(
-                'Outdated history for pair %s. Last tick is %s minutes old',
-                pair,
-                (arrow.utcnow() - signal_date).seconds // 60
-            )
+        if signal_date < (arrow.utcnow().shift(minutes=-(interval_minutes*2 + offset))):
+            logger.warning('Outdated history for pair %s. Last tick is %s minutes old', pair,
+                           (arrow.utcnow() - signal_date).seconds // 60)
+            if queue is not None:
+                queue.put((pair, (False, False)))
             return False, False
 
         (buy, sell) = latest[SignalType.BUY.value] == 1, latest[SignalType.SELL.value] == 1
-        logger.debug(
-            'trigger: %s (pair=%s) buy=%s sell=%s',
-            latest['date'],
-            pair,
-            str(buy),
-            str(sell)
-        )
+        logger.debug('trigger: %s (pair=%s) buy=%s sell=%s', latest['date'], pair, str(buy),
+                     str(sell))
+        if queue is not None:
+            queue.put((pair, (buy, sell)))
         return buy, sell
 
     def should_sell(self, trade: Trade, rate: float, date: datetime, buy: bool,
