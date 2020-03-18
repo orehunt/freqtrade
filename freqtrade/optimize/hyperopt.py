@@ -40,7 +40,7 @@ from freqtrade.optimize.hyperopt_backend import Trial
 from freqtrade.optimize.hyperopt_interface import IHyperOpt  # noqa: F401
 from freqtrade.optimize.hyperopt_loss_interface import IHyperOptLoss  # noqa: F401
 from freqtrade.resolvers.hyperopt_resolver import (HyperOptLossResolver, HyperOptResolver)
-from freqtrade.optimize.hyperopt_backend import filter_trials
+from freqtrade.optimize.hyperopt_backend import filter_trials, save_trials, load_trials
 
 # Suppress scikit-learn FutureWarnings from skopt
 with warnings.catch_warnings():
@@ -56,8 +56,12 @@ with warnings.catch_warnings():
 logger = logging.getLogger(__name__)
 
 # supported strategies when asking for multiple points to the optimizer
-NEXT_POINT_METHODS = ["cl_min", "cl_mean", "cl_max"]
-NEXT_POINT_METHODS_LENGTH = 3
+LIE_STRATS = ["cl_min", "cl_mean", "cl_max"]
+LIE_STRATS_N = len(LIE_STRATS)
+
+# supported estimators
+ESTIMATORS = ["GBRT", "ET", "RF"]
+ESTIMATORS_N = len(ESTIMATORS)
 
 VOID_LOSS = iinfo(int32).max  # just a big enough number to be bad result in loss optimization
 
@@ -163,26 +167,27 @@ class Hyperopt:
         backend.manager = Manager()
         self.mode = self.config.get('mode', 'single')
         self.shared = False
+        # in multi opt one model is enough
+        self.n_models = 1
+        self.opt_acq_optimizer = 'auto'
         if self.mode in ('multi', 'shared'):
             self.multi = True
             if self.mode == 'shared':
                 self.shared = True
+                self.opt_base_estimator = lambda: 'GBRT'
+            else:
+                self.opt_base_estimator = self.estimators
             backend.optimizers = backend.manager.Queue()
             backend.results_board = backend.manager.Queue(maxsize=1)
             backend.results_board.put({})
-            self.opt_base_estimator = 'GBRT'
-            self.opt_acq_optimizer = 'sampling'
-            # in multi opt one model is enough
-            self.n_models = 1
             default_n_points = 2
         else:
             self.multi = False
             backend.results = backend.manager.Queue()
-            self.opt_base_estimator = 'GP'
-            self.opt_acq_optimizer = 'lbfgs'
-            # models are only needed for posterior eval
-            self.n_models = min(16, self.n_jobs)
-            default_n_points = 1
+            self.opt_base_estimator = lambda: 'ET'
+            default_n_points = self.n_jobs
+            # self.opt_base_estimator = 'GP'
+            # self.opt_acq_optimizer = 'lbfgs'
 
         # in single opt assume runs are expensive so default to 1 point per ask
         self.n_points = self.config.get('n_points', default_n_points)
@@ -205,7 +210,7 @@ class Hyperopt:
         if lie_strat == 'default':
             self.lie_strat = lambda: 'cl_min'
         elif lie_strat == 'random':
-            self.lie_strat = self.get_next_point_strategy
+            self.lie_strat = self.lie_strategy
         else:
             self.lie_strat = lambda: lie_strat
 
@@ -248,6 +253,7 @@ class Hyperopt:
         num_trials = len(self.trials)
         if num_trials > self.num_trials_saved:
             logger.debug(f"\nSaving {num_trials} {plural(num_trials, 'epoch')}.")
+            # save_trials(self.trials, trials_path, self.num_trials_saved)
             dump(self.trials, trials_path)
             self.num_trials_saved = num_trials
             self.save_opts()
@@ -690,10 +696,13 @@ class Hyperopt:
             void_filtered = vals
         return void_filtered
 
-    def get_next_point_strategy(self):
+    def lie_strategy(self):
         """ Choose a strategy randomly among the supported ones, used in multi opt mode
         to increase the diversion of the searches of each optimizer """
-        return NEXT_POINT_METHODS[random.randrange(0, NEXT_POINT_METHODS_LENGTH)]
+        return LIE_STRATS[random.randrange(0, LIE_STRATS_N)]
+
+    def estimators(self):
+        return ESTIMATORS[random.randrange(0, ESTIMATORS_N)]
 
     def get_optimizer(self, dimensions: List[Dimension], n_jobs: int,
                       n_initial_points: int) -> Optimizer:
@@ -705,7 +714,7 @@ class Hyperopt:
             n_jobs = 1
         return Optimizer(
             dimensions,
-            base_estimator=self.opt_base_estimator,
+            base_estimator=self.opt_base_estimator(),
             acq_optimizer=self.opt_acq_optimizer,
             n_initial_points=n_initial_points,
             acq_optimizer_kwargs={'n_jobs': n_jobs},
@@ -754,6 +763,7 @@ class Hyperopt:
         points become invalid.
         """
         vals = []
+        fit = False
         to_ask: deque = deque()
         evald: Set[Tuple] = set()
         opt = self.opt
@@ -764,12 +774,14 @@ class Hyperopt:
                 # filter losses
                 void_filtered = self.filter_void_losses(vals, opt)
                 if void_filtered:  # again if all are filtered
+                    fit = (len(to_ask) < 1)
                     opt.tell([list(v['params_dict'].values()) for v in void_filtered],
                              [v['loss'] for v in void_filtered],
-                             fit=(len(to_ask) < 1))  # only fit when out of points
+                             fit=fit)  # only fit when out of points
                     del vals[:], void_filtered[:]
 
             if not to_ask:
+                if fit: opt.update_next()
                 to_ask.extend(opt.ask(n_points=self.n_points, strategy=self.lie_strat()))
             a = tuple(to_ask.popleft())
             while a in evald:
@@ -777,6 +789,8 @@ class Hyperopt:
                 if len(to_ask) > 0:
                     a = tuple(to_ask.popleft())
                 else:
+                    if not vals:
+                        vals.append(backend.results.get())
                     break
             evald.add(a)
             yield a

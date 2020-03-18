@@ -1,7 +1,7 @@
 from typing import Any, NamedTuple, Dict, List
 from queue import Queue
 from multiprocessing.managers import SyncManager
-from pandas import DataFrame, concat
+from pandas import DataFrame, concat, read_hdf, to_numeric
 from numpy import arange
 from pathlib import Path
 
@@ -101,7 +101,7 @@ def filter_trials(trials: List, config: Dict[str, Any]) -> List:
     if len(with_trades) != with_trades_len:
         trials = with_trades
 
-    if filters["step_key"]:
+    if filters["step_value"]:
         step_k = filters["step_key"]
         step_v = filters["step_value"]
         step_start = trials[step_k].min()
@@ -131,6 +131,12 @@ def filter_trials(trials: List, config: Dict[str, Any]) -> List:
     return flt_trials
 
 
-def save_trials(trials: List, path: Path):
+def save_trials(trials: List, path: Path, offset: int = 0):
     trials, _ = trials_to_df(trials)
-    trials.to_feather(path)
+    trials.to_hdf(
+        path, key="trials", append=True, format="table", complevel=9, mode="a"
+    )
+
+def load_trials(path: Path):
+    trials = read_hdf(path, key='trials')
+    return trials
