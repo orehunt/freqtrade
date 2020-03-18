@@ -954,9 +954,12 @@ class Hyperopt:
             if len_best > 0:
                 # sorting from lowest to highest, the first value is the current best
                 best = sorted(best_epochs, key=lambda k: k["loss"])[0]
+                print(best)
                 self.current_best_epoch = best["current_epoch"]
+                self.current_best_loss = best["loss"]
                 self.avg_best_occurrence = len_trials // len_best
-                return True
+                # return True
+        exit()
         return False
 
     @staticmethod
