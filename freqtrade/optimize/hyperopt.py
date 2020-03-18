@@ -187,7 +187,10 @@ class Hyperopt:
             # self.opt_base_estimator = lambda: 'ET'
             self.opt_base_estimator = lambda: 'GP'
             self.opt_acq_optimizer = 'sampling'
-            default_n_points = self.n_jobs
+            self.opt_base_estimator = lambda: 'ET'
+            default_n_points = 1
+            # The GaussianProcessRegressor is heavy, which makes it not a good default
+            # however longer backtests might make it a better tradeoff
             # self.opt_base_estimator = 'GP'
             # self.opt_acq_optimizer = 'lbfgs'
 
@@ -264,8 +267,12 @@ class Hyperopt:
                         f"saved to '{self.trials_file}'.")
 
     def save_opts(self) -> None:
-        """ Save optimizers state to disk. The minimum required state could also be constructed
-        from the attributes [ models, space, rng ] with Xi, yi loaded from trials """
+        """
+        Save optimizers state to disk. The minimum required state could also be constructed
+        from the attributes [ models, space, rng ] with Xi, yi loaded from trials.
+        All we really care about are [rng, Xi, yi] since models are never passed over queues
+        and space is dependent on dimensions matching with hyperopt config
+        """
         # synchronize with saved trials
         opts = []
         n_opts = 0
@@ -769,31 +776,31 @@ class Hyperopt:
         to_ask: deque = deque()
         evald: Set[Tuple] = set()
         opt = self.opt
+        ask = lambda: to_ask.extend(opt.ask(n_points=self.n_points, strategy=self.lie_strat()))
         for r in range(tries):
+            fit = (len(to_ask) < 1)
             while not backend.results.empty():
                 vals.append(backend.results.get())
             if vals:
                 # filter losses
                 void_filtered = self.filter_void_losses(vals, opt)
                 if void_filtered:  # again if all are filtered
-                    fit = (len(to_ask) < 1)
                     opt.tell([list(v['params_dict'].values()) for v in void_filtered],
                              [v['loss'] for v in void_filtered],
                              fit=fit)  # only fit when out of points
                     del vals[:], void_filtered[:]
 
-            if not to_ask:
-                if fit: opt.update_next()
-                to_ask.extend(opt.ask(n_points=self.n_points, strategy=self.lie_strat()))
+            if fit:
+                ask()
             a = tuple(to_ask.popleft())
             while a in evald:
-                logger.info("this point was evaluated before...")
+                logger.debug("this point was evaluated before...")
                 if len(to_ask) > 0:
                     a = tuple(to_ask.popleft())
                 else:
-                    if not vals:
-                        vals.append(backend.results.get())
-                    break
+                    opt.update_next()
+                    ask()
+                    a = tuple(to_ask.popleft())
             evald.add(a)
             yield a
 
