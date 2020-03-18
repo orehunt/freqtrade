@@ -48,7 +48,7 @@ with warnings.catch_warnings():
     from skopt import Optimizer
     from skopt.space import Dimension
 # Additional regressors already pluggable into the optimizer
-# from sklearn.linear_model import ARDRegression, BayesianRidge
+from sklearn.linear_model import ARDRegression, BayesianRidge
 # possibly interesting regressors that need predict method override
 # from sklearn.ensemble import HistGradientBoostingRegressor
 # from xgboost import XGBoostRegressor
@@ -169,7 +169,6 @@ class Hyperopt:
         self.shared = False
         # in multi opt one model is enough
         self.n_models = 1
-        self.opt_acq_optimizer = 'auto'
         if self.mode in ('multi', 'shared'):
             self.multi = True
             if self.mode == 'shared':
@@ -177,6 +176,7 @@ class Hyperopt:
                 self.opt_base_estimator = lambda: 'GBRT'
             else:
                 self.opt_base_estimator = self.estimators
+            self.opt_acq_optimizer = 'sampling'
             backend.optimizers = backend.manager.Queue()
             backend.results_board = backend.manager.Queue(maxsize=1)
             backend.results_board.put({})
@@ -184,7 +184,9 @@ class Hyperopt:
         else:
             self.multi = False
             backend.results = backend.manager.Queue()
-            self.opt_base_estimator = lambda: 'ET'
+            # self.opt_base_estimator = lambda: 'ET'
+            self.opt_base_estimator = lambda: 'GP'
+            self.opt_acq_optimizer = 'sampling'
             default_n_points = self.n_jobs
             # self.opt_base_estimator = 'GP'
             # self.opt_acq_optimizer = 'lbfgs'
@@ -821,8 +823,9 @@ class Hyperopt:
             optimizers.put(opt)
             # switch the seed to get a different point
             opt.rng.seed(rand)
-            opt.update_next()
 
+        # always update the next point because we never fit on tell
+        opt.update_next()
         # ask for points according to config
         asked = opt.ask(n_points=self.ask_points, strategy=self.lie_strat())
         # check if some points have been evaluated by other optimizers
@@ -849,10 +852,10 @@ class Hyperopt:
             opt.tell(Xi, yi, fit=False)
         else:
             void = True
+        # send back the updated optimizer only in non shared mode
+        # because in shared mode if all results are void we don't
+        # fetch it at all
         if not void or not is_shared:
-            # send back the updated optimizer only in non shared mode
-            # because in shared mode if all results are void we don't
-            # fetch it at all
             del opt.models[:]
             optimizers.put(opt)
         # update the board used to skip already computed points
