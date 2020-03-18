@@ -3,6 +3,7 @@
 This module contains the hyperopt logic
 """
 
+import os
 import functools
 import locale
 import logging
@@ -1160,6 +1161,8 @@ class Hyperopt:
                     prev_batch = -1
                     epochs_so_far = self.start_epoch
                     epochs_limit = self.epochs_limit
+                    columns, _ = os.get_terminal_size()
+                    columns -= 1
                     while epochs_so_far > prev_batch or epochs_so_far < self.min_epochs:
                         prev_batch = epochs_so_far
                         occurrence = int(self.avg_best_occurrence * (1 + self.effort))
@@ -1178,8 +1181,9 @@ class Hyperopt:
                             f"/{epochs_limit()}: ",
                             end='')
                         f_val = jobs_scheduler(parallel, batch_len, epochs_so_far, jobs)
-                        print(' ' * batch_len * jobs, end='\r')
+                        print(end='\r')
                         saved = self.log_results(f_val, epochs_so_far, epochs_limit())
+                        print('\r', ' ' * columns, end='\r')
                         # stop if no epochs have been evaluated
                         if len(f_val) < batch_len:
                             logger.warning("Some evaluated epochs were void, "
