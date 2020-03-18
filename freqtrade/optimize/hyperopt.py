@@ -1162,9 +1162,10 @@ class Hyperopt:
                     epochs_limit = self.epochs_limit
                     while epochs_so_far > prev_batch or epochs_so_far < self.min_epochs:
                         prev_batch = epochs_so_far
+                        occurrence = int(self.avg_best_occurrence * (1 + self.effort))
                         # pad the batch length to the number of jobs to avoid desaturation
-                        batch_len = (self.avg_best_occurrence + self.n_jobs -
-                                     self.avg_best_occurrence % self.n_jobs)
+                        batch_len = (occurrence + self.n_jobs -
+                                     occurrence % self.n_jobs)
                         # when using multiple optimizers each worker performs
                         # n_points (epochs) in 1 dispatch but this reduces the batch len too much
                         # if self.multi: batch_len = batch_len // self.n_points
@@ -1177,7 +1178,7 @@ class Hyperopt:
                             f"/{epochs_limit()}: ",
                             end='')
                         f_val = jobs_scheduler(parallel, batch_len, epochs_so_far, self.n_jobs)
-                        print(' ' * batch_len * n_points, end='\r')
+                        print(' ' * batch_len * n_points, end='')
                         saved = self.log_results(f_val, epochs_so_far, epochs_limit())
                         # stop if no epochs have been evaluated
                         if len(f_val) < batch_len:
