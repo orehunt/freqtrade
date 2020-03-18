@@ -841,20 +841,28 @@ class Hyperopt:
         elif initial_points < 1:
             opt.tell(opt.Xi, opt.yi)
 
-        # ask for points according to config
-        asked = opt.ask(n_points=self.ask_points, strategy=self.lie_strat())
-        # wrap in a list when asked for 1 point
-        if not self.ask_points:
-            asked = [asked]
-        # check if some points have been evaluated by other optimizers
-        p_asked = self.opt_get_past_points({tuple(a): None for a in asked}, results_board)
         Xi_d = []  # done
+        yi_d = []
         Xi_t = []  # to do
-        for a in p_asked:
-            if p_asked[a] is not None:
-                Xi_d.append(a)
+        # ask for points according to config
+        while True:
+            asked = opt.ask(n_points=self.ask_points, strategy=self.lie_strat())
+            if not self.ask_points:
+                asked = {tuple(asked): None}
             else:
-                Xi_t.append(a)
+                asked = {tuple(a): None for a in asked}
+            # check if some points have been evaluated by other optimizers
+            p_asked = self.opt_get_past_points(asked, results_board)
+            for a in p_asked:
+                if p_asked[a] is not None:
+                    Xi_d.append(a)
+                    yi_d.append(p_asked[a])
+                else:
+                    Xi_t.append(a)
+            if len(Xi_t) < self.n_points:
+                opt.update_next()
+            else:
+                break
         # run the backtest for each point to do (Xi_t)
         f_val = [self.backtest_params(a) for a in Xi_t]
         # filter losses
@@ -862,7 +870,7 @@ class Hyperopt:
         # add points of the current dispatch if any
         if opt.void_loss != VOID_LOSS or len(void_filtered) > 0:
             Xi = [*Xi_d, *[list(v['params_dict'].values()) for v in void_filtered]]
-            yi = [*[p_asked[a] for a in Xi_d], *[v['loss'] for v in void_filtered]]
+            yi = [*yi_d, *[v['loss'] for v in void_filtered]]
             void = False
             if is_shared:
                 # refresh the optimizer that stores all the points
