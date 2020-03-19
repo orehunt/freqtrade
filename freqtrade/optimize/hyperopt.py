@@ -3,7 +3,7 @@
 This module contains the hyperopt logic
 """
 
-import os
+import sys, os
 import functools
 import locale
 import logging
@@ -55,6 +55,7 @@ with warnings.catch_warnings():
 # from xgboost import XGBoostRegressor
 
 logger = logging.getLogger(__name__)
+testing = 'pytest' in sys.modules
 
 # supported strategies when asking for multiple points to the optimizer
 LIE_STRATS = ["cl_min", "cl_mean", "cl_max"]
@@ -110,7 +111,10 @@ class Hyperopt:
         # total number of candles being backtested
         self.n_candles = 0
         # cross validation
-        self.cv = self.config['hyperopt_cv']
+        if 'hyperopt_cv' in self.config:
+            self.cv = self.config['hyperopt_cv']
+        else:
+            self.cv = False
 
         self.current_best_loss = VOID_LOSS
         self.current_best_epoch = 0
@@ -261,7 +265,7 @@ class Hyperopt:
             self.num_trials_saved = num_trials
             self.save_opts()
         if final:
-            logger.info(f"\n{num_trials} {plural(num_trials, 'epoch')} "
+            logger.info(f"{num_trials} {plural(num_trials, 'epoch')} "
                         f"saved to '{self.trials_file}'.")
 
     def save_opts(self) -> None:
@@ -783,6 +787,7 @@ class Hyperopt:
                     to_ask.extend(opt.ask(n_points=self.ask_points, strategy=self.lie_strat()))
                     return tuple(to_ask.popleft())
             else:
+                print(opt.n_initial_points_)
                 return tuple(opt.ask(strategy=self.lie_strat()))
 
         for r in range(tries):
@@ -1045,7 +1050,7 @@ class Hyperopt:
             n_initial_points = min(log_sss, search_space_size // 3)
             # it shall run for this much, I say
             min_epochs = int(max(n_initial_points, opt_points) * (1 + effort) + n_initial_points)
-        return n_initial_points, min_epochs, search_space_size
+        return n_initial_points or 1, min_epochs, search_space_size
 
     def update_max_epoch(self, val: Dict, current: int):
         """ calculate max epochs: store the number of non best epochs
@@ -1131,8 +1136,11 @@ class Hyperopt:
                     prev_batch = -1
                     epochs_so_far = self.start_epoch
                     epochs_limit = self.epochs_limit
-                    columns, _ = os.get_terminal_size()
-                    columns -= 1
+                    if testing:
+                        columns = 80
+                    else:
+                        columns, _ = os.get_terminal_size()
+                        columns -= 1
                     while epochs_so_far > prev_batch or epochs_so_far < self.min_epochs:
                         prev_batch = epochs_so_far
                         occurrence = int(self.avg_best_occurrence * (1 + self.effort))

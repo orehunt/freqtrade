@@ -35,7 +35,6 @@ def start_hyperopt_list(args: Dict[str, Any]) -> None:
     trials = Hyperopt.load_previous_results(trials_file)
     total_epochs = len(trials)
 
-    trials = _hyperopt_filter_trials(trials, filteroptions)
     trials = filter_trials(trials, config)
 
     if print_colorized:
@@ -99,7 +98,7 @@ def start_hyperopt_show(args: Dict[str, Any]) -> None:
         i += 1
     total_epochs = len(trials)
 
-    trials = _hyperopt_filter_trials(trials, filteroptions)
+    trials = filter_trials(trials, config)
     trials_epochs = len(trials)
 
     if n > trials_epochs:

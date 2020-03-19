@@ -76,7 +76,7 @@ def filter_trials(trials: Any, config: Dict[str, Any]) -> List:
     filters = filter_options(config)
 
     if filters["best"]:
-        trials = trials.loc[trials["is_best"] is True]
+        trials = trials.loc[trials["is_best"]]
     if filters["profitable"]:
         trials = trials.loc[trials["profit"] > 0]
     if filters["min_trades"]:

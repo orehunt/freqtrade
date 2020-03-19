@@ -387,7 +387,7 @@ class FreqtradeBot:
         # See also #2575 at github.
         return max(min_stake_amounts) / amount_reserve_percent
 
-    def create_trade(self, pair: str, signals: Tuple[bool, bool]) -> bool:
+    def create_trade(self, pair: str, signals: Tuple[bool, bool] = None) -> bool:
         """
         Check the implemented trading strategy for buy signals.
 
@@ -403,11 +403,13 @@ class FreqtradeBot:
             return False
 
         # running get_signal on historical data fetched
-        # (buy, sell) = self.strategy.get_signal(
-        #     pair, self.strategy.ticker_interval,
-        #     self.dataprovider.ohlcv(pair, self.strategy.ticker_interval))
-        buy = signals[0]
-        sell = signals[1]
+        if signals:
+            buy = signals[0]
+            sell = signals[1]
+        else:
+            (buy, sell) = self.strategy.get_signal(
+                pair, self.strategy.ticker_interval,
+                self.dataprovider.ohlcv(pair, self.strategy.ticker_interval))
 
         if buy and not sell:
             if not self.get_free_open_trades():
@@ -674,7 +676,7 @@ class FreqtradeBot:
         self._sell_rate_cache[pair] = rate
         return rate
 
-    def handle_trade(self, trade: Trade, signals: Tuple[bool, bool]) -> bool:
+    def handle_trade(self, trade: Trade, signals: Tuple[bool, bool] = None) -> bool:
         """
         Sells the current pair if the threshold is reached and updates the trade record.
         :return: True if trade has been sold, False otherwise
@@ -690,10 +692,12 @@ class FreqtradeBot:
 
         if (config_ask_strategy.get('use_sell_signal', True) or
                 config_ask_strategy.get('ignore_roi_if_buy_signal', False)):
-            # (buy, sell) = self.strategy.get_signal(
-            #     trade.pair, self.strategy.ticker_interval,
-            #     self.dataprovider.ohlcv(trade.pair, self.strategy.ticker_interval))
-            (buy, sell) = signals[0], signals[1]
+            if signals:
+                (buy, sell) = signals[0], signals[1]
+            else:
+                (buy, sell) = self.strategy.get_signal(
+                    trade.pair, self.strategy.ticker_interval,
+                    self.dataprovider.ohlcv(trade.pair, self.strategy.ticker_interval))
 
         if config_ask_strategy.get('use_order_book', False):
             logger.debug(f'Using order book for selling {trade.pair}...')

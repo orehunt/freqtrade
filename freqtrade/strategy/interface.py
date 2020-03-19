@@ -2,7 +2,7 @@
 IStrategy interface
 This module defines the interface to apply for strategies
 """
-import logging
+import logging, sys
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from enum import Enum
@@ -19,6 +19,7 @@ from freqtrade.wallets import Wallets
 
 
 logger = logging.getLogger(__name__)
+testing = 'pytest' in sys.modules
 
 
 class SignalType(Enum):
@@ -241,15 +242,20 @@ class IStrategy(ABC):
 
         return dataframe
 
-    @abstractmethod
     @staticmethod
     def preserve_df(d: DataFrame) -> Tuple[int, float, datetime]:
         """ keep some data for dataframes """
+        if not testing:
+            return len(d), d["close"].iloc[-1], d["date"].iloc[-1]
+        else:
+            return 0, 0, 0
 
-    @abstractmethod
     @staticmethod
     def assert_df(d: DataFrame, df_len: int, df_close: float, df_date: datetime):
         """ make sure data is unmodified """
+        if not testing:
+            if df_len != len(d) or df_close != d["close"].iloc[-1] or df_date != d["date"].iloc[-1]:
+                raise Exception("Dataframe returned from strategy does not match original")
 
     def get_signal(self, pair: str, interval: str, dataframe: DataFrame,
                    queue=None) -> Tuple[bool, bool]:
@@ -264,7 +270,8 @@ class IStrategy(ABC):
             logger.warning('Empty candle (OHLCV) data for pair %s', pair)
             return False, False
 
-        latest_date = dataframe['date'].max()
+        if not testing:
+            latest_date = dataframe['date'].max()
         try:
             df_len, df_close, df_date = self.preserve_df(dataframe)
             dataframe = self._analyze_ticker_internal(dataframe, {'pair': pair})
@@ -292,7 +299,10 @@ class IStrategy(ABC):
                 queue.put((pair, (False, False)))
             return False, False
 
-        latest = dataframe.loc[dataframe['date'] == latest_date].iloc[-1]
+        if not testing:
+            latest = dataframe.loc[dataframe['date'] == latest_date].iloc[-1]
+        else:
+            latest = dataframe.iloc[-1]
 
         # Check if dataframe is out of date
         signal_date = arrow.get(latest['date'])
