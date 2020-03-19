@@ -12,7 +12,7 @@ import sys
 import warnings
 from collections import OrderedDict, deque
 from math import factorial, log
-from numpy import iinfo, int32, arange
+from numpy import iinfo, int32
 from operator import itemgetter
 from pathlib import Path
 from pprint import pprint
@@ -25,7 +25,7 @@ from joblib import (Parallel, cpu_count, delayed, dump, load, wrap_non_picklable
 from joblib import parallel_backend
 from multiprocessing import Manager
 from queue import Queue
-from pandas import DataFrame, json_normalize, isna, concat
+from pandas import DataFrame, json_normalize, isna
 import tabulate
 from os import path
 import io
@@ -37,11 +37,11 @@ from freqtrade.misc import plural, round_dict
 from freqtrade.optimize.backtesting import Backtesting
 # Import IHyperOpt and IHyperOptLoss to allow unpickling classes from these modules
 import freqtrade.optimize.hyperopt_backend as backend
-from freqtrade.optimize.hyperopt_backend import Trial
+# from freqtrade.optimize.hyperopt_backend import Trial
 from freqtrade.optimize.hyperopt_interface import IHyperOpt  # noqa: F401
 from freqtrade.optimize.hyperopt_loss_interface import IHyperOptLoss  # noqa: F401
 from freqtrade.resolvers.hyperopt_resolver import (HyperOptLossResolver, HyperOptResolver)
-from freqtrade.optimize.hyperopt_backend import filter_trials, save_trials, load_trials
+from freqtrade.optimize.hyperopt_backend import filter_trials
 
 # Suppress scikit-learn FutureWarnings from skopt
 with warnings.catch_warnings():
@@ -49,7 +49,7 @@ with warnings.catch_warnings():
     from skopt import Optimizer
     from skopt.space import Dimension
 # Additional regressors already pluggable into the optimizer
-from sklearn.linear_model import ARDRegression, BayesianRidge
+# from sklearn.linear_model import ARDRegression, BayesianRidge
 # possibly interesting regressors that need predict method override
 # from sklearn.ensemble import HistGradientBoostingRegressor
 # from xgboost import XGBoostRegressor
@@ -93,7 +93,7 @@ class Hyperopt:
         self.opts_file = (self.config['user_data_dir'] / 'hyperopt_results' /
                           'hyperopt_optimizers.pickle')
         self.cv_trials_file = (self.config['user_data_dir'] /
-                            'hyperopt_results' / 'hyperopt_cv_results.pickle')
+                               'hyperopt_results' / 'hyperopt_cv_results.pickle')
 
         self.n_jobs = self.config.get('hyperopt_jobs', -1)
         if self.n_jobs < 0:
@@ -184,7 +184,8 @@ class Hyperopt:
         else:
             self.multi = False
             backend.results = backend.manager.Queue()
-            self.opt_base_estimator = lambda: BayesianRidge(n_iter=100, normalize=True)
+            # self.opt_base_estimator = lambda: BayesianRidge(n_iter=100, normalize=True)
+            self.opt_base_estimator = lambda: 'GP'
             self.opt_acq_optimizer = 'sampling'
             # The GaussianProcessRegressor is heavy, which makes it not a good default
             # however longer backtests might make it a better tradeoff
@@ -638,10 +639,10 @@ class Hyperopt:
             position_stacking=self.position_stacking,
         )
         return self._get_trial(backtesting_results, min_date, max_date, params_dict,
-                                      params_details, processed)
+                               params_details, processed)
 
     def _get_trial(self, backtesting_results, min_date, max_date, params_dict,
-                          params_details, processed):
+                   params_details, processed):
         results_metrics = self._calculate_results_metrics(backtesting_results)
         results_explanation = self._format_results_explanation_string(results_metrics)
 
@@ -655,13 +656,14 @@ class Hyperopt:
         loss: float = VOID_LOSS
         if trade_count >= self.config['hyperopt_min_trades']:
             loss = self.calculate_loss(results=backtesting_results, trade_count=trade_count,
-                                       min_date=min_date.datetime, max_date=max_date.datetime, processed=processed)
-        return { "loss": loss,
-                 "params_dict": params_dict,
-                 "params_details": params_details,
-                 "results_metrics": results_metrics,
-                 "results_explanation": results_explanation,
-                 "total_profit": total_profit
+                                       min_date=min_date.datetime, max_date=max_date.datetime,
+                                       processed=processed)
+        return {"loss": loss,
+                "params_dict": params_dict,
+                "params_details": params_details,
+                "results_metrics": results_metrics,
+                "results_explanation": results_explanation,
+                "total_profit": total_profit
                 }
 
     def _calculate_results_metrics(self, backtesting_results: DataFrame) -> Dict:
@@ -729,17 +731,16 @@ class Hyperopt:
         )
 
     def trials_params(self, offset: int):
-        params = []
         for t in self.target_trials[offset:]:
             yield list(t["params_dict"].values())
 
     def run_cv_backtest_parallel(self, parallel: Parallel, tries: int, first_try: int,
-                              jobs: int):
+                                 jobs: int):
         """ evaluate a list of given parameters in parallel """
         result = parallel(
             delayed(wrap_non_picklable_objects(self.parallel_objective))(params, n=i)
             for params, i in zip(self.trials_params(first_try),
-                                range(first_try, first_try + tries)))
+                                 range(first_try, first_try + tries)))
         return result
 
     def run_backtest_parallel(self, parallel: Parallel, tries: int, first_try: int,
@@ -773,6 +774,7 @@ class Hyperopt:
         to_ask: deque = deque()
         evald: Set[Tuple] = set()
         opt = self.opt
+
         def point():
             if self.ask_points:
                 if to_ask:
@@ -815,19 +817,15 @@ class Hyperopt:
                 asked[a] = results[a]
         return asked
 
-    def parallel_opt_objective(self, n: int, optimizers: Queue, jobs: int, results_board: Queue):
-        """
-        objective run in multi opt mode, optimizers share the results as soon as they are completed
-        """
-        self.log_results_immediate(n)
-        is_shared = self.shared
+    @staticmethod
+    def opt_state(shared: bool, optimizers: Queue) -> Tuple[Optimizer, int]:
+        """ fetch an optimizer in multi opt mode """
         # get an optimizer instance
         opt = optimizers.get()
         # this is the counter used by the optimizer internally to track the initial
         # points evaluated so far..
         initial_points = opt._n_initial_points
-
-        if is_shared:
+        if shared:
             # get a random number before putting it back to avoid
             # replication with other workers and keep reproducibility
             rand = opt.rng.randint(0, VOID_LOSS)
@@ -841,6 +839,33 @@ class Hyperopt:
         # a model is only fit after initial points
         elif initial_points < 1:
             opt.tell(opt.Xi, opt.yi)
+        return opt, initial_points
+
+    @staticmethod
+    def opt_results(void: bool, void_filtered: list,
+                    initial_points: int, results_board: Queue) -> list:
+        # update the board used to skip already computed points
+        # NOTE: some results at the beginning won't be published
+        # because they are removed by the filter_void_losses
+        if not void:
+            results = results_board.get()
+            for v in void_filtered:
+                a = tuple(v['params_dict'].values())
+                if a not in results:
+                    results[a] = v['loss']
+            results_board.put(results)
+            # set initial point flag
+            for n, v in enumerate(void_filtered):
+                v['is_initial_point'] = initial_points - n > 0
+        return void_filtered
+
+    def parallel_opt_objective(self, n: int, optimizers: Queue, jobs: int, results_board: Queue):
+        """
+        objective run in multi opt mode, optimizers share the results as soon as they are completed
+        """
+        self.log_results_immediate(n)
+        is_shared = self.shared
+        opt, initial_points = self.opt_state(is_shared, optimizers)
 
         Xi_d = []  # done
         yi_d = []
@@ -887,20 +912,8 @@ class Hyperopt:
             # don't pickle models
             del opt.models[:]
             optimizers.put(opt)
-        # update the board used to skip already computed points
-        # NOTE: some results at the beginning won't be published
-        # because they are removed by the filter_void_losses
-        if not void:
-            results = results_board.get()
-            for v in void_filtered:
-                a = tuple(v['params_dict'].values())
-                if a not in results:
-                    results[a] = v['loss']
-            results_board.put(results)
-            # set initial point flag
-            for n, v in enumerate(void_filtered):
-                v['is_initial_point'] = initial_points - n > 0
-        return void_filtered
+
+        return self.opt_results(void, void_filtered, initial_points, results_board)
 
     def parallel_objective(self, asked, results: Queue = None, n=0):
         """ objective run in single opt mode, run the backtest, store the results into a queue """
@@ -954,12 +967,10 @@ class Hyperopt:
             if len_best > 0:
                 # sorting from lowest to highest, the first value is the current best
                 best = sorted(best_epochs, key=lambda k: k["loss"])[0]
-                print(best)
                 self.current_best_epoch = best["current_epoch"]
                 self.current_best_loss = best["loss"]
                 self.avg_best_occurrence = len_trials // len_best
                 # return True
-        exit()
         return False
 
     @staticmethod
@@ -1108,6 +1119,56 @@ class Hyperopt:
         # initialize average best occurrence
         self.avg_best_occurrence = self.min_epochs // self.n_jobs
 
+    def main_loop(self, jobs_scheduler):
+        """ main parallel loop """
+        try:
+            with parallel_backend('loky', inner_max_num_threads=2):
+                with Parallel(n_jobs=self.n_jobs, verbose=0, backend='loky') as parallel:
+                    jobs = parallel._effective_n_jobs()
+                    logger.info(f'Effective number of parallel workers used: {jobs}')
+                    # update epochs count
+                    n_points = self.n_points
+                    prev_batch = -1
+                    epochs_so_far = self.start_epoch
+                    epochs_limit = self.epochs_limit
+                    columns, _ = os.get_terminal_size()
+                    columns -= 1
+                    while epochs_so_far > prev_batch or epochs_so_far < self.min_epochs:
+                        prev_batch = epochs_so_far
+                        occurrence = int(self.avg_best_occurrence * (1 + self.effort))
+                        # pad the batch length to the number of jobs to avoid desaturation
+                        batch_len = (occurrence + jobs -
+                                     occurrence % jobs)
+                        # when using multiple optimizers each worker performs
+                        # n_points (epochs) in 1 dispatch but this reduces the batch len too much
+                        # if self.multi: batch_len = batch_len // self.n_points
+                        # don't go over the limit
+                        if epochs_so_far + batch_len * n_points >= epochs_limit():
+                            q, r = divmod(epochs_limit() - epochs_so_far, n_points)
+                            batch_len = q + r
+                        print(
+                            f"{epochs_so_far+1}-{epochs_so_far+batch_len*n_points}"
+                            f"/{epochs_limit()}: ",
+                            end='')
+                        f_val = jobs_scheduler(parallel, batch_len, epochs_so_far, jobs)
+                        print(end='\r')
+                        saved = self.log_results(f_val, epochs_so_far, epochs_limit())
+                        print('\r', ' ' * columns, end='\r')
+                        # stop if no epochs have been evaluated
+                        if len(f_val) < batch_len:
+                            logger.warning("Some evaluated epochs were void, "
+                                           "check the loss function and the search space.")
+                        if (not saved and len(f_val) > 1) or batch_len < 1 or \
+                           (not saved and self.cv):
+                            break
+                        # log_results add
+                        epochs_so_far += saved
+                        if self.max_epoch_reached:
+                            logger.info("Max epoch reached, terminating.")
+                            break
+        except KeyboardInterrupt:
+            print('User interrupted..')
+
     def start(self) -> None:
         """ Broom Broom """
         self.random_state = self._set_random_state(self.config.get('hyperopt_random_state', None))
@@ -1148,60 +1209,15 @@ class Hyperopt:
             colorama_init(autoreset=True)
 
         self.setup_optimizers()
-        try:
-            if self.multi and not self.cv:
-                jobs_scheduler = self.run_multi_backtest_parallel
-            elif self.cv:
-                jobs_scheduler = self.run_cv_backtest_parallel
-            else:
-                jobs_scheduler = self.run_backtest_parallel
-            with parallel_backend('loky', inner_max_num_threads=2):
-                with Parallel(n_jobs=self.n_jobs, verbose=0, backend='loky') as parallel:
-                    jobs = parallel._effective_n_jobs()
-                    logger.info(f'Effective number of parallel workers used: {jobs}')
-                    # update epochs count
-                    n_points = self.n_points
-                    prev_batch = -1
-                    epochs_so_far = self.start_epoch
-                    epochs_limit = self.epochs_limit
-                    columns, _ = os.get_terminal_size()
-                    columns -= 1
-                    while epochs_so_far > prev_batch or epochs_so_far < self.min_epochs:
-                        prev_batch = epochs_so_far
-                        occurrence = int(self.avg_best_occurrence * (1 + self.effort))
-                        # pad the batch length to the number of jobs to avoid desaturation
-                        batch_len = (occurrence + jobs  -
-                                     occurrence % jobs)
-                        # when using multiple optimizers each worker performs
-                        # n_points (epochs) in 1 dispatch but this reduces the batch len too much
-                        # if self.multi: batch_len = batch_len // self.n_points
-                        # don't go over the limit
-                        if epochs_so_far + batch_len * n_points >= epochs_limit():
-                            q, r = divmod(epochs_limit() - epochs_so_far, n_points)
-                            batch_len = q + r
-                        print(
-                            f"{epochs_so_far+1}-{epochs_so_far+batch_len*n_points}"
-                            f"/{epochs_limit()}: ",
-                            end='')
-                        f_val = jobs_scheduler(parallel, batch_len, epochs_so_far, jobs)
-                        print(end='\r')
-                        saved = self.log_results(f_val, epochs_so_far, epochs_limit())
-                        print('\r', ' ' * columns, end='\r')
-                        # stop if no epochs have been evaluated
-                        if len(f_val) < batch_len:
-                            logger.warning("Some evaluated epochs were void, "
-                                           "check the loss function and the search space.")
-                        if (not saved and len(f_val) > 1) or batch_len < 1 or \
-                           (not saved and self.cv):
-                            break
-                        # log_results add
-                        epochs_so_far += saved
-                        if self.max_epoch_reached:
-                            logger.info("Max epoch reached, terminating.")
-                            break
 
-        except KeyboardInterrupt:
-            print('User interrupted..')
+        if self.multi and not self.cv:
+            jobs_scheduler = self.run_multi_backtest_parallel
+        elif self.cv:
+            jobs_scheduler = self.run_cv_backtest_parallel
+        else:
+            jobs_scheduler = self.run_backtest_parallel
+
+        self.main_loop(jobs_scheduler)
 
         self.save_trials(final=True)
 

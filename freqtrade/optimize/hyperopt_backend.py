@@ -1,7 +1,7 @@
-from typing import Any, NamedTuple, Dict, List
+from typing import Any, Dict, List, Tuple
 from queue import Queue
 from multiprocessing.managers import SyncManager
-from pandas import DataFrame, concat, read_hdf, to_numeric
+from pandas import DataFrame, concat, read_hdf
 from numpy import arange
 from pathlib import Path
 
@@ -38,7 +38,7 @@ class Trial:
         self.total_profit = total_profit
 
 
-def trials_to_df(trials: List, metrics: bool = False) -> (DataFrame, str):
+def trials_to_df(trials: List, metrics: bool = False) -> Tuple[DataFrame, str]:
     df = DataFrame(trials)
     last_col = df.columns[-1]
     if metrics:
@@ -68,7 +68,7 @@ def filter_options(config: Dict[str, Any]):
     }
 
 
-def filter_trials(trials: List, config: Dict[str, Any]) -> List:
+def filter_trials(trials: Any, config: Dict[str, Any]) -> List:
     """
     Filter our items from the list of hyperopt results
     """
@@ -76,7 +76,7 @@ def filter_trials(trials: List, config: Dict[str, Any]) -> List:
     filters = filter_options(config)
 
     if filters["best"]:
-        trials = trials.loc[trials["is_best"] == True]
+        trials = trials.loc[trials["is_best"] is True]
     if filters["profitable"]:
         trials = trials.loc[trials["profit"] > 0]
     if filters["min_trades"]:
@@ -101,6 +101,10 @@ def filter_trials(trials: List, config: Dict[str, Any]) -> List:
     if len(with_trades) != with_trades_len:
         trials = with_trades
 
+    return sample_trials(trials, trials_last_col, filters)
+
+
+def sample_trials(trials: Any, trials_last_col: Any, filters: Dict) -> List:
     if filters["step_value"]:
         step_k = filters["step_key"]
         step_v = filters["step_value"]
@@ -127,16 +131,14 @@ def filter_trials(trials: List, config: Dict[str, Any]) -> List:
                 pass
     else:
         flt_trials = trials.loc[:, :trials_last_col].to_dict(orient="records")
-
     return flt_trials
 
 
-def save_trials(trials: List, path: Path, offset: int = 0):
+def save_trials(trials: Any, path: Path, offset: int = 0):
     trials, _ = trials_to_df(trials)
-    trials.to_hdf(
-        path, key="trials", append=True, format="table", complevel=9, mode="a"
-    )
+    trials.to_hdf(path, key="trials", append=True, format="table", complevel=9, mode="a")
+
 
 def load_trials(path: Path):
-    trials = read_hdf(path, key='trials')
+    trials = read_hdf(path, key="trials")
     return trials

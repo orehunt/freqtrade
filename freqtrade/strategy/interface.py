@@ -241,6 +241,16 @@ class IStrategy(ABC):
 
         return dataframe
 
+    @abstractmethod
+    @staticmethod
+    def preserve_df(d: DataFrame) -> Tuple[int, float, datetime]:
+        """ keep some data for dataframes """
+
+    @abstractmethod
+    @staticmethod
+    def assert_df(d: DataFrame, df_len: int, df_close: float, df_date: datetime):
+        """ make sure data is unmodified """
+
     def get_signal(self, pair: str, interval: str, dataframe: DataFrame,
                    queue=None) -> Tuple[bool, bool]:
         """

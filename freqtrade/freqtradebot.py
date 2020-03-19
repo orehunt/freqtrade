@@ -402,8 +402,6 @@ class FreqtradeBot:
             logger.info(f"Pair {pair} is currently locked.")
             return False
 
-        buycount = 0
-
         # running get_signal on historical data fetched
         # (buy, sell) = self.strategy.get_signal(
         #     pair, self.strategy.ticker_interval,

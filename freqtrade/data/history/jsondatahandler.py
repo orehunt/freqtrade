@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import numpy as np
-from pandas import DataFrame, read_json, to_datetime, Timestamp
+from pandas import DataFrame, read_json, to_datetime
 
 from freqtrade import misc
 from freqtrade.configuration import TimeRange

@@ -7,7 +7,7 @@ from colorama import init as colorama_init
 from freqtrade.configuration import setup_utils_configuration
 from freqtrade.exceptions import OperationalException
 from freqtrade.state import RunMode
-from freqtrade.optimize.hyperopt_backend import filter_trials, filter_options
+from freqtrade.optimize.hyperopt_backend import filter_trials
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +58,7 @@ def start_hyperopt_list(args: Dict[str, Any]) -> None:
             config, trials, total_epochs, not filteroptions['only_best'], export_csv
         )
 
+
 def _hyperopt_filter_options(config: Dict[str, Any]):
     return {
         'only_best': config.get('hyperopt_list_best', False),
@@ -71,6 +72,7 @@ def _hyperopt_filter_options(config: Dict[str, Any]):
         'filter_min_total_profit': config.get('hyperopt_list_min_total_profit', None),
         'filter_max_total_profit': config.get('hyperopt_list_max_total_profit', None)
     }
+
 
 def start_hyperopt_show(args: Dict[str, Any]) -> None:
     """
