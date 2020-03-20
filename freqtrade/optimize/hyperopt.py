@@ -874,17 +874,20 @@ class Hyperopt:
         id = optimizers.qsize()
         opt, initial_points = self.opt_state(is_shared, optimizers)
         sss = self.search_space_size
+        asked = {}
+        asked_d = {None: None}
 
         told = 0  # told
         Xi_d = []  # done
         yi_d = []
         Xi_t = []  # to do
-        while len(opt.Xi) < sss:
+        while asked != asked_d and len(opt.Xi) < sss:
             asked = opt.ask(n_points=self.ask_points, strategy=self.lie_strat())
             if not self.ask_points:
                 asked = {tuple(asked): None}
             else:
                 asked = {tuple(a): None for a in asked}
+            asked_d = asked
             # check if some points have been evaluated by other optimizers
             p_asked, _ = self.opt_get_past_points(asked, results_board)
             for a in p_asked:
