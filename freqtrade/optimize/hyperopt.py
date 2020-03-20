@@ -787,7 +787,6 @@ class Hyperopt:
                     to_ask.extend(opt.ask(n_points=self.ask_points, strategy=self.lie_strat()))
                     return tuple(to_ask.popleft())
             else:
-                print(opt.n_initial_points_)
                 return tuple(opt.ask(strategy=self.lie_strat()))
 
         for r in range(tries):
@@ -804,23 +803,25 @@ class Hyperopt:
                     del vals[:], void_filtered[:]
 
             a = point()
-            while a in evald:
+            if a in evald:
                 logger.debug("this point was evaluated before...")
                 if not fit:
                     opt.update_next()
                 a = point()
+                if a in evald:
+                    break
             evald.add(a)
             yield a
 
     @staticmethod
-    def opt_get_past_points(asked: dict, results_board: Queue) -> dict:
+    def opt_get_past_points(asked: dict, results_board: Queue) -> Tuple[dict, int]:
         """ fetch shared results between optimizers """
         results = results_board.get()
         results_board.put(results)
         for a in asked:
             if a in results:
                 asked[a] = results[a]
-        return asked
+        return asked, len(results)
 
     @staticmethod
     def opt_state(shared: bool, optimizers: Queue) -> Tuple[Optimizer, int]:
@@ -837,13 +838,13 @@ class Hyperopt:
             optimizers.put(opt)
             # switch the seed to get a different point
             opt.rng.seed(rand)
-            opt, opt.void_loss = opt.copy(random_state=opt.rng), opt.void_loss
-        # we have to get a new point if the last batch was all void
-        elif opt.void:
-            opt.update_next()
+            opt, opt.void_loss  = opt.copy(random_state=opt.rng), opt.void_loss
         # a model is only fit after initial points
         elif initial_points < 1:
             opt.tell(opt.Xi, opt.yi)
+        # we have to get a new point anyway
+        else:
+            opt.update_next()
         return opt, initial_points
 
     @staticmethod
@@ -870,28 +871,36 @@ class Hyperopt:
         """
         self.log_results_immediate(n)
         is_shared = self.shared
+        id = optimizers.qsize()
         opt, initial_points = self.opt_state(is_shared, optimizers)
+        sss = self.search_space_size
 
+        told = 0  # told
         Xi_d = []  # done
         yi_d = []
         Xi_t = []  # to do
-        # ask for points according to config
-        while True:
+        while len(opt.Xi) < sss:
             asked = opt.ask(n_points=self.ask_points, strategy=self.lie_strat())
             if not self.ask_points:
                 asked = {tuple(asked): None}
             else:
                 asked = {tuple(a): None for a in asked}
             # check if some points have been evaluated by other optimizers
-            p_asked = self.opt_get_past_points(asked, results_board)
+            p_asked, _ = self.opt_get_past_points(asked, results_board)
             for a in p_asked:
                 if p_asked[a] is not None:
-                    Xi_d.append(a)
-                    yi_d.append(p_asked[a])
+                    if a not in Xi_d:
+                        Xi_d.append(a)
+                        yi_d.append(p_asked[a])
                 else:
                     Xi_t.append(a)
             if len(Xi_t) < self.n_points:
-                opt.update_next()
+                len_Xi_d = len(Xi_d)
+                if len_Xi_d > told:  # tell new points
+                    opt.tell(Xi_d[told:], yi_d[told:])
+                    told = len_Xi_d
+                else:
+                    opt.update_next()
             else:
                 break
         # run the backtest for each point to do (Xi_t)
@@ -1029,9 +1038,12 @@ class Hyperopt:
                 n_parameters += len(d.bounds)
         # guess the size of the search space as the count of the
         # unordered combination of the dimensions entries
-        search_space_size = int(
-            (factorial(n_parameters) /
-             (factorial(n_parameters - n_dimensions) * factorial(n_dimensions))))
+        try:
+            search_space_size = int(
+                (factorial(n_parameters) /
+                (factorial(n_parameters - n_dimensions) * factorial(n_dimensions))))
+        except OverflowError:
+            search_space_size = VOID_LOSS
         # logger.info(f'Search space size: {search_space_size}')
         log_opt = int(log(opt_points, 2)) if opt_points > 4 else 2
         if search_space_size < opt_points:
@@ -1167,7 +1179,8 @@ class Hyperopt:
                             logger.warning("Some evaluated epochs were void, "
                                            "check the loss function and the search space.")
                         if (not saved and len(f_val) > 1) or batch_len < 1 or \
-                           (not saved and self.cv):
+                           (not saved and self.cv) or \
+                           (not saved and self.search_space_size < batch_len + epochs_limit()):
                             break
                         # log_results add
                         epochs_so_far += saved
