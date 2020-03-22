@@ -240,14 +240,17 @@ class Hyperopt:
 
         dimensions: List[Dimension] = self.dimensions
 
-        # Ensure the number of dimensions match
-        # the number of parameters in the list.
-        if len(raw_params) != len(dimensions):
-            raise ValueError('Mismatch in number of search-space dimensions.')
+        if self.cv:
+            return {d: v for d, v in zip(dimensions, raw_params)}
+        else:
+            # Ensure the number of dimensions match
+            # the number of parameters in the list.
+            if len(raw_params) != len(dimensions):
+                raise ValueError('Mismatch in number of search-space dimensions.')
 
-        # Return a dict where the keys are the names of the dimensions
-        # and the values are taken from the list of parameters.
-        return {d.name: v for d, v in zip(dimensions, raw_params)}
+            # Return a dict where the keys are the names of the dimensions
+            # and the values are taken from the list of parameters.
+            return {d.name: v for d, v in zip(dimensions, raw_params)}
 
     def save_trials(self, final: bool = False) -> None:
         """
@@ -1135,9 +1138,12 @@ class Hyperopt:
         del opts[:]
 
     def setup_points(self):
-        self.n_initial_points, self.min_epochs, self.search_space_size = self.calc_epochs(
-            self.dimensions, self.n_jobs, self.effort, self.total_epochs, self.n_points
-        )
+        if self.cv:
+            self.n_initial_points, self.min_epochs, self.search_space_size = 0, 0, 0
+        else:
+            self.n_initial_points, self.min_epochs, self.search_space_size = self.calc_epochs(
+                self.dimensions, self.n_jobs, self.effort, self.total_epochs, self.n_points
+            )
         logger.info(f"Min epochs set to: {self.min_epochs}")
         # reduce random points by n_points in multi mode because asks are per job
         if self.multi:
@@ -1233,19 +1239,23 @@ class Hyperopt:
         if self.cv:
             self.target_trials = filter_trials(self.trials, self.config)
             self.trials = []
+            self.dimensions = list(self.target_trials[-1]["params_dict"].keys())
+            self.total_epochs = len(self.target_trials)
+        else:
+            self.dimensions: List[Dimension] = self.hyperopt_space()
+
         self.setup_epochs()
 
-        logger.info(f"Found {cpu_count()} CPU cores. Let's make them scream!")
-        logger.info(f'Number of parallel jobs set as: {self.n_jobs}')
-
-        self.dimensions: List[Dimension] = self.hyperopt_space()
         self.setup_points()
 
         if self.print_colorized:
             colorama_init(autoreset=True)
 
-        self.setup_optimizers()
+        if not self.cv:
+            self.setup_optimizers()
 
+        logger.info(f"Found {cpu_count()} CPU cores. Let's make them scream!")
+        logger.info(f'Number of parallel jobs set as: {self.n_jobs}')
         if self.multi and not self.cv:
             jobs_scheduler = self.run_multi_backtest_parallel
         elif self.cv:
