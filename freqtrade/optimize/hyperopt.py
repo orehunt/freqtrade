@@ -838,7 +838,7 @@ class Hyperopt:
             optimizers.put(opt)
             # switch the seed to get a different point
             opt.rng.seed(rand)
-            opt, opt.void_loss  = opt.copy(random_state=opt.rng), opt.void_loss
+            opt, opt.void_loss, opt.void  = opt.copy(random_state=opt.rng), opt.void_loss, opt.void
         # a model is only fit after initial points
         elif initial_points < 1:
             opt.tell(opt.Xi, opt.yi)
@@ -850,7 +850,10 @@ class Hyperopt:
     @staticmethod
     def opt_results(void: bool, void_filtered: list,
                     initial_points: int, results_board: Queue) -> list:
-        # update the board used to skip already computed points
+        """
+        update the board used to skip already computed points,
+        set the initial point status
+        """
         # NOTE: some results at the beginning won't be published
         # because they are removed by the filter_void_losses
         if not void:
@@ -881,13 +884,16 @@ class Hyperopt:
         Xi_d = []  # done
         yi_d = []
         Xi_t = []  # to do
-        while asked != asked_d and len(opt.Xi) < sss:
+        # if opt.void == -1 the optimizer failed to give a new point before (between dispatches), stop
+        # if asked == asked_d  the points returned are the same, stop
+        # if opt.Xi > sss the optimizer has more points than the estimated search space size, stop
+        while opt.void != -1  and asked != asked_d and len(opt.Xi) < sss:
+            asked_d = asked
             asked = opt.ask(n_points=self.ask_points, strategy=self.lie_strat())
             if not self.ask_points:
                 asked = {tuple(asked): None}
             else:
                 asked = {tuple(a): None for a in asked}
-            asked_d = asked
             # check if some points have been evaluated by other optimizers
             p_asked, _ = self.opt_get_past_points(asked, results_board)
             for a in p_asked:
@@ -906,6 +912,13 @@ class Hyperopt:
                     opt.update_next()
             else:
                 break
+        # return early if there is nothing to backtest
+        if len(Xi_t) < 1:
+            if not is_shared:
+                opt.void = -1
+                del opt.models[:]
+                optimizers.put(opt)
+            return []
         # run the backtest for each point to do (Xi_t)
         f_val = [self.backtest_params(a) for a in Xi_t]
         # filter losses
@@ -914,23 +927,22 @@ class Hyperopt:
         if opt.void_loss != VOID_LOSS or len(void_filtered) > 0:
             Xi = [*Xi_d, *[list(v['params_dict'].values()) for v in void_filtered]]
             yi = [*yi_d, *[v['loss'] for v in void_filtered]]
-            void = False
             if is_shared:
                 # refresh the optimizer that stores all the points
                 opt = optimizers.get()
             opt.tell(Xi, yi, fit=False)
+            opt.void = False
         else:
-            void = True
-            opt.void = void
+            opt.void = True
         # send back the updated optimizer only in non shared mode
         # because in shared mode if all results are void we don't
         # fetch it at all
-        if not void or not is_shared:
+        if not opt.void or not is_shared:
             # don't pickle models
             del opt.models[:]
             optimizers.put(opt)
 
-        return self.opt_results(void, void_filtered, initial_points, results_board)
+        return self.opt_results(opt.void, void_filtered, initial_points, results_board)
 
     def parallel_objective(self, asked, results: Queue = None, n=0):
         """ objective run in single opt mode, run the backtest, store the results into a queue """
