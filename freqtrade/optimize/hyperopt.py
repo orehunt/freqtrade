@@ -240,17 +240,14 @@ class Hyperopt:
 
         dimensions: List[Dimension] = self.dimensions
 
-        if self.cv:
-            return {d: v for d, v in zip(dimensions, raw_params)}
-        else:
-            # Ensure the number of dimensions match
-            # the number of parameters in the list.
-            if len(raw_params) != len(dimensions):
-                raise ValueError('Mismatch in number of search-space dimensions.')
+        # Ensure the number of dimensions match
+        # the number of parameters in the list.
+        if len(raw_params) != len(dimensions):
+            raise ValueError('Mismatch in number of search-space dimensions.')
 
-            # Return a dict where the keys are the names of the dimensions
-            # and the values are taken from the list of parameters.
-            return {d.name: v for d, v in zip(dimensions, raw_params)}
+        # Return a dict where the keys are the names of the dimensions
+        # and the values are taken from the list of parameters.
+        return {d.name: v for d, v in zip(dimensions, raw_params)}
 
     def save_trials(self, final: bool = False) -> None:
         """
@@ -606,8 +603,8 @@ class Hyperopt:
         Used Optimize function. Called once per epoch to optimize whatever is configured.
         Keep this function as optimized as possible!
         """
-        params_dict = self._get_params_dict(raw_params)
-        params_details = self._get_params_details(params_dict)
+        params_dict = self._get_params_dict(raw_params) if not self.cv else raw_params
+        params_details = self._get_params_details(params_dict) if not self.cv else []
 
         if self.has_space('roi'):
             self.backtesting.strategy.minimal_roi = \
@@ -739,7 +736,7 @@ class Hyperopt:
 
     def trials_params(self, offset: int):
         for t in self.target_trials[offset:]:
-            yield list(t["params_dict"].values())
+            yield t["params_dict"]
 
     def run_cv_backtest_parallel(self, parallel: Parallel, tries: int, first_try: int,
                                  jobs: int):
@@ -1279,4 +1276,5 @@ class Hyperopt:
     def __getstate__(self):
         state = self.__dict__.copy()
         del state['trials']
+        del state['target_trials']
         return state
