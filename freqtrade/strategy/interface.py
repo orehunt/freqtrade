@@ -2,7 +2,8 @@
 IStrategy interface
 This module defines the interface to apply for strategies
 """
-import logging, sys
+import logging
+import sys
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from enum import Enum
@@ -11,6 +12,7 @@ import warnings
 
 import arrow
 from pandas import DataFrame
+from multiprocessing import Queue
 
 from freqtrade.data.dataprovider import DataProvider
 from freqtrade.exchange import timeframe_to_minutes
@@ -248,7 +250,7 @@ class IStrategy(ABC):
         if not testing:
             return len(d), d["close"].iloc[-1], d["date"].iloc[-1]
         else:
-            return 0, 0, 0
+            return 0, 0., datetime.now()
 
     @staticmethod
     def assert_df(d: DataFrame, df_len: int, df_close: float, df_date: datetime):
@@ -256,6 +258,11 @@ class IStrategy(ABC):
         if not testing:
             if df_len != len(d) or df_close != d["close"].iloc[-1] or df_date != d["date"].iloc[-1]:
                 raise Exception("Dataframe returned from strategy does not match original")
+
+    @staticmethod
+    def return_to_queue(data: Tuple, queue: Queue) -> Tuple:
+        if queue is not None:
+            queue.put(data)
 
     def get_signal(self, pair: str, interval: str, dataframe: DataFrame,
                    queue=None) -> Tuple[bool, bool]:
@@ -289,14 +296,12 @@ class IStrategy(ABC):
                 pair,
                 str(error)
             )
-            if queue is not None:
-                queue.put((pair, (False, False)))
+            IStrategy.return_to_queue((pair, (False, False)), queue)
             return False, False
 
         if dataframe.empty:
             logger.warning('Empty dataframe for pair %s', pair)
-            if queue is not None:
-                queue.put((pair, (False, False)))
+            IStrategy.return_to_queue((pair, (False, False)), queue)
             return False, False
 
         if not testing:
@@ -311,15 +316,13 @@ class IStrategy(ABC):
         if signal_date < (arrow.utcnow().shift(minutes=-(interval_minutes*2 + offset))):
             logger.warning('Outdated history for pair %s. Last tick is %s minutes old', pair,
                            (arrow.utcnow() - signal_date).seconds // 60)
-            if queue is not None:
-                queue.put((pair, (False, False)))
+            IStrategy.return_to_queue((pair, (False, False)), queue)
             return False, False
 
         (buy, sell) = latest[SignalType.BUY.value] == 1, latest[SignalType.SELL.value] == 1
         logger.debug('trigger: %s (pair=%s) buy=%s sell=%s', latest['date'], pair, str(buy),
                      str(sell))
-        if queue is not None:
-            queue.put((pair, (buy, sell)))
+        IStrategy.return_to_queue((pair, (buy, sell)), queue)
         return buy, sell
 
     def should_sell(self, trade: Trade, rate: float, date: datetime, buy: bool,

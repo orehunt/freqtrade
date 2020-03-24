@@ -87,7 +87,7 @@ def start_hyperopt_show(args: Dict[str, Any]) -> None:
                    'hyperopt_results' / 'hyperopt_results.pickle')
     n = config.get('hyperopt_show_index', -1)
 
-    filteroptions = _hyperopt_filter_options(config)
+    # filteroptions = _hyperopt_filter_options(config)
 
     # Previous evaluations
     trials = Hyperopt.load_previous_results(trials_file)
