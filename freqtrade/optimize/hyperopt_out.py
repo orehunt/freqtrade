@@ -65,6 +65,14 @@ class HyperoptOut:
             HyperoptData._params_pretty_print(params, "trailing", "Trailing stop:")
 
     @staticmethod
+    def clear_line(columns: int):
+        print("\r", " " * columns, end="\r")
+
+    @staticmethod
+    def reset_line():
+        print(end="\r")
+
+    @staticmethod
     def _params_pretty_print(params, space: str, header: str) -> None:
         if space in params:
             space_params = HyperoptOut._space_params(params, space, 5)
