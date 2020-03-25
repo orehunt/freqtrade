@@ -1,7 +1,7 @@
 import warnings
 from typing import Any, Dict, List, Tuple
 
-from joblib import (Parallel, cpu_count, delayed, dump, load, wrap_non_picklable_objects)
+from joblib import Parallel, cpu_count, delayed, dump, load, wrap_non_picklable_objects
 from multiprocessing import Manager
 from queue import Queue
 
@@ -10,7 +10,7 @@ import freqtrade.optimize.hyperopt_backend as backend
 from freqtrade.optimize.hyperopt_constants import VOID_LOSS
 from freqtrade.optimize.hyperopt_interface import IHyperOpt  # noqa: F401
 from freqtrade.optimize.hyperopt_loss_interface import IHyperOptLoss  # noqa: F401
-from freqtrade.resolvers.hyperopt_resolver import (HyperOptLossResolver, HyperOptResolver)
+from freqtrade.resolvers.hyperopt_resolver import HyperOptLossResolver, HyperOptResolver
 
 # Suppress scikit-learn FutureWarnings from skopt
 with warnings.catch_warnings():
@@ -22,7 +22,8 @@ with warnings.catch_warnings():
 # from sklearn.ensemble import HistGradientBoostingRegressor
 # from xgboost import XGBoostRegressor
 
-class HyperoptMulti():
+
+class HyperoptMulti:
     """ Run the optimization with multiple optimizers """
 
     def setup_multi(self):
@@ -33,18 +34,18 @@ class HyperoptMulti():
         self.yi: Dict = {}
 
         backend.manager = Manager()
-        self.mode = self.config.get('mode', 'single')
+        self.mode = self.config.get("mode", "single")
         self.shared = False
         # in multi opt one model is enough
         self.n_models = 1
-        if self.mode in ('multi', 'shared'):
+        if self.mode in ("multi", "shared"):
             self.multi = True
-            if self.mode == 'shared':
+            if self.mode == "shared":
                 self.shared = True
-                self.opt_base_estimator = lambda: 'GBRT'
+                self.opt_base_estimator = lambda: "GBRT"
             else:
                 self.opt_base_estimator = self.estimators
-            self.opt_acq_optimizer = 'sampling'
+            self.opt_acq_optimizer = "sampling"
             backend.optimizers = backend.manager.Queue()
             backend.results_batch = backend.manager.Queue()
         else:
@@ -54,15 +55,15 @@ class HyperoptMulti():
             # used for fit and predict, to avoid additional pickling
             self.batch_results = []
             # self.opt_base_estimator = lambda: BayesianRidge(n_iter=100, normalize=True)
-            self.opt_base_estimator = lambda: 'GP'
-            self.opt_acq_optimizer = 'sampling'
+            self.opt_base_estimator = lambda: "GP"
+            self.opt_acq_optimizer = "sampling"
             # The GaussianProcessRegressor is heavy, which makes it not a good default
             # however longer backtests might make it a better tradeoff
             # self.opt_base_estimator = lambda: 'GP'
             # self.opt_acq_optimizer = 'lbfgs'
 
         # in single opt assume runs are expensive so default to 1 point per ask
-        self.n_points = self.config.get('n_points', 1)
+        self.n_points = self.config.get("n_points", 1)
         # if 0 n_points are given, don't use any base estimator (akin to random search)
         if self.n_points < 1:
             self.n_points = 1
@@ -78,21 +79,24 @@ class HyperoptMulti():
         # var used in epochs and batches calculation
         self.opt_points = self.n_jobs * (self.n_points or 1)
         # lie strategy
-        lie_strat = self.config.get('lie_strat', 'default')
-        if lie_strat == 'default':
-            self.lie_strat = lambda: 'cl_min'
-        elif lie_strat == 'random':
+        lie_strat = self.config.get("lie_strat", "default")
+        if lie_strat == "default":
+            self.lie_strat = lambda: "cl_min"
+        elif lie_strat == "random":
             self.lie_strat = self.lie_strategy
         else:
             self.lie_strat = lambda: lie_strat
 
-    def run_multi_backtest_parallel(self, parallel: Parallel, tries: int, first_try: int,
-                                    jobs: int):
+    def run_multi_backtest_parallel(
+        self, parallel: Parallel, tries: int, first_try: int, jobs: int
+    ):
         """ launch parallel in multi opt mode, return the evaluated epochs"""
         parallel(
             delayed(wrap_non_picklable_objects(self.parallel_opt_objective))(
-                i, backend.optimizers, jobs, backend.results_shared, backend.results_batch)
-            for i in range(first_try, first_try + tries))
+                i, backend.optimizers, jobs, backend.results_shared, backend.results_batch
+            )
+            for i in range(first_try, first_try + tries)
+        )
 
     @staticmethod
     def opt_get_past_points(is_shared: bool, asked: dict, results_shared: Dict) -> Tuple[dict, int]:
@@ -115,7 +119,10 @@ class HyperoptMulti():
                 rand = opt.rng.randint(0, VOID_LOSS)
             opt.rng.seed(rand)
         opt, opt.void_loss, opt.void, opt.rs = (
-            opt.copy(random_state=opt.rng), opt.void_loss, opt.void, opt.rs
+            opt.copy(random_state=opt.rng),
+            opt.void_loss,
+            opt.void,
+            opt.rs,
         )
         return opt
 
@@ -144,8 +151,15 @@ class HyperoptMulti():
         return list(v["params_dict"].values())
 
     @staticmethod
-    def opt_results(opt: Optimizer, void_filtered: list, jobs: int, is_shared: bool,
-                    results_shared: Dict, results_batch: Queue, optimizers: Queue):
+    def opt_results(
+        opt: Optimizer,
+        void_filtered: list,
+        jobs: int,
+        is_shared: bool,
+        results_shared: Dict,
+        results_batch: Queue,
+        optimizers: Queue,
+    ):
         """
         update the board used to skip already computed points,
         set the initial point status
@@ -165,8 +179,12 @@ class HyperoptMulti():
         rs = opt.rs
         if not void:
             # the tuple keys are used to avoid computation of done points by any optimizer
-            results_shared.update({tuple(HyperoptMulti.opt_params_Xi(v)): (v["loss"], jobs - 1)
-                                   for v in void_filtered})
+            results_shared.update(
+                {
+                    tuple(HyperoptMulti.opt_params_Xi(v)): (v["loss"], jobs - 1)
+                    for v in void_filtered
+                }
+            )
             # in multi opt mode (non shared) also track results for each optimizer (using rs as ID)
             # this keys should be cleared after each batch
             Xi, yi = results_shared[rs]
@@ -178,12 +196,13 @@ class HyperoptMulti():
             initial_points = opt._n_initial_points
             # set initial point flag and optimizer random state
             for n, v in enumerate(void_filtered):
-                v['is_initial_point'] = initial_points - n > 0
-                v['random_state'] = rs
+                v["is_initial_point"] = initial_points - n > 0
+                v["random_state"] = rs
             results_batch.put(void_filtered)
 
-    def parallel_opt_objective(self, n: int, optimizers: Queue, jobs: int,
-                               results_shared: Dict, results_batch: Queue):
+    def parallel_opt_objective(
+        self, n: int, optimizers: Queue, jobs: int, results_shared: Dict, results_batch: Queue
+    ):
         """
         objective run in multi opt mode, optimizers share the results as soon as they are completed
         """
@@ -222,7 +241,7 @@ class HyperoptMulti():
             p_asked, _ = HyperoptMulti.opt_get_past_points(is_shared, asked, results_shared)
             for a in p_asked:
                 if p_asked[a] is not None:
-                    print('a point was previously asked by another worker')
+                    print("a point was previously asked by another worker")
                     if a not in Xi_d:
                         Xi_d.append(a)
                         yi_d.append(p_asked[a])
@@ -253,8 +272,9 @@ class HyperoptMulti():
         # filter losses
         void_filtered = HyperoptMulti.filter_void_losses(results, opt)
 
-        HyperoptMulti.opt_results(opt, void_filtered, jobs, is_shared,
-                             results_shared, results_batch, optimizers)
+        HyperoptMulti.opt_results(
+            opt, void_filtered, jobs, is_shared, results_shared, results_batch, optimizers
+        )
 
     @staticmethod
     def filter_void_losses(vals: List, opt: Optimizer) -> List:

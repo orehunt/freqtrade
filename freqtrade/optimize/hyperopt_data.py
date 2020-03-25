@@ -5,19 +5,20 @@ from numpy import iinfo, int32
 from pathlib import Path
 from typing import List, Dict
 
-from joblib import (Parallel, cpu_count, delayed, dump, load, wrap_non_picklable_objects)
+from joblib import dump, load
 from pandas import isna, json_normalize
 from os import path
 import io
 
 from freqtrade.exceptions import OperationalException
 from freqtrade.misc import plural, round_dict
+
 # Import IHyperOpt and IHyperOptLoss to allow unpickling classes from these modules
 import freqtrade.optimize.hyperopt_backend as backend
+
 # from freqtrade.optimize.hyperopt_backend import Trial
 from freqtrade.optimize.hyperopt_interface import IHyperOpt  # noqa: F401
 from freqtrade.optimize.hyperopt_loss_interface import IHyperOptLoss  # noqa: F401
-from freqtrade.resolvers.hyperopt_resolver import (HyperOptLossResolver, HyperOptResolver)
 
 from freqtrade.optimize.hyperopt_constants import *
 from freqtrade.optimize.hyperopt_multi import HyperoptMulti
@@ -33,13 +34,14 @@ with warnings.catch_warnings():
 # from xgboost import XGBoostRegressor
 
 
-
 logger = logging.getLogger(__name__)
 
-class HyperoptData():
+
+class HyperoptData:
     """
     Data and state for Hyperopt
     """
+
     def __init__(self, config):
         pass
 
@@ -69,8 +71,9 @@ class HyperoptData():
             self.num_trials_saved = num_trials
             self.save_opts()
         if final:
-            logger.info(f"{num_trials} {plural(num_trials, 'epoch')} "
-                        f"saved to '{self.trials_file}'.")
+            logger.info(
+                f"{num_trials} {plural(num_trials, 'epoch')} " f"saved to '{self.trials_file}'."
+            )
 
     def save_opts(self) -> None:
         """
@@ -120,22 +123,23 @@ class HyperoptData():
     def _params_update_for_json(result_dict, params, space: str) -> None:
         if space in params:
             space_params = HyperoptData._space_params(params, space)
-            if space in ['buy', 'sell']:
-                result_dict.setdefault('params', {}).update(space_params)
-            elif space == 'roi':
+            if space in ["buy", "sell"]:
+                result_dict.setdefault("params", {}).update(space_params)
+            elif space == "roi":
                 # Convert keys in min_roi dict to strings because
                 # rapidjson cannot dump dicts with integer keys...
                 # OrderedDict is used to keep the numeric order of the items
                 # in the dict.
-                result_dict['minimal_roi'] = OrderedDict(
+                result_dict["minimal_roi"] = OrderedDict(
                     (str(k), v) for k, v in space_params.items()
                 )
             else:  # 'stoploss', 'trailing'
                 result_dict.update(space_params)
 
     @staticmethod
-    def export_csv_file(config: dict, results: list, total_epochs: int, highlight_best: bool,
-                        csv_file: str) -> None:
+    def export_csv_file(
+        config: dict, results: list, total_epochs: int, highlight_best: bool, csv_file: str
+    ) -> None:
         """
         Log result to csv-file
         """
@@ -148,45 +152,67 @@ class HyperoptData():
             return
 
         try:
-            io.open(csv_file, 'w+').close()
+            io.open(csv_file, "w+").close()
         except IOError:
             logger.error("Filed to create CSV-File!")
             return
 
         trials = json_normalize(results, max_level=1)
-        trials['Best'] = ''
-        trials['Stake currency'] = config['stake_currency']
-        trials = trials[['Best', 'current_epoch', 'results_metrics.trade_count',
-                         'results_metrics.avg_profit', 'results_metrics.total_profit',
-                         'Stake currency', 'results_metrics.profit', 'results_metrics.duration',
-                         'loss', 'is_initial_point', 'is_best']]
-        trials.columns = ['Best', 'Epoch', 'Trades', 'Avg profit', 'Total profit', 'Stake currency',
-                          'Profit', 'Avg duration', 'Objective', 'is_initial_point', 'is_best']
-        trials['is_profit'] = False
-        trials.loc[trials['is_initial_point'], 'Best'] = '*'
-        trials.loc[trials['is_best'], 'Best'] = 'Best'
-        trials.loc[trials['Total profit'] > 0, 'is_profit'] = True
-        trials['Epoch'] = trials['Epoch'].astype(str)
-        trials['Trades'] = trials['Trades'].astype(str)
+        trials["Best"] = ""
+        trials["Stake currency"] = config["stake_currency"]
+        trials = trials[
+            [
+                "Best",
+                "current_epoch",
+                "results_metrics.trade_count",
+                "results_metrics.avg_profit",
+                "results_metrics.total_profit",
+                "Stake currency",
+                "results_metrics.profit",
+                "results_metrics.duration",
+                "loss",
+                "is_initial_point",
+                "is_best",
+            ]
+        ]
+        trials.columns = [
+            "Best",
+            "Epoch",
+            "Trades",
+            "Avg profit",
+            "Total profit",
+            "Stake currency",
+            "Profit",
+            "Avg duration",
+            "Objective",
+            "is_initial_point",
+            "is_best",
+        ]
+        trials["is_profit"] = False
+        trials.loc[trials["is_initial_point"], "Best"] = "*"
+        trials.loc[trials["is_best"], "Best"] = "Best"
+        trials.loc[trials["Total profit"] > 0, "is_profit"] = True
+        trials["Epoch"] = trials["Epoch"].astype(str)
+        trials["Trades"] = trials["Trades"].astype(str)
 
-        trials['Total profit'] = trials['Total profit'].apply(
-            lambda x: '{:,.8f}'.format(x) if x != 0.0 else ""
+        trials["Total profit"] = trials["Total profit"].apply(
+            lambda x: "{:,.8f}".format(x) if x != 0.0 else ""
         )
-        trials['Profit'] = trials['Profit'].apply(
-            lambda x: '{:,.2f}'.format(x) if not isna(x) else ""
+        trials["Profit"] = trials["Profit"].apply(
+            lambda x: "{:,.2f}".format(x) if not isna(x) else ""
         )
-        trials['Avg profit'] = trials['Avg profit'].apply(
-            lambda x: '{:,.2f}%'.format(x) if not isna(x) else ""
+        trials["Avg profit"] = trials["Avg profit"].apply(
+            lambda x: "{:,.2f}%".format(x) if not isna(x) else ""
         )
-        trials['Avg duration'] = trials['Avg duration'].apply(
-            lambda x: '{:,.1f} m'.format(x) if not isna(x) else ""
+        trials["Avg duration"] = trials["Avg duration"].apply(
+            lambda x: "{:,.1f} m".format(x) if not isna(x) else ""
         )
-        trials['Objective'] = trials['Objective'].apply(
-            lambda x: '{:,.5f}'.format(x) if x != 100000 else ""
+        trials["Objective"] = trials["Objective"].apply(
+            lambda x: "{:,.5f}".format(x) if x != 100000 else ""
         )
 
-        trials = trials.drop(columns=['is_initial_point', 'is_best', 'is_profit'])
-        trials.to_csv(csv_file, index=False, header=True, mode='w', encoding='UTF-8')
+        trials = trials.drop(columns=["is_initial_point", "is_best", "is_profit"])
+        trials.to_csv(csv_file, index=False, header=True, mode="w", encoding="UTF-8")
         print("CSV-File created!")
 
     @staticmethod
@@ -197,10 +223,11 @@ class HyperoptData():
         trials: List = []
         if trials_file.is_file() and trials_file.stat().st_size > 0:
             trials = HyperoptData._read_trials(trials_file)
-            if trials[0].get('is_best') is None:
+            if trials[0].get("is_best") is None:
                 raise OperationalException(
                     "The file with Hyperopt results is incompatible with this version "
-                    "of Freqtrade and cannot be loaded.")
+                    "of Freqtrade and cannot be loaded."
+                )
             logger.info(f"Loaded {len(trials)} previous evaluations from disk.")
         return trials
 
@@ -212,8 +239,9 @@ class HyperoptData():
             opts = load(opts_file)
         n_opts = len(opts)
         if n_opts > 0 and type(opts[-1]) != Optimizer:
-            raise OperationalException("The file storing optimizers state might be corrupted "
-                                       "and cannot be loaded.")
+            raise OperationalException(
+                "The file storing optimizers state might be corrupted " "and cannot be loaded."
+            )
         else:
             logger.info(f"Loaded {n_opts} previous {plural(n_opts, 'optimizer')} from disk.")
         return opts
@@ -259,6 +287,7 @@ class HyperoptData():
 
             def empty_dict():
                 return {rs: [] for rs in rngs}
+
             self.opt_empty_tuple = lambda: {rs: ((), ()) for rs in rngs}
             self.Xi.update(empty_dict())
             self.yi.update(empty_dict())

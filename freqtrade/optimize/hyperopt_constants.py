@@ -9,4 +9,3 @@ ESTIMATORS = ["GBRT", "ET", "RF"]
 ESTIMATORS_N = len(ESTIMATORS)
 
 VOID_LOSS = iinfo(int32).max  # just a big enough number to be bad result in loss optimization
-
