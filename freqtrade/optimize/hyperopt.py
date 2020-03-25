@@ -4,38 +4,32 @@ This module contains the hyperopt logic
 """
 
 import os
-import locale
 import logging
 import random
 import sys
 import warnings
-from collections import OrderedDict, deque
+from collections import deque
 from math import factorial, log
-from numpy import iinfo, int32
 from operator import itemgetter
-from pathlib import Path
-from pprint import pprint
 from typing import Any, Dict, List, Optional, Tuple, Set
 
-import rapidjson
-from colorama import Fore, Style
 from colorama import init as colorama_init
 from joblib import (Parallel, cpu_count, delayed, dump, load, wrap_non_picklable_objects)
 from joblib import parallel_backend
-from multiprocessing import Manager
-from queue import Queue
-from pandas import DataFrame, json_normalize, isna
-import tabulate
-from os import path
-import io
+from pandas import DataFrame
 
 from freqtrade.data.converter import trim_dataframe
 from freqtrade.data.history import get_timerange
-from freqtrade.exceptions import OperationalException
-from freqtrade.misc import plural, round_dict
 from freqtrade.optimize.backtesting import Backtesting
 # Import IHyperOpt and IHyperOptLoss to allow unpickling classes from these modules
 import freqtrade.optimize.hyperopt_backend as backend
+
+from freqtrade.optimize.hyperopt_data import HyperoptData
+from freqtrade.optimize.hyperopt_multi import HyperoptMulti
+from freqtrade.optimize.hyperopt_out import HyperoptOut
+from freqtrade.optimize.hyperopt_cv import HyperoptCV
+from freqtrade.optimize.hyperopt_constants import *
+
 # from freqtrade.optimize.hyperopt_backend import Trial
 from freqtrade.optimize.hyperopt_interface import IHyperOpt  # noqa: F401
 from freqtrade.optimize.hyperopt_loss_interface import IHyperOptLoss  # noqa: F401
@@ -56,18 +50,7 @@ with warnings.catch_warnings():
 logger = logging.getLogger(__name__)
 testing = 'pytest' in sys.modules
 
-# supported strategies when asking for multiple points to the optimizer
-LIE_STRATS = ["cl_min", "cl_mean", "cl_max"]
-LIE_STRATS_N = len(LIE_STRATS)
-
-# supported estimators
-ESTIMATORS = ["GBRT", "ET", "RF"]
-ESTIMATORS_N = len(ESTIMATORS)
-
-VOID_LOSS = iinfo(int32).max  # just a big enough number to be bad result in loss optimization
-
-
-class Hyperopt:
+class Hyperopt(HyperoptData, HyperoptOut, HyperoptMulti, HyperoptCV):
     """
     Hyperopt class, this class contains all the logic to run a hyperopt simulation
 
@@ -165,81 +148,10 @@ class Hyperopt:
         self.print_colorized = self.config.get('print_colorized', False)
         self.print_json = self.config.get('print_json', False)
 
-    def setup_multi(self):
-        # optimizers
-        self.opts: List[Optimizer] = []
-        self.opt: Optimizer = None
-        self.Xi: Dict = {}
-        self.yi: Dict = {}
-
-        backend.manager = Manager()
-        self.mode = self.config.get('mode', 'single')
-        self.shared = False
-        # in multi opt one model is enough
-        self.n_models = 1
-        if self.mode in ('multi', 'shared'):
-            self.multi = True
-            if self.mode == 'shared':
-                self.shared = True
-                self.opt_base_estimator = lambda: 'GBRT'
-            else:
-                self.opt_base_estimator = self.estimators
-            self.opt_acq_optimizer = 'sampling'
-            backend.optimizers = backend.manager.Queue()
-            backend.results_batch = backend.manager.Queue()
-        else:
-            self.multi = False
-            backend.results_list = backend.manager.list([])
-            # this is where opt_ask_and_tell stores the results after points are
-            # used for fit and predict, to avoid additional pickling
-            self.batch_results = []
-            # self.opt_base_estimator = lambda: BayesianRidge(n_iter=100, normalize=True)
-            self.opt_base_estimator = lambda: 'GP'
-            self.opt_acq_optimizer = 'sampling'
-            # The GaussianProcessRegressor is heavy, which makes it not a good default
-            # however longer backtests might make it a better tradeoff
-            # self.opt_base_estimator = lambda: 'GP'
-            # self.opt_acq_optimizer = 'lbfgs'
-
-        # in single opt assume runs are expensive so default to 1 point per ask
-        self.n_points = self.config.get('n_points', 1)
-        # if 0 n_points are given, don't use any base estimator (akin to random search)
-        if self.n_points < 1:
-            self.n_points = 1
-            self.opt_base_estimator = lambda: "DUMMY"
-            self.opt_acq_optimizer = "sampling"
-        if self.n_points < 2:
-            # ask_points is what is used in the ask call
-            # because when n_points is None, it doesn't
-            # waste time generating new points
-            self.ask_points = None
-        else:
-            self.ask_points = self.n_points
-        # var used in epochs and batches calculation
-        self.opt_points = self.n_jobs * (self.n_points or 1)
-        # lie strategy
-        lie_strat = self.config.get('lie_strat', 'default')
-        if lie_strat == 'default':
-            self.lie_strat = lambda: 'cl_min'
-        elif lie_strat == 'random':
-            self.lie_strat = self.lie_strategy
-        else:
-            self.lie_strat = lambda: lie_strat
-
     @staticmethod
     def get_lock_filename(config: Dict[str, Any]) -> str:
 
         return str(config['user_data_dir'] / 'hyperopt.lock')
-
-    def clean_hyperopt(self) -> None:
-        """
-        Remove hyperopt pickle files to restart hyperopt.
-        """
-        for f in [self.data_pickle_file, self.trials_file, self.cv_trials_file, self.opts_file]:
-            p = Path(f)
-            if p.is_file():
-                logger.info(f"Removing `{p}`.")
-                p.unlink()
 
     def _get_params_dict(self, raw_params: List[Any]) -> Dict:
 
@@ -253,63 +165,6 @@ class Hyperopt:
         # Return a dict where the keys are the names of the dimensions
         # and the values are taken from the list of parameters.
         return {d.name: v for d, v in zip(dimensions, raw_params)}
-
-    def save_trials(self, final: bool = False) -> None:
-        """
-        Save hyperopt trials
-        """
-        if self.cv:
-            trials_path = self.cv_trials_file
-        else:
-            trials_path = self.trials_file
-        num_trials = len(self.trials)
-        if num_trials > self.num_trials_saved:
-            logger.debug(f"\nSaving {num_trials} {plural(num_trials, 'epoch')}.")
-            # save_trials(self.trials, trials_path, self.num_trials_saved)
-            dump(self.trials, trials_path)
-            self.num_trials_saved = num_trials
-            self.save_opts()
-        if final:
-            logger.info(f"{num_trials} {plural(num_trials, 'epoch')} "
-                        f"saved to '{self.trials_file}'.")
-
-    def save_opts(self) -> None:
-        """
-        Save optimizers state to disk. The minimum required state could also be constructed
-        from the attributes [ models, space, rng ] with Xi, yi loaded from trials.
-        All we really care about are [rng, Xi, yi] since models are never passed over queues
-        and space is dependent on dimensions matching with hyperopt config
-        """
-        # synchronize with saved trials
-        opts = []
-        n_opts = 0
-        if self.multi:
-            while not backend.optimizers.empty():
-                opt = backend.optimizers.get()
-                opt = Hyperopt.opt_clear(opt)
-                opts.append(opt)
-            n_opts = len(opts)
-            for opt in opts:
-                backend.optimizers.put(opt)
-        else:
-            # when we clear the object for saving we have to make a copy to preserve state
-            opt = Hyperopt.opt_rand(self.opt, seed=False)
-            if self.opt:
-                n_opts = 1
-                opts = [Hyperopt.opt_clear(self.opt)]
-            # (the optimizer copy function also fits a new model with the known points)
-            self.opt = opt
-        logger.debug(f"Saving {n_opts} {plural(n_opts, 'optimizer')}.")
-        dump(opts, self.opts_file)
-
-    @staticmethod
-    def _read_trials(trials_file: Path) -> List:
-        """
-        Read hyperopt trials file
-        """
-        logger.info("Reading Trials from '%s'", trials_file)
-        trials = load(trials_file)
-        return trials
 
     def _get_params_details(self, params: Dict) -> Dict:
         """
@@ -334,239 +189,8 @@ class Hyperopt:
         return result
 
     @staticmethod
-    def print_epoch_details(results, total_epochs: int, print_json: bool,
-                            no_header: bool = False, header_str: str = None) -> None:
-        """
-        Display details of the hyperopt result
-        """
-        params = results.get('params_details', {})
-
-        # Default header string
-        if header_str is None:
-            header_str = "Best result"
-
-        if not no_header:
-            explanation_str = Hyperopt._format_explanation_string(results, total_epochs)
-            print(f"\n{header_str}:\n\n{explanation_str}\n")
-
-        if print_json:
-            result_dict: Dict = {}
-            for s in ['buy', 'sell', 'roi', 'stoploss', 'trailing']:
-                Hyperopt._params_update_for_json(result_dict, params, s)
-            print(rapidjson.dumps(result_dict, default=str, number_mode=rapidjson.NM_NATIVE))
-
-        else:
-            Hyperopt._params_pretty_print(params, 'buy', "Buy hyperspace params:")
-            Hyperopt._params_pretty_print(params, 'sell', "Sell hyperspace params:")
-            Hyperopt._params_pretty_print(params, 'roi', "ROI table:")
-            Hyperopt._params_pretty_print(params, 'stoploss', "Stoploss:")
-            Hyperopt._params_pretty_print(params, 'trailing', "Trailing stop:")
-
-    @staticmethod
-    def _params_update_for_json(result_dict, params, space: str) -> None:
-        if space in params:
-            space_params = Hyperopt._space_params(params, space)
-            if space in ['buy', 'sell']:
-                result_dict.setdefault('params', {}).update(space_params)
-            elif space == 'roi':
-                # Convert keys in min_roi dict to strings because
-                # rapidjson cannot dump dicts with integer keys...
-                # OrderedDict is used to keep the numeric order of the items
-                # in the dict.
-                result_dict['minimal_roi'] = OrderedDict(
-                    (str(k), v) for k, v in space_params.items()
-                )
-            else:  # 'stoploss', 'trailing'
-                result_dict.update(space_params)
-
-    @staticmethod
-    def _params_pretty_print(params, space: str, header: str) -> None:
-        if space in params:
-            space_params = Hyperopt._space_params(params, space, 5)
-            if space == 'stoploss':
-                print(header, space_params.get('stoploss'))
-            else:
-                print(header)
-                pprint(space_params, indent=4)
-
-    @staticmethod
-    def _space_params(params, space: str, r: int = None) -> Dict:
-        d = params[space]
-        # Round floats to `r` digits after the decimal point if requested
-        return round_dict(d, r) if r else d
-
-    @staticmethod
     def is_best_loss(results, current_best_loss: float) -> bool:
         return results['loss'] < current_best_loss
-
-    def print_results(self, results) -> None:
-        """
-        Log results if it is better than any previous evaluation
-        """
-        is_best = results['is_best']
-        if self.print_all or is_best:
-            self.print_result_table(self.config, results, self.epochs_limit(),
-                                    self.print_all, self.print_colorized,
-                                    self.hyperopt_table_header)
-            self.hyperopt_table_header = 2
-
-    @staticmethod
-    def print_results_explanation(results, total_epochs, highlight_best: bool,
-                                  print_colorized: bool) -> None:
-        """
-        Log results explanation string
-        """
-        explanation_str = Hyperopt._format_explanation_string(results, total_epochs)
-        # Colorize output
-        if print_colorized:
-            if results['total_profit'] > 0:
-                explanation_str = Fore.GREEN + explanation_str
-            if highlight_best and results['is_best']:
-                explanation_str = Style.BRIGHT + explanation_str
-        print(explanation_str)
-
-    @staticmethod
-    def _format_explanation_string(results, total_epochs) -> str:
-        return (("*" if 'is_initial_point' in results and results['is_initial_point'] else " ") +
-                f"{results['current_epoch']:5d}/{total_epochs}: " +
-                f"{results['results_explanation']} " +
-                f"Objective: {results['loss']:.5f}")
-
-    @staticmethod
-    def print_result_table(config: dict, results: list, total_epochs: int, highlight_best: bool,
-                           print_colorized: bool, remove_header: int) -> None:
-        """
-        Log result table
-        """
-        if not results:
-            return
-
-        tabulate.PRESERVE_WHITESPACE = True
-
-        trials = json_normalize(results, max_level=1)
-        trials['Best'] = ''
-        trials = trials[['Best', 'current_epoch', 'results_metrics.trade_count',
-                         'results_metrics.avg_profit', 'results_metrics.total_profit',
-                         'results_metrics.profit', 'results_metrics.duration',
-                         'loss', 'is_initial_point', 'is_best']]
-        trials.columns = ['Best', 'Epoch', 'Trades', 'Avg profit', 'Total profit',
-                          'Profit', 'Avg duration', 'Objective', 'is_initial_point', 'is_best']
-        trials['is_profit'] = False
-        trials.loc[trials['is_initial_point'], 'Best'] = '*'
-        trials.loc[trials['is_best'], 'Best'] = 'Best'
-        trials.loc[trials['Total profit'] > 0, 'is_profit'] = True
-        trials['Trades'] = trials['Trades'].astype(str)
-
-        trials['Epoch'] = trials['Epoch'].apply(
-            lambda x: '{}/{}'.format(str(x).rjust(len(str(total_epochs)), ' '), total_epochs)
-        )
-        trials['Avg profit'] = trials['Avg profit'].apply(
-            lambda x: '{:,.2f}%'.format(x).rjust(7, ' ') if not isna(x) else "--".rjust(7, ' ')
-        )
-        trials['Avg duration'] = trials['Avg duration'].apply(
-            lambda x: '{:,.1f} m'.format(x).rjust(7, ' ') if not isna(x) else "--".rjust(7, ' ')
-        )
-        trials['Objective'] = trials['Objective'].apply(
-            lambda x: '{:,.5f}'.format(x).rjust(8, ' ') if x != 100000 else "N/A".rjust(8, ' ')
-        )
-
-        trials['Profit'] = trials.apply(
-            lambda x: '{:,.8f} {} {}'.format(
-                x['Total profit'], config['stake_currency'],
-                '({:,.2f}%)'.format(x['Profit']).rjust(10, ' ')
-            ).rjust(25+len(config['stake_currency']))
-            if x['Total profit'] != 0.0 else '--'.rjust(25+len(config['stake_currency'])),
-            axis=1
-        )
-        trials = trials.drop(columns=['Total profit'])
-
-        if print_colorized:
-            for i in range(len(trials)):
-                if trials.loc[i]['is_profit']:
-                    for j in range(len(trials.loc[i])-3):
-                        trials.iat[i, j] = "{}{}{}".format(Fore.GREEN,
-                                                           str(trials.loc[i][j]), Fore.RESET)
-                if trials.loc[i]['is_best'] and highlight_best:
-                    for j in range(len(trials.loc[i])-3):
-                        trials.iat[i, j] = "{}{}{}".format(Style.BRIGHT,
-                                                           str(trials.loc[i][j]), Style.RESET_ALL)
-
-        trials = trials.drop(columns=['is_initial_point', 'is_best', 'is_profit'])
-        if remove_header > 0:
-            table = tabulate.tabulate(
-                trials.to_dict(orient='list'), tablefmt='orgtbl',
-                headers='keys', stralign="right"
-            )
-
-            table = table.split("\n", remove_header)[remove_header]
-        elif remove_header < 0:
-            table = tabulate.tabulate(
-                trials.to_dict(orient='list'), tablefmt='psql',
-                headers='keys', stralign="right"
-            )
-            table = "\n".join(table.split("\n")[0:remove_header])
-        else:
-            table = tabulate.tabulate(
-                trials.to_dict(orient='list'), tablefmt='psql',
-                headers='keys', stralign="right"
-            )
-        print(table)
-
-    @staticmethod
-    def export_csv_file(config: dict, results: list, total_epochs: int, highlight_best: bool,
-                        csv_file: str) -> None:
-        """
-        Log result to csv-file
-        """
-        if not results:
-            return
-
-        # Verification for overwrite
-        if path.isfile(csv_file):
-            logger.error("CSV-File already exists!")
-            return
-
-        try:
-            io.open(csv_file, 'w+').close()
-        except IOError:
-            logger.error("Filed to create CSV-File!")
-            return
-
-        trials = json_normalize(results, max_level=1)
-        trials['Best'] = ''
-        trials['Stake currency'] = config['stake_currency']
-        trials = trials[['Best', 'current_epoch', 'results_metrics.trade_count',
-                         'results_metrics.avg_profit', 'results_metrics.total_profit',
-                         'Stake currency', 'results_metrics.profit', 'results_metrics.duration',
-                         'loss', 'is_initial_point', 'is_best']]
-        trials.columns = ['Best', 'Epoch', 'Trades', 'Avg profit', 'Total profit', 'Stake currency',
-                          'Profit', 'Avg duration', 'Objective', 'is_initial_point', 'is_best']
-        trials['is_profit'] = False
-        trials.loc[trials['is_initial_point'], 'Best'] = '*'
-        trials.loc[trials['is_best'], 'Best'] = 'Best'
-        trials.loc[trials['Total profit'] > 0, 'is_profit'] = True
-        trials['Epoch'] = trials['Epoch'].astype(str)
-        trials['Trades'] = trials['Trades'].astype(str)
-
-        trials['Total profit'] = trials['Total profit'].apply(
-            lambda x: '{:,.8f}'.format(x) if x != 0.0 else ""
-        )
-        trials['Profit'] = trials['Profit'].apply(
-            lambda x: '{:,.2f}'.format(x) if not isna(x) else ""
-        )
-        trials['Avg profit'] = trials['Avg profit'].apply(
-            lambda x: '{:,.2f}%'.format(x) if not isna(x) else ""
-        )
-        trials['Avg duration'] = trials['Avg duration'].apply(
-            lambda x: '{:,.1f} m'.format(x) if not isna(x) else ""
-        )
-        trials['Objective'] = trials['Objective'].apply(
-            lambda x: '{:,.5f}'.format(x) if x != 100000 else ""
-        )
-
-        trials = trials.drop(columns=['is_initial_point', 'is_best', 'is_profit'])
-        trials.to_csv(csv_file, index=False, header=True, mode='w', encoding='UTF-8')
-        print("CSV-File created!")
 
     def has_space(self, space: str) -> bool:
         """
@@ -614,7 +238,7 @@ class Hyperopt:
         Used Optimize function. Called once per epoch to optimize whatever is configured.
         Keep this function as optimized as possible!
         """
-        params_dict = self._get_params_dict(raw_params)
+        params_dict = self._get_params_dict(raw_params) if not self.cv else raw_params
         params_details = self._get_params_details(params_dict) if not self.cv else {}
         if self.cv:
             params_values = raw_params
@@ -694,35 +318,6 @@ class Hyperopt:
             'duration': backtesting_results.trade_duration.mean(),
         }
 
-    def _format_results_explanation_string(self, results_metrics: Dict) -> str:
-        """
-        Return the formatted results explanation in a string
-        """
-        stake_cur = self.config['stake_currency']
-        return (f"{results_metrics['trade_count']:6d} trades. "
-                f"Avg profit {results_metrics['avg_profit']: 6.2f}%. "
-                f"Total profit {results_metrics['total_profit']: 11.8f} {stake_cur} "
-                f"({results_metrics['profit']: 7.2f}\N{GREEK CAPITAL LETTER SIGMA}%). "
-                f"Avg duration {results_metrics['duration']:5.1f} min."
-                ).encode(locale.getpreferredencoding(), 'replace').decode('utf-8')
-
-    @staticmethod
-    def filter_void_losses(vals: List, opt: Optimizer) -> List:
-        """ remove out of bound losses from the results """
-        if opt.void_loss == VOID_LOSS and len(opt.yi) < 1:
-            # only exclude results at the beginning when void loss is yet to be set
-            void_filtered = list(filter(lambda v: v["loss"] != VOID_LOSS, vals))
-        else:
-            if opt.void_loss == VOID_LOSS:  # set void loss once
-                opt.void_loss = max(opt.yi)
-            void_filtered = []
-            # default bad losses to set void_loss
-            for k, v in enumerate(vals):
-                if v["loss"] == VOID_LOSS:
-                    vals[k]["loss"] = opt.void_loss
-            void_filtered = vals
-        return void_filtered
-
     def lie_strategy(self):
         """ Choose a strategy randomly among the supported ones, used in multi opt mode
         to increase the diversion of the searches of each optimizer """
@@ -750,18 +345,6 @@ class Hyperopt:
             random_state=random_state or self.random_state,
         )
 
-    def trials_params(self, offset: int):
-        for t in self.target_trials[offset:]:
-            yield t["params_dict"]
-
-    def run_cv_backtest_parallel(self, parallel: Parallel, tries: int, first_try: int,
-                                 jobs: int):
-        """ evaluate a list of given parameters in parallel """
-        parallel(
-            delayed(wrap_non_picklable_objects(self.parallel_objective))(params, n=i)
-            for params, i in zip(self.trials_params(first_try),
-                                 range(first_try, first_try + tries)))
-
     def run_backtest_parallel(self, parallel: Parallel, tries: int, first_try: int,
                               jobs: int):
         """ launch parallel in single opt mode, return the evaluated epochs """
@@ -770,14 +353,6 @@ class Hyperopt:
             (asked, backend.results_list, i)
             for asked, i in zip(self.opt_ask_and_tell(jobs, tries),
                                 range(first_try, first_try + tries)))
-
-    def run_multi_backtest_parallel(self, parallel: Parallel, tries: int, first_try: int,
-                                    jobs: int):
-        """ launch parallel in multi opt mode, return the evaluated epochs"""
-        parallel(
-            delayed(wrap_non_picklable_objects(self.parallel_opt_objective))(
-                i, backend.optimizers, jobs, backend.results_shared, backend.results_batch)
-            for i in range(first_try, first_try + tries))
 
     def opt_ask_and_tell(self, jobs: int, tries: int):
         """
@@ -811,9 +386,9 @@ class Hyperopt:
                 del backend.results_list[:]
             if vals:
                 # filter losses
-                void_filtered = Hyperopt.filter_void_losses(vals, opt)
+                void_filtered = HyperoptMulti.filter_void_losses(vals, opt)
                 if void_filtered:  # again if all are filtered
-                    opt.tell([Hyperopt.params_Xi(v) for v in void_filtered],
+                    opt.tell([HyperoptMulti.opt_params_Xi(v) for v in void_filtered],
                              [v['loss'] for v in void_filtered],
                              fit=fit)  # only fit when out of points
                     self.batch_results.extend(void_filtered)
@@ -829,164 +404,6 @@ class Hyperopt:
                     break
             evald.add(a)
             yield a
-
-    @staticmethod
-    def opt_get_past_points(is_shared: bool, asked: dict, results_shared: Dict) -> Tuple[dict, int]:
-        """ fetch shared results between optimizers """
-        # a result is (y, counter)
-        for a in asked:
-            if a in results_shared:
-                y, counter = results_shared[a]
-                asked[a] = y
-                counter -= 1
-                if counter < 1:
-                    del results_shared[a]
-        return asked, len(results_shared)
-
-    @staticmethod
-    def opt_rand(opt: Optimizer, rand: int = None, seed: bool = True) -> Optimizer:
-        """ return a new instance of the optimizer with modified rng """
-        if seed:
-            if not rand:
-                rand = opt.rng.randint(0, VOID_LOSS)
-            opt.rng.seed(rand)
-        opt, opt.void_loss, opt.void, opt.rs = (
-            opt.copy(random_state=opt.rng), opt.void_loss, opt.void, opt.rs
-        )
-        return opt
-
-    @staticmethod
-    def opt_state(shared: bool, optimizers: Queue) -> Optimizer:
-        """ fetch an optimizer in multi opt mode """
-        # get an optimizer instance
-        opt = optimizers.get()
-        if shared:
-            # get a random number before putting it back to avoid
-            # replication with other workers and keep reproducibility
-            rand = opt.rng.randint(0, VOID_LOSS)
-            optimizers.put(opt)
-            # switch the seed to get a different point
-            opt = Hyperopt.opt_rand(opt, rand)
-        return opt
-
-    @staticmethod
-    def opt_clear(opt: Optimizer):
-        """ clear state from an optimizer object """
-        del opt.models[:], opt.Xi[:], opt.yi[:]
-        return opt
-
-    @staticmethod
-    def opt_results(opt: Optimizer, void_filtered: list, jobs: int, is_shared: bool,
-                    results_shared: Dict, results_batch: Queue, optimizers: Queue):
-        """
-        update the board used to skip already computed points,
-        set the initial point status
-        """
-        # add points of the current dispatch if any
-        if opt.void_loss != VOID_LOSS or len(void_filtered) > 0:
-            void = False
-        else:
-            void = True
-        # send back the updated optimizer only in non shared mode
-        if not is_shared:
-            opt = Hyperopt.opt_clear(opt)
-            # is not a replica in shared mode
-            optimizers.put(opt)
-        # NOTE: some results at the beginning won't be published
-        # because they are removed by filter_void_losses
-        rs = opt.rs
-        if not void:
-            # the tuple keys are used to avoid computation of done points by any optimizer
-            results_shared.update({tuple(Hyperopt.params_Xi(v)): (v["loss"], jobs - 1)
-                                   for v in void_filtered})
-            # in multi opt mode (non shared) also track results for each optimizer (using rs as ID)
-            # this keys should be cleared after each batch
-            Xi, yi = results_shared[rs]
-            Xi = Xi + tuple((Hyperopt.params_Xi(v)) for v in void_filtered)
-            yi = yi + tuple(v["loss"] for v in void_filtered)
-            results_shared[rs] = (Xi, yi)
-            # this is the counter used by the optimizer internally to track the initial
-            # points evaluated so far..
-            initial_points = opt._n_initial_points
-            # set initial point flag and optimizer random state
-            for n, v in enumerate(void_filtered):
-                v['is_initial_point'] = initial_points - n > 0
-                v['random_state'] = rs
-            results_batch.put(void_filtered)
-
-    def parallel_opt_objective(self, n: int, optimizers: Queue, jobs: int,
-                               results_shared: Dict, results_batch: Queue):
-        """
-        objective run in multi opt mode, optimizers share the results as soon as they are completed
-        """
-        self.log_results_immediate(n)
-        is_shared = self.shared
-        opt = self.opt_state(is_shared, optimizers)
-        sss = self.search_space_size
-        asked: Dict[Tuple, Any] = {tuple([]): None}
-        asked_d: Dict[Tuple, Any] = {}
-
-        # fit a model with the known points, (the optimizer has no points here since
-        # it was just fetched from the queue)
-        rs = opt.rs
-        Xi, yi = self.Xi[rs], self.yi[rs]
-        # add the points discovered within this batch
-        bXi, byi = results_shared[rs]
-        Xi.extend(list(bXi))
-        yi.extend(list(byi))
-        if Xi:
-            opt.tell(Xi, yi)
-        told = 0  # told
-        Xi_d = []  # done
-        yi_d = []
-        Xi_t = []  # to do
-        # if opt.void == -1 the optimizer failed to give a new point (between dispatches), stop
-        # if asked == asked_d  the points returned are the same, stop
-        # if opt.Xi > sss the optimizer has more points than the estimated search space size, stop
-        while opt.void != -1 and asked != asked_d and len(opt.Xi) < sss:
-            asked_d = asked
-            asked = opt.ask(n_points=self.ask_points, strategy=self.lie_strat())
-            if not self.ask_points:
-                asked = {tuple(asked): None}
-            else:
-                asked = {tuple(a): None for a in asked}
-            # check if some points have been evaluated by other optimizers
-            p_asked, _ = Hyperopt.opt_get_past_points(is_shared, asked, results_shared)
-            for a in p_asked:
-                if p_asked[a] is not None:
-                    print('a point was previously asked by another worker')
-                    if a not in Xi_d:
-                        Xi_d.append(a)
-                        yi_d.append(p_asked[a])
-                else:
-                    Xi_t.append(a)
-            # no points to do?
-            if len(Xi_t) < self.n_points:
-                len_Xi_d = len(Xi_d)
-                # did other workers backtest some points?
-                if len_Xi_d > told:
-                    # if yes fit a new model with the new points
-                    opt.tell(Xi_d[told:], yi_d[told:])
-                    told = len_Xi_d
-                else:  # or get new points from a different random state
-                    opt = Hyperopt.opt_rand(opt)
-            else:
-                break
-        # return early if there is nothing to backtest
-        if len(Xi_t) < 1:
-            if is_shared:
-                opt = optimizers.get()
-            opt.void = -1
-            opt = Hyperopt.opt_clear(opt)
-            optimizers.put(opt)
-            return []
-        # run the backtest for each point to do (Xi_t)
-        results = [self.backtest_params(a) for a in Xi_t]
-        # filter losses
-        void_filtered = Hyperopt.filter_void_losses(results, opt)
-
-        Hyperopt.opt_results(opt, void_filtered, jobs, is_shared,
-                             results_shared, results_batch, optimizers)
 
     def parallel_objective(self, asked, results_list: List = [], n=0):
         """ objective run in single opt mode, run the backtest, store the results into a queue """
@@ -1022,7 +439,7 @@ class Hyperopt:
         # Save results and optimizers after every batch
         self.save_trials()
         # track new points if in multi mode
-        if self.multi:
+        if self.multi and not self.cv:
             self.track_points(trials=self.trials[frame_start:])
             # clear points used by optimizers intra batch
             backend.results_shared.update(self.opt_empty_tuple())
@@ -1051,37 +468,14 @@ class Hyperopt:
                 return True
         return False
 
-    @staticmethod
-    def load_previous_results(trials_file: Path) -> List:
-        """
-        Load data for epochs from the file if we have one
-        """
-        trials: List = []
-        if trials_file.is_file() and trials_file.stat().st_size > 0:
-            trials = Hyperopt._read_trials(trials_file)
-            if trials[0].get('is_best') is None:
-                raise OperationalException(
-                    "The file with Hyperopt results is incompatible with this version "
-                    "of Freqtrade and cannot be loaded.")
-            logger.info(f"Loaded {len(trials)} previous evaluations from disk.")
-        return trials
-
-    @staticmethod
-    def load_previous_optimizers(opts_file: Path) -> List:
-        """ Load the state of previous optimizers from file """
-        opts: List[Optimizer] = []
-        if opts_file.is_file() and opts_file.stat().st_size > 0:
-            opts = load(opts_file)
-        n_opts = len(opts)
-        if n_opts > 0 and type(opts[-1]) != Optimizer:
-            raise OperationalException("The file storing optimizers state might be corrupted "
-                                       "and cannot be loaded.")
-        else:
-            logger.info(f"Loaded {n_opts} previous {plural(n_opts, 'optimizer')} from disk.")
-        return opts
-
     def _set_random_state(self, random_state: Optional[int]) -> int:
         return random_state or random.randint(1, 2**16 - 1)
+
+    @staticmethod
+    def _stub_dimension(k):
+        d = Dimension()
+        d.name = k
+        return d
 
     @staticmethod
     def calc_epochs(
@@ -1143,10 +537,6 @@ class Hyperopt:
                 self.max_epoch = self.search_space_size
         logger.debug(f'\nMax epoch set to: {self.epochs_limit()}')
 
-    @staticmethod
-    def params_Xi(v: dict):
-        return list(v["params_dict"].values())
-
     def track_points(self, trials: List = None):
         """
         keep tracking of the evaluated points per optimizer random state
@@ -1163,88 +553,16 @@ class Hyperopt:
         for v in trials:
             rs = v["random_state"]
             try:
-                self.Xi[rs].append(Hyperopt.params_Xi(v))
+                self.Xi[rs].append(HyperoptMulti.opt_params_Xi(v))
                 self.yi[rs].append(v["loss"])
             except IndexError:  # Hyperopt was started with different random_state or number of jobs
                 pass
 
-    def setup_optimizers(self):
-        """ Setup the optimizers objects, try to load from disk, or create new ones """
-        # try to load previous optimizers
-        opts = self.load_previous_optimizers(self.opts_file)
-        n_opts = len(opts)
-
-        if self.multi:
-            max_opts = self.n_jobs
-            rngs = []
-            # when sharing results there is only one optimizer that gets copied
-            if self.shared:
-                max_opts = 1
-            # put the restored optimizers in the queue
-            # only if they match the current number of jobs
-            if n_opts == max_opts:
-                for n in range(n_opts):
-                    rngs.append(opts[n].rs)
-                    # make sure to not store points and models in the optimizer
-                    backend.optimizers.put(Hyperopt.opt_clear(opts[n]))
-            # generate as many optimizers as are still needed to fill the job count
-            remaining = max_opts - backend.optimizers.qsize()
-            if remaining > 0:
-                opt = self.get_optimizer()
-                rngs = []
-                for _ in range(remaining):  # generate optimizers
-                    # random state is preserved
-                    rs = opt.rng.randint(0, iinfo(int32).max)
-                    opt_copy = opt.copy(random_state=rs)
-                    opt_copy.void_loss = VOID_LOSS
-                    opt_copy.void = False
-                    opt_copy.rs = rs
-                    rngs.append(rs)
-                    backend.optimizers.put(opt_copy)
-                del opt, opt_copy
-            # reconstruct observed points from epochs
-            # in shared mode each worker will remove the results once all the workers
-            # have read it (counter < 1)
-            counter = self.n_jobs
-
-            def empty_dict():
-                return {rs: [] for rs in rngs}
-            self.opt_empty_tuple = lambda: {rs: ((), ()) for rs in rngs}
-            self.Xi.update(empty_dict())
-            self.yi.update(empty_dict())
-            self.track_points()
-            # this is needed to keep track of results discovered within the same batch
-            # by each optimizer, use tuples! as the SyncManager doesn't handle nested dicts
-            Xi, yi = self.Xi, self.yi
-            results = {tuple(X): [yi[r][n], counter] for r in Xi for n, X in enumerate(Xi[r])}
-            results.update(self.opt_empty_tuple())
-            backend.results_shared = backend.manager.dict(results)
-        else:
-            # if we have more than 1 optimizer but are using single opt,
-            # pick one discard the rest...
-            if n_opts > 0:
-                self.opt = opts[-1]
-            else:
-                self.opt = self.get_optimizer()
-                self.opt.void_loss = VOID_LOSS
-                self.opt.void = False
-                self.opt.rs = self.random_state
-            # in single mode restore the points directly to the optimizer
-            # but delete first in case we have filtered the starting list of points
-            self.opt = Hyperopt.opt_clear(self.opt)
-            rs = self.random_state
-            self.Xi[rs] = []
-            self.track_points()
-            if len(self.Xi[rs]) > 0:
-                self.opt.tell(self.Xi[rs], self.yi[rs], fit=False)
-            # delete points since in single mode the optimizer state sits in the main
-            # process and is not discarded
-            self.Xi, self.yi = {}, {}
-        del opts[:]
-
     def setup_points(self):
         if self.cv:
-            self.n_initial_points, self.min_epochs, self.search_space_size = 0, 0, 0
+            self.search_space_size = VOID_LOSS
+            self.min_epochs = self.total_epochs
+            self.n_initial_points = self.min_epochs
         else:
             self.n_initial_points, self.min_epochs, self.search_space_size = self.calc_epochs(
                 self.dimensions, self.n_jobs, self.effort, self.total_epochs, self.n_points
@@ -1321,8 +639,11 @@ class Hyperopt:
                             logger.warning("Some evaluated epochs were void, "
                                            "check the loss function and the search space.")
                         if (not saved and len(batch_results) > 1) or batch_len < 1 or \
-                           (not saved and self.cv) or \
-                           (not saved and self.search_space_size < batch_len + epochs_limit()):
+                           (not saved and self.search_space_size < batch_len + epochs_limit()
+                            and not self.cv):
+                            print(not saved and len(batch_results) > 1)
+                            print(batch_len < 1)
+                            print(not saved and self.search_space_size < batch_len + epochs_limit())
                             break
                         # log_results add
                         epochs_so_far += saved
@@ -1361,7 +682,7 @@ class Hyperopt:
         if self.cv:
             self.target_trials = filter_trials(self.trials, self.config)
             self.trials = []
-            self.dimensions = list(self.target_trials[-1]["params_dict"].keys())
+            self.dimensions = [k for k in self.target_trials[-1]["params_dict"]]
             self.total_epochs = len(self.target_trials)
         else:
             self.dimensions = self.hyperopt_space()
