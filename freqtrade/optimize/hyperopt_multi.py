@@ -1,7 +1,7 @@
 import warnings
 from typing import Any, Dict, List, Tuple
 
-from joblib import Parallel, cpu_count, delayed, dump, load, wrap_non_picklable_objects
+from joblib import Parallel, delayed, wrap_non_picklable_objects
 from multiprocessing import Manager
 from queue import Queue
 
@@ -10,7 +10,6 @@ import freqtrade.optimize.hyperopt_backend as backend
 from freqtrade.optimize.hyperopt_constants import VOID_LOSS
 from freqtrade.optimize.hyperopt_interface import IHyperOpt  # noqa: F401
 from freqtrade.optimize.hyperopt_loss_interface import IHyperOptLoss  # noqa: F401
-from freqtrade.resolvers.hyperopt_resolver import HyperOptLossResolver, HyperOptResolver
 
 # Suppress scikit-learn FutureWarnings from skopt
 with warnings.catch_warnings():
@@ -35,13 +34,14 @@ class HyperoptMulti:
 
         backend.manager = Manager()
         self.mode = self.config.get("mode", "single")
-        self.shared = False
+        mode = self.mode
+        self.cv = mode == "cv"
+        self.multi = mode in ("multi", "shared")
+        self.shared = mode == "shared"
         # in multi opt one model is enough
         self.n_models = 1
-        if self.mode in ("multi", "shared"):
-            self.multi = True
-            if self.mode == "shared":
-                self.shared = True
+        if self.multi:
+            if self.shared:
                 self.opt_base_estimator = lambda: "GBRT"
             else:
                 self.opt_base_estimator = self.estimators
@@ -49,9 +49,8 @@ class HyperoptMulti:
             backend.optimizers = backend.manager.Queue()
             backend.results_batch = backend.manager.Queue()
         else:
-            self.multi = False
             backend.results_list = backend.manager.list([])
-            # this is where opt_ask_and_tell stores the results after points are
+            # this is where ask_and_tell stores the results after points are
             # used for fit and predict, to avoid additional pickling
             self.batch_results = []
             # self.opt_base_estimator = lambda: BayesianRidge(n_iter=100, normalize=True)

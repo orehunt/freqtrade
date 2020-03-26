@@ -27,7 +27,15 @@ from freqtrade.optimize.hyperopt_data import HyperoptData
 from freqtrade.optimize.hyperopt_multi import HyperoptMulti
 from freqtrade.optimize.hyperopt_out import HyperoptOut
 from freqtrade.optimize.hyperopt_cv import HyperoptCV
-from freqtrade.optimize.hyperopt_constants import *
+from freqtrade.optimize.hyperopt_constants import (
+    logger,
+    VOID_LOSS,
+    LIE_STRATS,
+    LIE_STRATS_N,
+    ESTIMATORS,
+    ESTIMATORS_N,
+    columns
+)
 
 # from freqtrade.optimize.hyperopt_backend import Trial
 from freqtrade.optimize.hyperopt_interface import IHyperOpt  # noqa: F401
@@ -86,7 +94,6 @@ class Hyperopt(HyperoptData, HyperoptOut, HyperoptMulti, HyperoptCV):
         self.effort = max(0.01, self.config["effort"] if "effort" in self.config else 1)
         self.total_epochs = self.config["epochs"] if "epochs" in self.config else 0
         self.max_epoch = 0
-        self.max_epoch_reached = False
         self.min_epochs = 0
         self.epochs_limit = lambda: self.total_epochs or self.max_epoch
 
@@ -94,29 +101,24 @@ class Hyperopt(HyperoptData, HyperoptOut, HyperoptMulti, HyperoptCV):
         self.search_space_size = 0
         # total number of candles being backtested
         self.n_candles = 0
-        # cross validation
-        if "hyperopt_cv" in self.config:
-            self.cv = self.config["hyperopt_cv"]
-        else:
-            self.cv = False
 
+        # used by update_max_epoch
         self.current_best_loss = VOID_LOSS
         self.current_best_epoch = 0
-        self.epochs_since_last_best: List = []
-        self.avg_best_occurrence = 0
+        self.epochs_since_last_best: List = [0, 0]
+        self.avg_last_occurrence = 0
+
+        # configure multi mode
+        self.setup_multi()
 
         if not self.config.get("hyperopt_continue") and not self.cv:
             self.clean_hyperopt()
         else:
             logger.info("Continuing on previous hyperopt results.")
 
-        self.num_trials_saved = 0
-
         # evaluations
         self.trials: List = []
-
-        # configure multi mode
-        self.setup_multi()
+        self.num_trials_saved = 0
 
         # Populate functions here (hasattr is slow so should not be run during "regular" operations)
         if hasattr(self.custom_hyperopt, "populate_indicators"):
@@ -153,7 +155,6 @@ class Hyperopt(HyperoptData, HyperoptOut, HyperoptMulti, HyperoptCV):
 
     @staticmethod
     def get_lock_filename(config: Dict[str, Any]) -> str:
-
         return str(config["user_data_dir"] / "hyperopt.lock")
 
     def _get_params_dict(self, raw_params: List[Any]) -> Dict:
@@ -235,17 +236,16 @@ class Hyperopt(HyperoptData, HyperoptOut, HyperoptMulti, HyperoptCV):
 
         return spaces
 
-    def backtest_params(self, raw_params: List[Any], iteration=None) -> Dict:
+    def backtest_params(
+        self, raw_params: List[Any] = None, iteration=None, params_dict: Dict[str, Any] = None
+    ) -> Dict:
         """
         Used Optimize function. Called once per epoch to optimize whatever is configured.
         Keep this function as optimized as possible!
         """
-        params_dict = self._get_params_dict(raw_params) if not self.cv else raw_params
-        params_details = self._get_params_details(params_dict) if not self.cv else {}
-        if self.cv:
-            params_values = raw_params
-        else:
-            params_values = params_dict
+        if not params_dict:
+            params_dict = self._get_params_dict(raw_params)
+        params_details = self._get_params_details(params_dict)
 
         if self.has_space("roi"):
             self.backtesting.strategy.minimal_roi = self.custom_hyperopt.generate_roi_table(
@@ -288,11 +288,11 @@ class Hyperopt(HyperoptData, HyperoptOut, HyperoptMulti, HyperoptCV):
             max_open_trades=self.max_open_trades,
             position_stacking=self.position_stacking,
         )
-        return self._get_trial(
-            backtesting_results, min_date, max_date, params_values, params_details, processed
+        return self._get_result(
+            backtesting_results, min_date, max_date, params_dict, params_details, processed
         )
 
-    def _get_trial(
+    def _get_result(
         self, backtesting_results, min_date, max_date, params_dict, params_details, processed
     ):
         results_metrics = self._calculate_results_metrics(backtesting_results)
@@ -365,12 +365,10 @@ class Hyperopt(HyperoptData, HyperoptOut, HyperoptMulti, HyperoptCV):
             delayed(wrap_non_picklable_objects(self.parallel_objective))(
                 asked, backend.results_list, i
             )
-            for asked, i in zip(
-                self.opt_ask_and_tell(jobs, tries), range(first_try, first_try + tries)
-            )
+            for asked, i in zip(self.ask_and_tell(jobs, tries), range(first_try, first_try + tries))
         )
 
-    def opt_ask_and_tell(self, jobs: int, tries: int):
+    def ask_and_tell(self, jobs: int, tries: int):
         """
         loop to manage optimizer state in single optimizer mode, everytime a job is
         dispatched, we check the optimizer for points, to ask and to tell if any,
@@ -429,7 +427,10 @@ class Hyperopt(HyperoptData, HyperoptOut, HyperoptMulti, HyperoptCV):
     def parallel_objective(self, asked, results_list: List = [], n=0):
         """ objective run in single opt mode, run the backtest, store the results into a queue """
         self.log_results_immediate(n)
-        v = self.backtest_params(asked)
+        if self.cv:
+            v = self.backtest_params(params_dict=asked)
+        else:
+            v = self.backtest_params(raw_params=asked)
 
         v["is_initial_point"] = n < self.opt_n_initial_points
         v["random_state"] = self.random_state
@@ -469,9 +470,6 @@ class Hyperopt(HyperoptData, HyperoptOut, HyperoptMulti, HyperoptCV):
             self.track_points(trials=self.trials[batch_start:])
             # clear points used by optimizers intra batch
             backend.results_shared.update(self.opt_empty_tuple())
-        # give up if no best since max epochs
-        if current + 1 > self.epochs_limit():
-            self.max_epoch_reached = True
 
         HyperoptOut.clear_line(columns)
         return i
@@ -492,7 +490,7 @@ class Hyperopt(HyperoptData, HyperoptOut, HyperoptMulti, HyperoptCV):
                 best = sorted(best_epochs, key=lambda k: k["loss"])[0]
                 self.current_best_epoch = best["current_epoch"]
                 self.current_best_loss = best["loss"]
-                self.avg_best_occurrence = max(self.n_jobs, len_trials // len_best)
+                self.avg_last_occurrence = max(self.n_jobs, len_trials // len_best)
                 return True
         return False
 
@@ -533,43 +531,57 @@ class Hyperopt(HyperoptData, HyperoptOut, HyperoptMulti, HyperoptCV):
             )
         except OverflowError:
             search_space_size = VOID_LOSS
-        # logger.info(f'Search space size: {search_space_size}')
-        log_opt = int(log(opt_points, 2)) if opt_points > 4 else 2
-        if search_space_size < opt_points:
-            # don't waste if the space is small
-            n_initial_points = opt_points // 3
-            min_epochs = opt_points
-        elif total_epochs > 0:
-            # coefficients from total epochs
+        logger.info(f"Search space size: {search_space_size:e}")
+
+        log_opt = max(2, int(log(opt_points, 2)))
+        # fixed number of epochs
+        if total_epochs > 0:
             log_epp = int(log(total_epochs, 2)) * log_opt
             n_initial_points = min(log_epp, total_epochs // 3)
             min_epochs = total_epochs
+        # search space is small
+        elif search_space_size < opt_points:
+            n_initial_points = max(1, search_space_size // opt_points)
+            min_epochs = search_space_size
         else:
-            # extract coefficients from the search space
-            log_sss = int(log(search_space_size, 10)) * log_opt
-            # never waste
-            n_initial_points = min(log_sss, search_space_size // 3)
-            # it shall run for this much, I say
+            log_sss = int(log(search_space_size, n_parameters)) * log_opt
+            n_initial_points = min(log_sss, search_space_size // opt_points)
             min_epochs = int(max(n_initial_points, opt_points) + 2 * n_initial_points)
-        return int(n_initial_points * effort) or 1, int(min_epochs * effort), search_space_size
+
+        # after calculation, ensure limits
+        n_initial_points = max(1, int(n_initial_points))
+        min_epochs = min(search_space_size, int(min_epochs * effort))
+
+        return n_initial_points, min_epochs, search_space_size
 
     def update_max_epoch(self, prev_best: int, current_best: int, current: int):
         """ calculate max epochs: store the number of non best epochs
             between each best, and get the mean of that value """
+
+        # if there isn't a new best, increase the last period
         if prev_best == current_best:
-            last_period = self.epochs_since_last_best[-1]
-            self.epochs_since_last_best[-1] = last_period + (current - self.current_best_epoch)
+            self.epochs_since_last_best[-1] += current - current_best
         else:
+            self.current_best_epoch = current_best
             self.epochs_since_last_best.append(current_best - prev_best)
-        self.avg_best_occurrence = sum(self.epochs_since_last_best) // len(
+
+        # this tracks the tip of the average, which is used to compute batch_len
+        self.avg_last_occurrence = sum(self.epochs_since_last_best) // len(
             self.epochs_since_last_best
         )
-        self.max_epoch = int(
-            (self.current_best_epoch + self.avg_best_occurrence + self.min_epochs)
-            * max(1, self.effort)
+        # how many epochs between bests on average
+        avg_best_occurrence = sum(self.epochs_since_last_best[:-1]) // len(
+            self.epochs_since_last_best[:-1]
         )
-        if self.max_epoch > self.search_space_size:
-            self.max_epoch = self.search_space_size
+        # the max epoch starts from the current best epoch, and adds the best average
+        # has to be at least min_epochs
+        self.max_epoch = int(
+            min(
+                max(self.current_best_epoch + avg_best_occurrence, self.min_epochs)
+                * max(1, self.effort),
+                self.search_space_size,
+            )
+        )
         logger.debug(f"\nMax epoch set to: {self.epochs_limit()}")
 
     def track_points(self, trials: List = None):
@@ -603,27 +615,33 @@ class Hyperopt(HyperoptData, HyperoptOut, HyperoptMulti, HyperoptCV):
                 self.dimensions, self.n_jobs, self.effort, self.total_epochs, self.n_points
             )
         logger.info(f"Min epochs set to: {self.min_epochs}")
-        # reduce random points by n_points in multi mode because asks are per job
-        if self.multi:
-            self.opt_n_initial_points = self.n_initial_points // self.n_points
+        # reduce random points in multi (non shared) mode by the number of jobs
+        # because workers don't share points, and each optimizer would ask n_initial_points
+        if self.multi and not self.shared:
+            self.opt_n_initial_points = self.n_initial_points // self.n_jobs
         else:
             self.opt_n_initial_points = self.n_initial_points
-        logger.info(f"Initial points: {self.n_initial_points}")
+        logger.info(f"Initial points: ~{self.n_initial_points}")
         # if total epochs are not set, max_epoch takes its place
         if self.total_epochs < 1:
             self.max_epoch = int(self.min_epochs + len(self.trials))
-        # initialize average best occurrence
-        self.avg_best_occurrence = max(self.min_epochs // 3, self.n_jobs * 3)
+        # initialize average last occurrence
+        self.avg_last_occurrence = min(self.min_epochs, self.opt_points)
 
     def return_results(self):
         """
-        results are passed by queue in multi mode, or stored by ask_and_tell in single mode
+        results are passed by queue in multi mode,
+        stored by ask_and_tell in single mode
+        directly fetched from the shared results_list in cv mode
         """
         batch_results = []
         if self.multi:
             while not backend.results_batch.empty():
                 worker_results = backend.results_batch.get()
                 batch_results.extend(worker_results)
+        elif self.cv:
+            batch_results.extend(backend.results_list)
+            del backend.results_list[:]
         else:
             batch_results.extend(self.batch_results)
             del self.batch_results[:]
@@ -633,31 +651,32 @@ class Hyperopt(HyperoptData, HyperoptOut, HyperoptMulti, HyperoptCV):
         """ calc the length of the next batch """
         jobs = self.n_jobs
         min_occurrence = jobs * 3
-        opt_points = self.opt_points
+        n_points = self.n_points
         epochs_limit = self.epochs_limit
 
-        occurrence = max(min_occurrence, int(self.avg_best_occurrence * max(1.1, self.effort)))
+        occurrence = max(min_occurrence, int(self.avg_last_occurrence * max(1, self.effort)))
         # pad the batch length to the number of jobs to avoid desaturation
         batch_len = occurrence + jobs - occurrence % jobs
         # don't go over the limit
-        if epochs_so_far + batch_len * opt_points >= epochs_limit():
-            q, r = divmod(epochs_limit() - epochs_so_far, opt_points)
+        if epochs_so_far + batch_len * n_points >= epochs_limit():
+            q, r = divmod(epochs_limit() - epochs_so_far, n_points)
             batch_len = q + r
         print(f"{epochs_so_far+1}-{epochs_so_far+batch_len}" f"/{epochs_limit()}: ", end="")
         return batch_len
 
     def _batch_check(self, batch_len: int, saved: int, epochs_so_far: int) -> bool:
-        # stop if no epochs have been evaluated
+        """ stop the loop if conditions are met """
         if saved < batch_len:
             logger.warning(
                 "Some evaluated epochs were void, " "check the loss function and the search space."
             )
         if batch_len < 1 or (
-            not saved and self.search_space_size < batch_len + epochs_limit() and not self.cv
+            not saved and self.search_space_size < batch_len + self.epochs_limit() and not self.cv
         ):
             logger.info("Terminating Hyperopt because results were empty.")
             return False
-        if self.max_epoch_reached:
+        # give up if no best since max epochs
+        if batch_len + epochs_so_far >= self.epochs_limit():
             logger.info("Max epoch reached, terminating.")
             return False
         return True
@@ -738,12 +757,10 @@ class Hyperopt(HyperoptData, HyperoptOut, HyperoptMulti, HyperoptCV):
         if not self.cv:
             self.setup_optimizers()
 
-        logger.info(f"Found {cpu_count()} CPU cores. Let's make them scream!")
-        logger.info(f"Number of parallel jobs set as: {self.n_jobs}")
-        if self.multi and not self.cv:
-            jobs_scheduler = self.run_multi_backtest_parallel
-        elif self.cv:
+        if self.cv:
             jobs_scheduler = self.run_cv_backtest_parallel
+        elif self.multi:
+            jobs_scheduler = self.run_multi_backtest_parallel
         else:
             jobs_scheduler = self.run_backtest_parallel
 
@@ -765,4 +782,6 @@ class Hyperopt(HyperoptData, HyperoptOut, HyperoptMulti, HyperoptCV):
         del state["trials"]
         if self.cv:
             del state["target_trials"]
+        elif not self.multi:
+            del state["opt"]
         return state

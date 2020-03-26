@@ -110,6 +110,7 @@ def filter_trials(trials: Any, config: Dict[str, Any]) -> List:
 
 
 def sample_trials(trials: Any, trials_last_col: Any, filters: Dict) -> List:
+    """ Pick one trial, every `step_value` of `step_metric`, sorted by `sort_metric` """
     if filters["step_value"]:
         step_k = filters["step_key"]
         step_v = filters["step_value"]
@@ -118,11 +119,16 @@ def sample_trials(trials: Any, trials_last_col: Any, filters: Dict) -> List:
         steps = arange(step_start, step_stop, step_v)
         flt_trials = []
         last_epoch = None
+        sort_key = filters["sort_key"]
+        ascending = sort_key in ("duration", "loss", "trade_count")
         for n, s in enumerate(steps):
             try:
                 t = (
+                    # the trials between the current step
                     trials.loc[(trials[step_k].values > s) & (trials[step_k].values < s + step_v)]
-                    .sort_values(filters["sort_key"], ascending=filters["sort_order"])
+                    # sorted according to the specified key
+                    .sort_values(filters["sort_key"], ascending=ascending)
+                    # select the columns of the trial, and return the first row
                     .loc[:, :trials_last_col]
                     .iloc[0]
                     .to_dict()

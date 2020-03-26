@@ -20,7 +20,7 @@ import freqtrade.optimize.hyperopt_backend as backend
 from freqtrade.optimize.hyperopt_interface import IHyperOpt  # noqa: F401
 from freqtrade.optimize.hyperopt_loss_interface import IHyperOptLoss  # noqa: F401
 
-from freqtrade.optimize.hyperopt_constants import *
+from freqtrade.optimize.hyperopt_constants import VOID_LOSS
 from freqtrade.optimize.hyperopt_multi import HyperoptMulti
 
 # Suppress scikit-learn FutureWarnings from skopt
@@ -69,7 +69,8 @@ class HyperoptData:
             # save_trials(self.trials, trials_path, self.num_trials_saved)
             dump(self.trials, trials_path)
             self.num_trials_saved = num_trials
-            self.save_opts()
+            if self.mode in ("single", "shared", "multi"):
+                self.save_opts()
         if final:
             logger.info(
                 f"{num_trials} {plural(num_trials, 'epoch')} " f"saved to '{self.trials_file}'."
