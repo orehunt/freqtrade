@@ -1,5 +1,6 @@
 import warnings
 from typing import Any, Dict, List, Tuple
+from abc import abstractmethod
 
 from joblib import Parallel, delayed, wrap_non_picklable_objects
 from multiprocessing import Manager
@@ -7,6 +8,7 @@ from queue import Queue
 
 # Import IHyperOpt and IHyperOptLoss to allow unpickling classes from these modules
 import freqtrade.optimize.hyperopt_backend as backend
+from freqtrade.optimize.hyperopt_out import HyperoptOut
 from freqtrade.optimize.hyperopt_constants import VOID_LOSS
 from freqtrade.optimize.hyperopt_interface import IHyperOpt  # noqa: F401
 from freqtrade.optimize.hyperopt_loss_interface import IHyperOptLoss  # noqa: F401
@@ -22,8 +24,17 @@ with warnings.catch_warnings():
 # from xgboost import XGBoostRegressor
 
 
-class HyperoptMulti:
+class HyperoptMulti(HyperoptOut):
     """ Run the optimization with multiple optimizers """
+
+    @abstractmethod
+    def backtest_params(
+        self, raw_params: List[Any] = None, iteration=None, params_dict: Dict[str, Any] = None
+    ):
+        """
+        Used Optimize function. Called once per epoch to optimize whatever is configured.
+        Keep this function as optimized as possible!
+        """
 
     def setup_multi(self):
         # optimizers
@@ -205,7 +216,7 @@ class HyperoptMulti:
         """
         objective run in multi opt mode, optimizers share the results as soon as they are completed
         """
-        self.log_results_immediate(n)
+        HyperoptOut.log_results_immediate(n)
         is_shared = self.shared
         opt = self.opt_state(is_shared, optimizers)
         sss = self.search_space_size

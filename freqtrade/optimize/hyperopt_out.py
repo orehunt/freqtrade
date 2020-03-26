@@ -1,5 +1,6 @@
 import locale
 import warnings
+import sys
 from pprint import pprint
 from typing import Dict
 
@@ -27,8 +28,16 @@ with warnings.catch_warnings():
 # from xgboost import XGBoostRegressor
 
 
-class HyperoptOut:
+class HyperoptOut(HyperoptData):
     """ Output routines for Hyperopt """
+
+    def __init__(self):
+
+        # print options
+        self.print_all = self.config.get("print_all", False)
+        self.print_colorized = self.config.get("print_colorized", False)
+        self.print_json = self.config.get("print_json", False)
+        self.hyperopt_table_header = 0
 
     @staticmethod
     def print_epoch_details(
@@ -58,11 +67,11 @@ class HyperoptOut:
             print(rapidjson.dumps(result_dict, default=str, number_mode=rapidjson.NM_NATIVE))
 
         else:
-            HyperoptData._params_pretty_print(params, "buy", "Buy hyperspace params:")
-            HyperoptData._params_pretty_print(params, "sell", "Sell hyperspace params:")
-            HyperoptData._params_pretty_print(params, "roi", "ROI table:")
-            HyperoptData._params_pretty_print(params, "stoploss", "Stoploss:")
-            HyperoptData._params_pretty_print(params, "trailing", "Trailing stop:")
+            HyperoptOut._params_pretty_print(params, "buy", "Buy hyperspace params:")
+            HyperoptOut._params_pretty_print(params, "sell", "Sell hyperspace params:")
+            HyperoptOut._params_pretty_print(params, "roi", "ROI table:")
+            HyperoptOut._params_pretty_print(params, "stoploss", "Stoploss:")
+            HyperoptOut._params_pretty_print(params, "trailing", "Trailing stop:")
 
     @staticmethod
     def clear_line(columns: int):
@@ -236,11 +245,11 @@ class HyperoptOut:
             )
         print(table)
 
-    def _format_results_explanation_string(self, results_metrics: Dict) -> str:
+    @staticmethod
+    def _format_results_explanation_string(stake_cur: str, results_metrics: Dict) -> str:
         """
         Return the formatted results explanation in a string
         """
-        stake_cur = self.config["stake_currency"]
         return (
             (
                 f"{results_metrics['trade_count']:6d} trades. "
@@ -252,3 +261,9 @@ class HyperoptOut:
             .encode(locale.getpreferredencoding(), "replace")
             .decode("utf-8")
         )
+
+    @staticmethod
+    def log_results_immediate(n) -> None:
+        """ Signals that a new job has been scheduled"""
+        print(".", end="")
+        sys.stdout.flush()

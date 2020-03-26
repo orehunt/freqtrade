@@ -42,8 +42,52 @@ class HyperoptData:
     Data and state for Hyperopt
     """
 
+    # run modes
+    mode: str
+    multi: bool
+    shared: bool
+    cv: bool
+
+    # total number of candles being backtested
+    n_candles: int
+
+    # a guessed number extracted by the space dimensions
+    search_space_size: int
+
+    # used by update_max_epoch
+    current_best_epoch: int
+    avg_last_occurrence: int
+    current_best_loss = VOID_LOSS
+    epochs_since_last_best: List = [0, 0]
+
+    min_epochs: int
+    max_epoch: int
+
+    # evaluations
+    trials: List = []
+    num_trials_saved = 0
+
+    opt: Optimizer
+
     def __init__(self, config):
-        pass
+        self.config = config
+        # epochs counting
+        self.total_epochs = self.config["epochs"] if "epochs" in self.config else 0
+        self.epochs_limit = lambda: self.total_epochs or self.max_epoch
+
+        # paths
+        self.trials_file = (
+            self.config["user_data_dir"] / "hyperopt_results" / "hyperopt_results.pickle"
+        )
+        self.data_pickle_file = (
+            self.config["user_data_dir"] / "hyperopt_results" / "hyperopt_tickerdata.pkl"
+        )
+        self.opts_file = (
+            self.config["user_data_dir"] / "hyperopt_results" / "hyperopt_optimizers.pickle"
+        )
+        self.cv_trials_file = (
+            self.config["user_data_dir"] / "hyperopt_results" / "hyperopt_cv_results.pickle"
+        )
 
     def clean_hyperopt(self) -> None:
         """

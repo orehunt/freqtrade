@@ -1,4 +1,6 @@
 import warnings
+from typing import List
+from abc import abstractmethod
 
 from joblib import Parallel, delayed, wrap_non_picklable_objects
 
@@ -20,6 +22,12 @@ with warnings.catch_warnings():
 
 class HyperoptCV:
     """ cross validation """
+
+    target_trials: List
+
+    @abstractmethod
+    def parallel_objective(self, asked, results_list: List = [], n=0):
+        """ objective run in single opt mode, run the backtest, store the results into a queue """
 
     def trials_params(self, offset: int):
         for t in self.target_trials[offset:]:

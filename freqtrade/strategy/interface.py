@@ -21,13 +21,14 @@ from freqtrade.wallets import Wallets
 
 
 logger = logging.getLogger(__name__)
-testing = 'pytest' in sys.modules
+testing = "pytest" in sys.modules
 
 
 class SignalType(Enum):
     """
     Enum to distinguish between buy and sell signals
     """
+
     BUY = "buy"
     SELL = "sell"
 
@@ -36,6 +37,7 @@ class SellType(Enum):
     """
     Enum to distinguish between sell reasons
     """
+
     ROI = "roi"
     STOP_LOSS = "stop_loss"
     STOPLOSS_ON_EXCHANGE = "stoploss_on_exchange"
@@ -50,6 +52,7 @@ class SellCheckTuple(NamedTuple):
     """
     NamedTuple for Sell type + reason
     """
+
     sell_flag: bool
     sell_type: SellType
 
@@ -64,6 +67,7 @@ class IStrategy(ABC):
         stoploss -> float: optimal stoploss designed for the strategy
         ticker_interval -> str: value of the timeframe (ticker interval) to use with the strategy
     """
+
     # Strategy interface version
     # Default to version 2
     # Version 1 is the initial interface without metadata dict
@@ -90,18 +94,15 @@ class IStrategy(ABC):
 
     # Optional order types
     order_types: Dict = {
-        'buy': 'limit',
-        'sell': 'limit',
-        'stoploss': 'limit',
-        'stoploss_on_exchange': False,
-        'stoploss_on_exchange_interval': 60,
+        "buy": "limit",
+        "sell": "limit",
+        "stoploss": "limit",
+        "stoploss_on_exchange": False,
+        "stoploss_on_exchange_interval": 60,
     }
 
     # Optional time in force
-    order_time_in_force: Dict = {
-        'buy': 'gtc',
-        'sell': 'gtc',
-    }
+    order_time_in_force: Dict = {"buy": "gtc", "sell": "gtc"}
 
     # run "populate_indicators" only for new candle
     process_only_new_candles: bool = False
@@ -224,19 +225,21 @@ class IStrategy(ABC):
         :param metadata: Metadata dictionary with additional data (e.g. 'pair')
         :return: DataFrame of candle (OHLCV) data with indicator data and signals added
         """
-        pair = str(metadata.get('pair'))
+        pair = str(metadata.get("pair"))
 
         # Test if seen this pair and last candle before.
         # always run if process_only_new_candles is set to false
-        if (not self.process_only_new_candles or
-                self._last_candle_seen_per_pair.get(pair, None) != dataframe.iloc[-1]['date']):
+        if (
+            not self.process_only_new_candles
+            or self._last_candle_seen_per_pair.get(pair, None) != dataframe.iloc[-1]["date"]
+        ):
             # Defs that only make change on new candle data.
             dataframe = self.analyze_ticker(dataframe, metadata)
-            self._last_candle_seen_per_pair[pair] = dataframe.iloc[-1]['date']
+            self._last_candle_seen_per_pair[pair] = dataframe.iloc[-1]["date"]
         else:
             logger.debug("Skipping TA Analysis for already analyzed candle")
-            dataframe['buy'] = 0
-            dataframe['sell'] = 0
+            dataframe["buy"] = 0
+            dataframe["sell"] = 0
 
         # Other Defs in strategy that want to be called every loop here
         # twitter_sell = self.watch_twitter_feed(dataframe, metadata)
@@ -250,7 +253,7 @@ class IStrategy(ABC):
         if not testing:
             return len(d), d["close"].iloc[-1], d["date"].iloc[-1]
         else:
-            return 0, 0., datetime.now()
+            return 0, 0.0, datetime.now()
 
     @staticmethod
     def assert_df(d: DataFrame, df_len: int, df_close: float, df_date: datetime):
@@ -259,13 +262,7 @@ class IStrategy(ABC):
             if df_len != len(d) or df_close != d["close"].iloc[-1] or df_date != d["date"].iloc[-1]:
                 raise Exception("Dataframe returned from strategy does not match original")
 
-    @staticmethod
-    def return_to_queue(data: Tuple, queue: Queue) -> Tuple:
-        if queue is not None:
-            queue.put(data)
-
-    def get_signal(self, pair: str, interval: str, dataframe: DataFrame,
-                   queue=None) -> Tuple[bool, bool]:
+    def get_signal(self, pair: str, interval: str, dataframe: DataFrame) -> Tuple[bool, bool]:
         """
         Calculates current signal based several technical analysis indicators
         :param pair: pair in format ANT/BTC
@@ -274,60 +271,66 @@ class IStrategy(ABC):
         :return: (Buy, Sell) A bool-tuple indicating buy/sell signal
         """
         if not isinstance(dataframe, DataFrame) or dataframe.empty:
-            logger.warning('Empty candle (OHLCV) data for pair %s', pair)
+            logger.warning("Empty candle (OHLCV) data for pair %s", pair)
             return False, False
 
         if not testing:
-            latest_date = dataframe['date'].max()
+            latest_date = dataframe["date"].max()
         try:
             df_len, df_close, df_date = self.preserve_df(dataframe)
-            dataframe = self._analyze_ticker_internal(dataframe, {'pair': pair})
+            dataframe = self._analyze_ticker_internal(dataframe, {"pair": pair})
             self.assert_df(dataframe, df_len, df_close, df_date)
         except ValueError as error:
             logger.warning(
-                'Unable to analyze candle (OHLCV) data for pair %s: %s',
-                pair,
-                str(error)
+                "Unable to analyze candle (OHLCV) data for pair %s: %s", pair, str(error)
             )
             return False, False
         except Exception as error:
             logger.exception(
-                'Unexpected error when analyzing candle (OHLCV) data for pair %s: %s',
+                "Unexpected error when analyzing candle (OHLCV) data for pair %s: %s",
                 pair,
-                str(error)
+                str(error),
             )
-            IStrategy.return_to_queue((pair, (False, False)), queue)
             return False, False
 
         if dataframe.empty:
-            logger.warning('Empty dataframe for pair %s', pair)
-            IStrategy.return_to_queue((pair, (False, False)), queue)
+            logger.warning("Empty dataframe for pair %s", pair)
             return False, False
 
         if not testing:
-            latest = dataframe.loc[dataframe['date'] == latest_date].iloc[-1]
+            latest = dataframe.loc[dataframe["date"] == latest_date].iloc[-1]
         else:
             latest = dataframe.iloc[-1]
 
         # Check if dataframe is out of date
-        signal_date = arrow.get(latest['date'])
+        signal_date = arrow.get(latest["date"])
         interval_minutes = timeframe_to_minutes(interval)
-        offset = self.config.get('exchange', {}).get('outdated_offset', 5)
-        if signal_date < (arrow.utcnow().shift(minutes=-(interval_minutes*2 + offset))):
-            logger.warning('Outdated history for pair %s. Last tick is %s minutes old', pair,
-                           (arrow.utcnow() - signal_date).seconds // 60)
-            IStrategy.return_to_queue((pair, (False, False)), queue)
+        offset = self.config.get("exchange", {}).get("outdated_offset", 5)
+        if signal_date < (arrow.utcnow().shift(minutes=-(interval_minutes * 2 + offset))):
+            logger.warning(
+                "Outdated history for pair %s. Last tick is %s minutes old",
+                pair,
+                (arrow.utcnow() - signal_date).seconds // 60,
+            )
             return False, False
 
         (buy, sell) = latest[SignalType.BUY.value] == 1, latest[SignalType.SELL.value] == 1
-        logger.debug('trigger: %s (pair=%s) buy=%s sell=%s', latest['date'], pair, str(buy),
-                     str(sell))
-        IStrategy.return_to_queue((pair, (buy, sell)), queue)
+        logger.debug(
+            "trigger: %s (pair=%s) buy=%s sell=%s", latest["date"], pair, str(buy), str(sell)
+        )
         return buy, sell
 
-    def should_sell(self, trade: Trade, rate: float, date: datetime, buy: bool,
-                    sell: bool, low: float = None, high: float = None,
-                    force_stoploss: float = 0) -> SellCheckTuple:
+    def should_sell(
+        self,
+        trade: Trade,
+        rate: float,
+        date: datetime,
+        buy: bool,
+        sell: bool,
+        low: float = None,
+        high: float = None,
+        force_stoploss: float = 0,
+    ) -> SellCheckTuple:
         """
         This function evaluates if one of the conditions required to trigger a sell
         has been reached, which can either be a stop-loss, ROI or sell-signal.
@@ -342,32 +345,41 @@ class IStrategy(ABC):
 
         trade.adjust_min_max_rates(high or current_rate)
 
-        stoplossflag = self.stop_loss_reached(current_rate=current_rate, trade=trade,
-                                              current_time=date, current_profit=current_profit,
-                                              force_stoploss=force_stoploss, high=high)
+        stoplossflag = self.stop_loss_reached(
+            current_rate=current_rate,
+            trade=trade,
+            current_time=date,
+            current_profit=current_profit,
+            force_stoploss=force_stoploss,
+            high=high,
+        )
 
         if stoplossflag.sell_flag:
-            logger.debug(f"{trade.pair} - Stoploss hit. sell_flag=True, "
-                         f"sell_type={stoplossflag.sell_type}")
+            logger.debug(
+                f"{trade.pair} - Stoploss hit. sell_flag=True, "
+                f"sell_type={stoplossflag.sell_type}"
+            )
             return stoplossflag
 
         # Set current rate to high for backtesting sell
         current_rate = high or rate
         current_profit = trade.calc_profit_ratio(current_rate)
-        config_ask_strategy = self.config.get('ask_strategy', {})
+        config_ask_strategy = self.config.get("ask_strategy", {})
 
-        if buy and config_ask_strategy.get('ignore_roi_if_buy_signal', False):
+        if buy and config_ask_strategy.get("ignore_roi_if_buy_signal", False):
             # This one is noisy, commented out
             # logger.debug(f"{trade.pair} - Buy signal still active. sell_flag=False")
             return SellCheckTuple(sell_flag=False, sell_type=SellType.NONE)
 
         # Check if minimal roi has been reached and no longer in buy conditions (avoiding a fee)
         if self.min_roi_reached(trade=trade, current_profit=current_profit, current_time=date):
-            logger.debug(f"{trade.pair} - Required profit reached. sell_flag=True, "
-                         f"sell_type=SellType.ROI")
+            logger.debug(
+                f"{trade.pair} - Required profit reached. sell_flag=True, "
+                f"sell_type=SellType.ROI"
+            )
             return SellCheckTuple(sell_flag=True, sell_type=SellType.ROI)
 
-        if config_ask_strategy.get('sell_profit_only', False):
+        if config_ask_strategy.get("sell_profit_only", False):
             # This one is noisy, commented out
             # logger.debug(f"{trade.pair} - Checking if trade is profitable...")
             if trade.calc_profit(rate=rate) <= 0:
@@ -375,18 +387,26 @@ class IStrategy(ABC):
                 # logger.debug(f"{trade.pair} - Trade is not profitable. sell_flag=False")
                 return SellCheckTuple(sell_flag=False, sell_type=SellType.NONE)
 
-        if sell and not buy and config_ask_strategy.get('use_sell_signal', True):
-            logger.debug(f"{trade.pair} - Sell signal received. sell_flag=True, "
-                         f"sell_type=SellType.SELL_SIGNAL")
+        if sell and not buy and config_ask_strategy.get("use_sell_signal", True):
+            logger.debug(
+                f"{trade.pair} - Sell signal received. sell_flag=True, "
+                f"sell_type=SellType.SELL_SIGNAL"
+            )
             return SellCheckTuple(sell_flag=True, sell_type=SellType.SELL_SIGNAL)
 
         # This one is noisy, commented out...
         # logger.debug(f"{trade.pair} - No sell signal. sell_flag=False")
         return SellCheckTuple(sell_flag=False, sell_type=SellType.NONE)
 
-    def stop_loss_reached(self, current_rate: float, trade: Trade,
-                          current_time: datetime, current_profit: float,
-                          force_stoploss: float, high: float = None) -> SellCheckTuple:
+    def stop_loss_reached(
+        self,
+        current_rate: float,
+        trade: Trade,
+        current_time: datetime,
+        current_profit: float,
+        force_stoploss: float,
+        high: float = None,
+    ) -> SellCheckTuple:
         """
         Based on current profit of the trade and configured (trailing) stoploss,
         decides to sell or not
@@ -409,17 +429,21 @@ class IStrategy(ABC):
                 # Specific handling for trailing_stop_positive
                 if self.trailing_stop_positive is not None and high_profit > sl_offset:
                     stop_loss_value = self.trailing_stop_positive
-                    logger.debug(f"{trade.pair} - Using positive stoploss: {stop_loss_value} "
-                                 f"offset: {sl_offset:.4g} profit: {current_profit:.4f}%")
+                    logger.debug(
+                        f"{trade.pair} - Using positive stoploss: {stop_loss_value} "
+                        f"offset: {sl_offset:.4g} profit: {current_profit:.4f}%"
+                    )
 
                 trade.adjust_stop_loss(high or current_rate, stop_loss_value)
 
         # evaluate if the stoploss was hit if stoploss is not on exchange
         # in Dry-Run, this handles stoploss logic as well, as the logic will not be different to
         # regular stoploss handling.
-        if ((self.stoploss is not None) and
-            (trade.stop_loss >= current_rate) and
-                (not self.order_types.get('stoploss_on_exchange') or self.config['dry_run'])):
+        if (
+            (self.stoploss is not None)
+            and (trade.stop_loss >= current_rate)
+            and (not self.order_types.get("stoploss_on_exchange") or self.config["dry_run"])
+        ):
 
             sell_type = SellType.STOP_LOSS
 
@@ -430,9 +454,12 @@ class IStrategy(ABC):
                     f"{trade.pair} - HIT STOP: current price at {current_rate:.6f}, "
                     f"stoploss is {trade.stop_loss:.6f}, "
                     f"initial stoploss was at {trade.initial_stop_loss:.6f}, "
-                    f"trade opened at {trade.open_rate:.6f}")
-                logger.debug(f"{trade.pair} - Trailing stop saved "
-                             f"{trade.stop_loss - trade.initial_stop_loss:.6f}")
+                    f"trade opened at {trade.open_rate:.6f}"
+                )
+                logger.debug(
+                    f"{trade.pair} - Trailing stop saved "
+                    f"{trade.stop_loss - trade.initial_stop_loss:.6f}"
+                )
 
             return SellCheckTuple(sell_flag=True, sell_type=sell_type)
 
@@ -471,8 +498,10 @@ class IStrategy(ABC):
         Creates a dataframe and populates indicators for given candle (OHLCV) data
         Used by optimize operations only, not during dry / live runs.
         """
-        return {pair: self.advise_indicators(pair_data, {'pair': pair})
-                for pair, pair_data in data.items()}
+        return {
+            pair: self.advise_indicators(pair_data, {"pair": pair})
+            for pair, pair_data in data.items()
+        }
 
     def advise_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         """
@@ -484,8 +513,11 @@ class IStrategy(ABC):
         """
         logger.debug(f"Populating indicators for pair {metadata.get('pair')}.")
         if self._populate_fun_len == 2:
-            warnings.warn("deprecated - check out the Sample strategy to see "
-                          "the current function headers!", DeprecationWarning)
+            warnings.warn(
+                "deprecated - check out the Sample strategy to see "
+                "the current function headers!",
+                DeprecationWarning,
+            )
             return self.populate_indicators(dataframe)  # type: ignore
         else:
             return self.populate_indicators(dataframe, metadata)
@@ -500,8 +532,11 @@ class IStrategy(ABC):
         """
         logger.debug(f"Populating buy signals for pair {metadata.get('pair')}.")
         if self._buy_fun_len == 2:
-            warnings.warn("deprecated - check out the Sample strategy to see "
-                          "the current function headers!", DeprecationWarning)
+            warnings.warn(
+                "deprecated - check out the Sample strategy to see "
+                "the current function headers!",
+                DeprecationWarning,
+            )
             return self.populate_buy_trend(dataframe)  # type: ignore
         else:
             return self.populate_buy_trend(dataframe, metadata)
@@ -516,8 +551,11 @@ class IStrategy(ABC):
         """
         logger.debug(f"Populating sell signals for pair {metadata.get('pair')}.")
         if self._sell_fun_len == 2:
-            warnings.warn("deprecated - check out the Sample strategy to see "
-                          "the current function headers!", DeprecationWarning)
+            warnings.warn(
+                "deprecated - check out the Sample strategy to see "
+                "the current function headers!",
+                DeprecationWarning,
+            )
             return self.populate_sell_trend(dataframe)  # type: ignore
         else:
             return self.populate_sell_trend(dataframe, metadata)

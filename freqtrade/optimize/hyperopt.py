@@ -19,6 +19,7 @@ from pandas import DataFrame
 from freqtrade.data.converter import trim_dataframe
 from freqtrade.data.history import get_timerange
 from freqtrade.optimize.backtesting import Backtesting
+from freqtrade.exceptions import OperationalException
 
 # Import IHyperOpt and IHyperOptLoss to allow unpickling classes from these modules
 import freqtrade.optimize.hyperopt_backend as backend
@@ -34,7 +35,7 @@ from freqtrade.optimize.hyperopt_constants import (
     LIE_STRATS_N,
     ESTIMATORS,
     ESTIMATORS_N,
-    columns
+    columns,
 )
 
 # from freqtrade.optimize.hyperopt_backend import Trial
@@ -55,7 +56,7 @@ with warnings.catch_warnings():
 # from xgboost import XGBoostRegressor
 
 
-class Hyperopt(HyperoptData, HyperoptOut, HyperoptMulti, HyperoptCV):
+class Hyperopt(HyperoptMulti, HyperoptCV):
     """
     Hyperopt class, this class contains all the logic to run a hyperopt simulation
 
@@ -66,8 +67,6 @@ class Hyperopt(HyperoptData, HyperoptOut, HyperoptMulti, HyperoptCV):
 
     def __init__(self, config: Dict[str, Any]) -> None:
 
-        self.config = config
-
         self.backtesting = Backtesting(self.config)
 
         self.custom_hyperopt = HyperOptResolver.load_hyperopt(self.config)
@@ -75,64 +74,34 @@ class Hyperopt(HyperoptData, HyperoptOut, HyperoptMulti, HyperoptCV):
         self.custom_hyperoptloss = HyperOptLossResolver.load_hyperoptloss(self.config)
         self.calculate_loss = self.custom_hyperoptloss.hyperopt_loss_function
 
-        self.trials_file = (
-            self.config["user_data_dir"] / "hyperopt_results" / "hyperopt_results.pickle"
-        )
-        self.data_pickle_file = (
-            self.config["user_data_dir"] / "hyperopt_results" / "hyperopt_tickerdata.pkl"
-        )
-        self.opts_file = (
-            self.config["user_data_dir"] / "hyperopt_results" / "hyperopt_optimizers.pickle"
-        )
-        self.cv_trials_file = (
-            self.config["user_data_dir"] / "hyperopt_results" / "hyperopt_cv_results.pickle"
-        )
-
+        # runtime
         self.n_jobs = self.config.get("hyperopt_jobs", -1)
         if self.n_jobs < 0:
             self.n_jobs = cpu_count() // 2 or 1
         self.effort = max(0.01, self.config["effort"] if "effort" in self.config else 1)
-        self.total_epochs = self.config["epochs"] if "epochs" in self.config else 0
-        self.max_epoch = 0
-        self.min_epochs = 0
-        self.epochs_limit = lambda: self.total_epochs or self.max_epoch
-
-        # a guessed number extracted by the space dimensions
-        self.search_space_size = 0
-        # total number of candles being backtested
-        self.n_candles = 0
-
-        # used by update_max_epoch
-        self.current_best_loss = VOID_LOSS
-        self.current_best_epoch = 0
-        self.epochs_since_last_best: List = [0, 0]
-        self.avg_last_occurrence = 0
 
         # configure multi mode
         self.setup_multi()
 
+        # clean state depending on mode
         if not self.config.get("hyperopt_continue") and not self.cv:
             self.clean_hyperopt()
         else:
             logger.info("Continuing on previous hyperopt results.")
 
-        # evaluations
-        self.trials: List = []
-        self.num_trials_saved = 0
-
         # Populate functions here (hasattr is slow so should not be run during "regular" operations)
         if hasattr(self.custom_hyperopt, "populate_indicators"):
             self.backtesting.strategy.advise_indicators = (
-                self.custom_hyperopt.populate_indicators
-            )  # type: ignore
+                self.custom_hyperopt.populate_indicators  # type: ignore
+            )
         if hasattr(self.custom_hyperopt, "populate_buy_trend"):
             self.backtesting.strategy.advise_buy = (
-                self.custom_hyperopt.populate_buy_trend
-            )  # type: ignore
+                self.custom_hyperopt.populate_buy_trend  # type: ignore
+            )
         if hasattr(self.custom_hyperopt, "populate_sell_trend"):
             self.backtesting.strategy.advise_sell = (
-                self.custom_hyperopt.populate_sell_trend
-            )  # type: ignore
+                self.custom_hyperopt.populate_sell_trend  # type: ignore
+            )
 
         # Use max_open_trades for hyperopt as well, except --disable-max-market-positions is set
         if self.config.get("use_max_market_positions", True):
@@ -147,11 +116,6 @@ class Hyperopt(HyperoptData, HyperoptOut, HyperoptMulti, HyperoptCV):
             if "ask_strategy" not in self.config:
                 self.config["ask_strategy"] = {}
             self.config["ask_strategy"]["use_sell_signal"] = True
-
-        self.print_all = self.config.get("print_all", False)
-        self.hyperopt_table_header = 0
-        self.print_colorized = self.config.get("print_colorized", False)
-        self.print_json = self.config.get("print_json", False)
 
     @staticmethod
     def get_lock_filename(config: Dict[str, Any]) -> str:
@@ -239,12 +203,11 @@ class Hyperopt(HyperoptData, HyperoptOut, HyperoptMulti, HyperoptCV):
     def backtest_params(
         self, raw_params: List[Any] = None, iteration=None, params_dict: Dict[str, Any] = None
     ) -> Dict:
-        """
-        Used Optimize function. Called once per epoch to optimize whatever is configured.
-        Keep this function as optimized as possible!
-        """
         if not params_dict:
-            params_dict = self._get_params_dict(raw_params)
+            if raw_params:
+                params_dict = self._get_params_dict(raw_params)
+            else:
+                raise OperationalException("Epoch evaluation didn't receive any parameters")
         params_details = self._get_params_details(params_dict)
 
         if self.has_space("roi"):
@@ -296,7 +259,9 @@ class Hyperopt(HyperoptData, HyperoptOut, HyperoptMulti, HyperoptCV):
         self, backtesting_results, min_date, max_date, params_dict, params_details, processed
     ):
         results_metrics = self._calculate_results_metrics(backtesting_results)
-        results_explanation = self._format_results_explanation_string(results_metrics)
+        results_explanation = HyperoptOut._format_results_explanation_string(
+            self.config["stake_currency"], results_metrics
+        )
 
         trade_count = results_metrics["trade_count"]
         total_profit = results_metrics["total_profit"]
@@ -425,7 +390,6 @@ class Hyperopt(HyperoptData, HyperoptOut, HyperoptMulti, HyperoptCV):
             yield a
 
     def parallel_objective(self, asked, results_list: List = [], n=0):
-        """ objective run in single opt mode, run the backtest, store the results into a queue """
         self.log_results_immediate(n)
         if self.cv:
             v = self.backtest_params(params_dict=asked)
@@ -435,11 +399,6 @@ class Hyperopt(HyperoptData, HyperoptOut, HyperoptMulti, HyperoptCV):
         v["is_initial_point"] = n < self.opt_n_initial_points
         v["random_state"] = self.random_state
         results_list.append(v)
-
-    def log_results_immediate(self, n) -> None:
-        """ Signals that a new job has been scheduled"""
-        print(".", end="")
-        sys.stdout.flush()
 
     def log_results(self, batch_results, batch_start, total_epochs: int) -> int:
         """
