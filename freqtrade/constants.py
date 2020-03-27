@@ -11,6 +11,13 @@ HYPEROPT_EFFORT = 0.    # tune max epoch count
 HYPEROPT_N_POINTS = 1    # tune iterations between estimations
 HYPEROPT_MODE = 'single'
 HYPEROPT_LIE_STRAT = 'default'
+HYPEROPT_LIST_STEP_VALUES = {
+    "profit": 25,
+    "avg_profit": 0.01,
+    "duration": 5,
+    "trade_count": 25,
+    "loss": 1
+}
 RETRY_TIMEOUT = 30    # sec
 DEFAULT_HYPEROPT_LOSS = 'DefaultHyperOptLoss'
 DEFAULT_DB_PROD_URL = 'sqlite:///tradesv3.sqlite'

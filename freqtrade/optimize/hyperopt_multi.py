@@ -122,21 +122,6 @@ class HyperoptMulti(HyperoptOut):
         return asked, len(results_shared)
 
     @staticmethod
-    def opt_rand(opt: Optimizer, rand: int = None, seed: bool = True) -> Optimizer:
-        """ return a new instance of the optimizer with modified rng """
-        if seed:
-            if not rand:
-                rand = opt.rng.randint(0, VOID_LOSS)
-            opt.rng.seed(rand)
-        opt, opt.void_loss, opt.void, opt.rs = (
-            opt.copy(random_state=opt.rng),
-            opt.void_loss,
-            opt.void,
-            opt.rs,
-        )
-        return opt
-
-    @staticmethod
     def opt_state(shared: bool, optimizers: Queue) -> Optimizer:
         """ fetch an optimizer in multi opt mode """
         # get an optimizer instance
@@ -148,12 +133,6 @@ class HyperoptMulti(HyperoptOut):
             optimizers.put(opt)
             # switch the seed to get a different point
             opt = HyperoptMulti.opt_rand(opt, rand)
-        return opt
-
-    @staticmethod
-    def opt_clear(opt: Optimizer):
-        """ clear state from an optimizer object """
-        del opt.models[:], opt.Xi[:], opt.yi[:]
         return opt
 
     @staticmethod

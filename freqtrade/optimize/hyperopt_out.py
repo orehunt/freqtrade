@@ -2,7 +2,7 @@ import locale
 import warnings
 import sys
 from pprint import pprint
-from typing import Dict
+from typing import Dict, Any
 
 import rapidjson
 from colorama import Fore, Style
@@ -31,8 +31,8 @@ with warnings.catch_warnings():
 class HyperoptOut(HyperoptData):
     """ Output routines for Hyperopt """
 
-    def __init__(self):
-
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__(config)
         # print options
         self.print_all = self.config.get("print_all", False)
         self.print_colorized = self.config.get("print_colorized", False)

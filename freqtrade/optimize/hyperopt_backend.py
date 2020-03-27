@@ -5,6 +5,8 @@ from pandas import DataFrame, concat, read_hdf
 from numpy import arange
 from pathlib import Path
 
+from freqtrade.constants import HYPEROPT_LIST_STEP_VALUES
+
 hyperopt: Any = None
 manager: SyncManager
 # stores the optimizers in multi opt mode
@@ -66,7 +68,7 @@ def filter_options(config: Dict[str, Any]):
         "max_avg_profit": config.get("hyperopt_list_max_avg_profit", None),
         "min_total_profit": config.get("hyperopt_list_min_total_profit", None),
         "max_total_profit": config.get("hyperopt_list_max_total_profit", None),
-        "step_value": config.get("hyperopt_list_step_value", 0),
+        "step_values": config.get("hyperopt_list_step_values", HYPEROPT_LIST_STEP_VALUES),
         "step_key": config.get("hyperopt_list_step_metric", None),
         "sort_key": config.get("hyperopt_list_sort_metric", "loss"),
         "sort_order": config.get("hyperopt_list_sort_order", "ascending") == "ascending",
@@ -111,9 +113,9 @@ def filter_trials(trials: Any, config: Dict[str, Any]) -> List:
 
 def sample_trials(trials: Any, trials_last_col: Any, filters: Dict) -> List:
     """ Pick one trial, every `step_value` of `step_metric`, sorted by `sort_metric` """
-    if filters["step_value"]:
+    if filters["step_key"]:
         step_k = filters["step_key"]
-        step_v = filters["step_value"]
+        step_v = filters["step_values"][step_k]
         step_start = trials[step_k].min()
         step_stop = trials[step_k].max()
         steps = arange(step_start, step_stop, step_v)

@@ -21,7 +21,6 @@ from freqtrade.optimize.hyperopt_interface import IHyperOpt  # noqa: F401
 from freqtrade.optimize.hyperopt_loss_interface import IHyperOptLoss  # noqa: F401
 
 from freqtrade.optimize.hyperopt_constants import VOID_LOSS
-from freqtrade.optimize.hyperopt_multi import HyperoptMulti
 
 # Suppress scikit-learn FutureWarnings from skopt
 with warnings.catch_warnings():
@@ -49,14 +48,14 @@ class HyperoptData:
     cv: bool
 
     # total number of candles being backtested
-    n_candles: int
+    n_candles = 0
 
     # a guessed number extracted by the space dimensions
     search_space_size: int
 
     # used by update_max_epoch
-    current_best_epoch: int
     avg_last_occurrence: int
+    current_best_epoch = 0
     current_best_loss = VOID_LOSS
     epochs_since_last_best: List = [0, 0]
 
@@ -133,17 +132,17 @@ class HyperoptData:
         if self.multi:
             while not backend.optimizers.empty():
                 opt = backend.optimizers.get()
-                opt = HyperoptMulti.opt_clear(opt)
+                opt = HyperoptData.opt_clear(opt)
                 opts.append(opt)
             n_opts = len(opts)
             for opt in opts:
                 backend.optimizers.put(opt)
         else:
             # when we clear the object for saving we have to make a copy to preserve state
-            opt = HyperoptMulti.opt_rand(self.opt, seed=False)
+            opt = HyperoptData.opt_rand(self.opt, seed=False)
             if self.opt:
                 n_opts = 1
-                opts = [HyperoptMulti.opt_clear(self.opt)]
+                opts = [HyperoptData.opt_clear(self.opt)]
             # (the optimizer copy function also fits a new model with the known points)
             self.opt = opt
         logger.debug(f"Saving {n_opts} {plural(n_opts, 'optimizer')}.")
@@ -309,7 +308,7 @@ class HyperoptData:
                 for n in range(n_opts):
                     rngs.append(opts[n].rs)
                     # make sure to not store points and models in the optimizer
-                    backend.optimizers.put(HyperoptMulti.opt_clear(opts[n]))
+                    backend.optimizers.put(HyperoptData.opt_clear(opts[n]))
             # generate as many optimizers as are still needed to fill the job count
             remaining = max_opts - backend.optimizers.qsize()
             if remaining > 0:
@@ -355,7 +354,7 @@ class HyperoptData:
                 self.opt.rs = self.random_state
             # in single mode restore the points directly to the optimizer
             # but delete first in case we have filtered the starting list of points
-            self.opt = HyperoptMulti.opt_clear(self.opt)
+            self.opt = HyperoptData.opt_clear(self.opt)
             rs = self.random_state
             self.Xi[rs] = []
             self.track_points()
@@ -365,3 +364,24 @@ class HyperoptData:
             # process and is not discarded
             self.Xi, self.yi = {}, {}
         del opts[:]
+
+    @staticmethod
+    def opt_rand(opt: Optimizer, rand: int = None, seed: bool = True) -> Optimizer:
+        """ return a new instance of the optimizer with modified rng """
+        if seed:
+            if not rand:
+                rand = opt.rng.randint(0, VOID_LOSS)
+            opt.rng.seed(rand)
+        opt, opt.void_loss, opt.void, opt.rs = (
+            opt.copy(random_state=opt.rng),
+            opt.void_loss,
+            opt.void,
+            opt.rs,
+        )
+        return opt
+
+    @staticmethod
+    def opt_clear(opt: Optimizer):
+        """ clear state from an optimizer object """
+        del opt.models[:], opt.Xi[:], opt.yi[:]
+        return opt

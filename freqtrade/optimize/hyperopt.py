@@ -66,11 +66,11 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
     """
 
     def __init__(self, config: Dict[str, Any]) -> None:
+        super().__init__(config)
 
         self.backtesting = Backtesting(self.config)
 
         self.custom_hyperopt = HyperOptResolver.load_hyperopt(self.config)
-
         self.custom_hyperoptloss = HyperOptLossResolver.load_hyperoptloss(self.config)
         self.calculate_loss = self.custom_hyperoptloss.hyperopt_loss_function
 
@@ -479,6 +479,8 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                 n_parameters += max(10, int(d.high - d.low))
             else:
                 n_parameters += len(d.bounds)
+        # in case bounds between parameters are too far, fall back to use dimensions
+        n_parameters = min(n_dimensions * 100, n_parameters)
         # guess the size of the search space as the count of the
         # unordered combination of the dimensions entries
         try:
@@ -573,14 +575,15 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             self.n_initial_points, self.min_epochs, self.search_space_size = self.calc_epochs(
                 self.dimensions, self.n_jobs, self.effort, self.total_epochs, self.n_points
             )
-        logger.info(f"Min epochs set to: {self.min_epochs}")
+        logger.debug(f"Min epochs set to: {self.min_epochs}")
         # reduce random points in multi (non shared) mode by the number of jobs
         # because workers don't share points, and each optimizer would ask n_initial_points
         if self.multi and not self.shared:
             self.opt_n_initial_points = self.n_initial_points // self.n_jobs
         else:
             self.opt_n_initial_points = self.n_initial_points
-        logger.info(f"Initial points: ~{self.n_initial_points}")
+        if not self.cv:
+            logger.info(f"Initial points: ~{self.n_initial_points}")
         # if total epochs are not set, max_epoch takes its place
         if self.total_epochs < 1:
             self.max_epoch = int(self.min_epochs + len(self.trials))
