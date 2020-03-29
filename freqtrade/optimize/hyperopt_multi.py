@@ -27,6 +27,9 @@ with warnings.catch_warnings():
 class HyperoptMulti(HyperoptOut):
     """ Run the optimization with multiple optimizers """
 
+    # tracks the number of batches that were completely void
+    empty_batches = 0
+
     @abstractmethod
     def backtest_params(
         self, raw_params: List[Any] = None, iteration=None, params_dict: Dict[str, Any] = None

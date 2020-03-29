@@ -6,6 +6,7 @@ from numpy import arange
 from pathlib import Path
 
 from freqtrade.constants import HYPEROPT_LIST_STEP_VALUES
+from freqtrade.exceptions import OperationalException
 
 hyperopt: Any = None
 manager: SyncManager
@@ -116,18 +117,20 @@ def sample_trials(trials: Any, trials_last_col: Any, filters: Dict) -> List:
     if filters["step_key"]:
         step_k = filters["step_key"]
         step_v = filters["step_values"][step_k]
-        step_start = trials[step_k].min()
-        step_stop = trials[step_k].max()
+        step_start = trials[step_k].values.min()
+        step_stop = trials[step_k].values.max()
         steps = arange(step_start, step_stop, step_v)
         flt_trials = []
         last_epoch = None
         sort_key = filters["sort_key"]
         ascending = sort_key in ("duration", "loss", "trade_count")
+        if len(steps) > len(trials):
+            raise OperationalException(f"Step value of {step_v} for metric {step_k} is too small.")
         for n, s in enumerate(steps):
             try:
                 t = (
                     # the trials between the current step
-                    trials.loc[(trials[step_k].values > s) & (trials[step_k].values < s + step_v)]
+                    trials.loc[(trials[step_k].values >= s) & (trials[step_k].values <= s + step_v)]
                     # sorted according to the specified key
                     .sort_values(filters["sort_key"], ascending=ascending)
                     # select the columns of the trial, and return the first row

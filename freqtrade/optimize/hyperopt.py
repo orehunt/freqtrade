@@ -632,8 +632,16 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             logger.warning(
                 "Some evaluated epochs were void, " "check the loss function and the search space."
             )
-        if batch_len < 1 or (
-            not saved and self.search_space_size < batch_len + self.epochs_limit() and not self.cv
+        if not saved:
+            self.empty_batches += 1
+        if (
+            batch_len < 1
+            or (
+                not saved
+                and self.search_space_size < batch_len + self.epochs_limit()
+                and not self.cv
+            )
+            or self.empty_batches > 3
         ):
             logger.info("Terminating Hyperopt because results were empty.")
             return False
