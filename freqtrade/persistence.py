@@ -490,16 +490,17 @@ class Trade(_DECL_BASE):
         return best_pair
 
     @staticmethod
-    def stoploss_reinitialization(desired_stoploss):
+    def stoploss_reinitialization(amounts: dict):
         """
         Adjust initial Stoploss to desired stoploss for all open trades.
         """
         for trade in Trade.get_open_trades():
             logger.info("Found open trade: %s", trade)
 
+            desired_stoploss = amounts[trade.pair]["stoploss"]
             # skip case if trailing-stop changed the stoploss already.
             if (trade.stop_loss == trade.initial_stop_loss
-               and trade.initial_stop_loss_pct != desired_stoploss):
+                and trade.initial_stop_loss_pct != desired_stoploss):
                 # Stoploss value got changed
 
                 logger.info(f"Stoploss for {trade} needs adjustment...")

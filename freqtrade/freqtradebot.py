@@ -124,7 +124,7 @@ class FreqtradeBot:
         self.rpc.startup_messages(self.config, self.pairlists)
         if not self.edge:
             # Adjust stoploss if it was changed
-            Trade.stoploss_reinitialization(self.strategy.stoploss)
+            Trade.stoploss_reinitialization(self.strategy.amounts)
 
     def process(self) -> None:
         """
@@ -377,8 +377,9 @@ class FreqtradeBot:
         # reserve some percent defined in config (5% default) + stoploss
         amount_reserve_percent = 1.0 - self.config.get('amount_reserve_percent',
                                                        constants.DEFAULT_AMOUNT_RESERVE_PERCENT)
-        if self.strategy.stoploss is not None:
-            amount_reserve_percent += self.strategy.stoploss
+        stoploss = self.strategy.amounts[pair]["stoploss"]
+        if stoploss is not None:
+            amount_reserve_percent += stoploss
         # it should not be more than 50%
         amount_reserve_percent = max(amount_reserve_percent, 0.5)
 
