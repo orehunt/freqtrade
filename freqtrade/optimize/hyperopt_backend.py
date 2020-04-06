@@ -1,8 +1,8 @@
 from typing import Any, Dict, List, Tuple
 from queue import Queue
 from multiprocessing.managers import SyncManager
-from pandas import DataFrame, concat, read_hdf
-from numpy import arange
+from pandas import DataFrame, concat, read_hdf, merge
+from numpy import arange, isfinite
 from pathlib import Path
 
 from freqtrade.constants import HYPEROPT_LIST_STEP_VALUES
@@ -59,7 +59,9 @@ def trials_to_df(trials: List, metrics: bool = False) -> Tuple[DataFrame, str]:
 def filter_options(config: Dict[str, Any]):
     """ parse filtering config options into dict """
     return {
-        "best": config.get("hyperopt_list_best", False),
+        "best": config.get("hyperopt_list_best", "sum"),
+        "n_best": config.get("hyperopt_list_n_best", 10),
+        "ratio_best": config.get("hyperopt_list_ratio_best", 0.99),
         "profitable": config.get("hyperopt_list_profitable", False),
         "min_trades": config.get("hyperopt_list_min_trades", 0),
         "max_trades": config.get("hyperopt_list_max_trades", 0),
@@ -72,7 +74,6 @@ def filter_options(config: Dict[str, Any]):
         "step_values": config.get("hyperopt_list_step_values", HYPEROPT_LIST_STEP_VALUES),
         "step_key": config.get("hyperopt_list_step_metric", None),
         "sort_key": config.get("hyperopt_list_sort_metric", "loss"),
-        "sort_order": config.get("hyperopt_list_sort_order", "ascending") == "ascending",
     }
 
 
@@ -84,7 +85,7 @@ def filter_trials(trials: Any, config: Dict[str, Any]) -> List:
     filters = filter_options(config)
 
     if filters["best"]:
-        trials = trials.loc[trials["is_best"]]
+        return norm_best(trials, trials_last_col, filters)
     if filters["profitable"]:
         trials = trials.loc[trials["profit"] > 0]
     if filters["min_trades"]:
@@ -109,8 +110,64 @@ def filter_trials(trials: Any, config: Dict[str, Any]) -> List:
     if len(with_trades) != with_trades_len:
         trials = with_trades
 
-    return sample_trials(trials, trials_last_col, filters)
+    if len(trials) > 0:
+        return sample_trials(trials, trials_last_col, filters)
+    else:
+        return trials.to_dict(orient="records")
 
+
+def norm_best(trials: Any, trials_last_col, filters: dict) -> List:
+    metrics = ("profit", "avg_profit", "duration", "trade_count", "loss")
+    min_ratio = filters["ratio_best"]
+    n_best = filters["n_best"]
+
+    # invert loss and duration to simplify
+    trials["loss"] = trials["loss"].mul(-1)
+    trials["duration"] = trials["duration"].mul(-1)
+    # calculate the normalized metrics as columns
+    for m in metrics:
+        m_col = trials[m].values
+        m_min = m_col.min()
+        m_max = m_col.max()
+        trials[f"norm_{m}"] = (m_col - m_min) / (m_max - m_min)
+    # re-invert
+    trials["loss"] = trials["loss"].mul(-1)
+    trials["duration"] = trials["duration"].mul(-1)
+
+    # calc the norm ratio between metrics:
+    # compare each normalized metric against the set minimum ratio;
+    # also get a sum of all the normalized metrics
+    trials["norm_sum"] = 0
+    trials["norm_ratio"] = 0
+    for m in metrics:
+        norm_m = trials[f"norm_{m}"].values
+        norm_m[~isfinite(norm_m)] = 0 # reset infs and nans
+        trials["norm_ratio"] += (norm_m > min_ratio).astype(int)
+        trials["norm_sum"] += trials[f"norm_{m}"].values
+
+    # You're the best! Around!
+    # trials["is_best"] = True
+
+    best_trials = []
+    if filters["best"] == "ratio":
+        # filter the trials to the ones that meet the min_ratio for all the metrics
+        m_best = (
+            trials.sort_values("norm_ratio")
+            .loc[:, :trials_last_col]
+            .iloc[-n_best:]
+            .to_dict("records")
+        )
+        best_trials.extend(m_best)
+    else:
+        m_best = (
+            trials.sort_values("norm_sum")
+            .loc[:, :trials_last_col]
+            .iloc[-n_best:]
+            .to_dict("records")
+        )
+        best_trials.extend(m_best)
+
+    return best_trials
 
 def sample_trials(trials: Any, trials_last_col: Any, filters: Dict) -> List:
     """ Pick one trial, every `step_value` of `step_metric`, sorted by `sort_metric` """
@@ -123,9 +180,13 @@ def sample_trials(trials: Any, trials_last_col: Any, filters: Dict) -> List:
         flt_trials = []
         last_epoch = None
         sort_key = filters["sort_key"]
-        ascending = sort_key in ("duration", "loss", "trade_count")
+        ascending = sort_key in ("duration", "loss")
         if len(steps) > len(trials):
-            raise OperationalException(f"Step value of {step_v} for metric {step_k} is too small.")
+            min_step = step_v * (len(steps) / len(trials))
+            raise OperationalException(
+                f"Step value of {step_v} for metric {step_k} is too small. "
+                f"Use a minimum of {min_step:.4f}, or choose closer bounds."
+            )
         for n, s in enumerate(steps):
             try:
                 t = (
