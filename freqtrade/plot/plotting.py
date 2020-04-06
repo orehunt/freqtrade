@@ -13,6 +13,7 @@ from freqtrade.data.converter import trim_dataframe
 from freqtrade.data.history import load_data
 from freqtrade.misc import pair_to_filename
 from freqtrade.resolvers import StrategyResolver
+from freqtrade.exchange import timeframe_to_prev_date
 
 logger = logging.getLogger(__name__)
 
@@ -122,18 +123,19 @@ def add_profit(fig, row, data: pd.DataFrame, column: str, name: str) -> make_sub
     return fig
 
 
-def add_max_drawdown(fig, row, trades: pd.DataFrame, df_comb: pd.DataFrame) -> make_subplots:
+def add_max_drawdown(fig, row, trades: pd.DataFrame, df_comb: pd.DataFrame, timeframe: str) -> make_subplots:
     """
     Add scatter points indicating max drawdown
     """
+    import numpy as np
     try:
         max_drawdown, highdate, lowdate = calculate_max_drawdown(trades)
 
         drawdown = go.Scatter(
             x=[highdate, lowdate],
             y=[
-                df_comb.loc[df_comb.index == highdate, 'cum_profit'],
-                df_comb.loc[df_comb.index == lowdate, 'cum_profit'],
+                df_comb.loc[timeframe_to_prev_date(timeframe, lowdate), 'cum_profit'],
+                df_comb.loc[timeframe_to_prev_date(timeframe, lowdate), 'cum_profit'],
             ],
             mode='markers',
             name=f"Max drawdown {max_drawdown * 100:.2f}%",
@@ -147,8 +149,11 @@ def add_max_drawdown(fig, row, trades: pd.DataFrame, df_comb: pd.DataFrame) -> m
             )
         )
         fig.add_trace(drawdown, row, 1)
-    except ValueError:
-        logger.warning("No trades found - not plotting max drawdown.")
+    except (ValueError, KeyError) as e:
+        if type(e) == KeyError:
+            logger.warning("Missing OHLCV data for pairs - not plotting max drawdown")
+        else:
+            logger.warning("No trades found - not plotting max drawdown.")
     return fig
 
 
@@ -405,7 +410,7 @@ def generate_profit_graph(pairs: str, data: Dict[str, pd.DataFrame],
 
     fig.add_trace(avgclose, 1, 1)
     fig = add_profit(fig, 2, df_comb, 'cum_profit', 'Profit')
-    fig = add_max_drawdown(fig, 2, trades, df_comb)
+    fig = add_max_drawdown(fig, 2, trades, df_comb, timeframe)
 
     for pair in pairs:
         profit_col = f'cum_profit_{pair}'
