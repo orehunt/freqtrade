@@ -391,7 +391,8 @@ class IStrategy(ABC):
                 # logger.debug(f"{trade.pair} - Trade is not profitable. sell_flag=False")
                 return SellCheckTuple(sell_flag=False, sell_type=SellType.NONE)
 
-        if sell and not buy and config_ask_strategy.get("use_sell_signal", True):
+        if sell and config_ask_strategy.get("use_sell_signal", True) \
+           and config_ask_strategy.get("prefer_sell_signal", False):
             logger.debug(
                 f"{trade.pair} - Sell signal received. sell_flag=True, "
                 f"sell_type=SellType.SELL_SIGNAL"
@@ -503,7 +504,7 @@ class IStrategy(ABC):
         Used by optimize operations only, not during dry / live runs.
         """
         return {
-            pair: self.advise_indicators(pair_data, {"pair": pair})
+            pair: self.advise_indicators(pair_data.copy(), {"pair": pair})
             for pair, pair_data in data.items()
         }
 
