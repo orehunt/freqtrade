@@ -6,3 +6,12 @@
 - sampling for epochs, filter epochs by (profits, loss, etc...) sort by specified metric. (used by hyperopt-list, hyperopt CV, ability to continue optimization from sampled epochs)
 - parallel pairs signal evaluation as a per strategy config
 - time weighted roi calculation as a per strategy config
+
+## Files that use amounts config 
+```
+- freqtradebot.py
+- persistence.py
+- optimize/hyperopt.py
+- pairlist/PrecisionFilter.py
+- strategy/interface.py
+```

@@ -510,7 +510,7 @@ class Trade(_DECL_BASE):
         for trade in Trade.get_open_trades():
             logger.info("Found open trade: %s", trade)
 
-            desired_stoploss = amounts[trade.pair]["stoploss"]
+            desired_stoploss = amounts.get(f"{trade.pair}_stoploss", amounts["stoploss"])
             # skip case if trailing-stop changed the stoploss already.
             if (trade.stop_loss == trade.initial_stop_loss
                 and trade.initial_stop_loss_pct != desired_stoploss):

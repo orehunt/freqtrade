@@ -52,7 +52,7 @@ class PrecisionFilter(IPairList):
         if amounts is not None:
             # Copy list since we're modifying this list
             for p in deepcopy(pairlist):
-                stoploss = amounts[p]["stoploss_norm"]
+                stoploss = amounts.get(f"{p}_stoploss_norm", amounts["stoploss_norm"])
                 ticker = tickers.get(p)
                 # Filter out assets which would not allow setting a stoploss
                 if not ticker or (stoploss and not self._validate_precision_filter(ticker, stoploss)):
