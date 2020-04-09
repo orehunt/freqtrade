@@ -211,9 +211,9 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         params_details = self._get_params_details(params_dict)
 
         if self.has_space("roi"):
-            self.backtesting.strategy.minimal_roi = self.custom_hyperopt.generate_roi_table(
-                params_dict
-            )
+            self.backtesting.strategy.amounts[
+                "minimal_roi"
+            ] = self.custom_hyperopt.generate_roi_table(params_dict)
 
         if self.has_space("buy"):
             self.backtesting.strategy.advise_buy = self.custom_hyperopt.buy_strategy_generator(
@@ -226,16 +226,18 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             )
 
         if self.has_space("stoploss"):
-            self.backtesting.strategy.stoploss = params_dict["stoploss"]
+            self.backtesting.strategy.amounts["stoploss"] = params_dict["stoploss"]
 
         if self.has_space("trailing"):
             d = self.custom_hyperopt.generate_trailing_params(params_dict)
-            self.backtesting.strategy.trailing_stop = d["trailing_stop"]
-            self.backtesting.strategy.trailing_stop_positive = d["trailing_stop_positive"]
-            self.backtesting.strategy.trailing_stop_positive_offset = d[
+            self.backtesting.strategy.amounts["trailing_stop"] = d["trailing_stop"]
+            self.backtesting.strategy.amounts["trailing_stop_positive"] = d[
+                "trailing_stop_positive"
+            ]
+            self.backtesting.strategy.amounts["trailing_stop_positive_offset"] = d[
                 "trailing_stop_positive_offset"
             ]
-            self.backtesting.strategy.trailing_only_offset_is_reached = d[
+            self.backtesting.strategy.amounts["trailing_only_offset_is_reached"] = d[
                 "trailing_only_offset_is_reached"
             ]
 
