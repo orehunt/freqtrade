@@ -59,12 +59,12 @@ def trials_to_df(trials: List, metrics: bool = False) -> Tuple[DataFrame, str]:
 def filter_options(config: Dict[str, Any]):
     """ parse filtering config options into dict """
     return {
-        "best": config.get("hyperopt_list_best", "sum"),
+        "best": config.get("hyperopt_list_best", []),
         "n_best": config.get("hyperopt_list_n_best", 10),
         "ratio_best": config.get("hyperopt_list_ratio_best", 0.99),
         "profitable": config.get("hyperopt_list_profitable", False),
-        "min_trades": config.get("hyperopt_list_min_trades", 0),
-        "max_trades": config.get("hyperopt_list_max_trades", 0),
+        "min_trades": config.get("hyperopt_list_min_trades", None),
+        "max_trades": config.get("hyperopt_list_max_trades", None),
         "min_avg_time": config.get("hyperopt_list_min_avg_time", None),
         "max_avg_time": config.get("hyperopt_list_max_avg_time", None),
         "min_avg_profit": config.get("hyperopt_list_min_avg_profit", None),
@@ -72,8 +72,8 @@ def filter_options(config: Dict[str, Any]):
         "min_total_profit": config.get("hyperopt_list_min_total_profit", None),
         "max_total_profit": config.get("hyperopt_list_max_total_profit", None),
         "step_values": config.get("hyperopt_list_step_values", HYPEROPT_LIST_STEP_VALUES),
-        "step_key": config.get("hyperopt_list_step_metric", None),
-        "sort_key": config.get("hyperopt_list_sort_metric", "loss"),
+        "step_keys": config.get("hyperopt_list_step_metric", []),
+        "sort_keys": config.get("hyperopt_list_sort_metric", ["loss"]),
     }
 
 
@@ -88,9 +88,9 @@ def filter_trials(trials: Any, config: Dict[str, Any]) -> List:
         return norm_best(trials, trials_last_col, filters)
     if filters["profitable"]:
         trials = trials.loc[trials["profit"] > 0]
-    if filters["min_trades"]:
+    if filters["min_trades"] is not None:
         trials = trials.loc[trials["trade_count"] > filters["min_trades"]]
-    if filters["max_trades"]:
+    if filters["max_trades"] is not None:
         trials = trials.loc[trials["trade_count"] < filters["max_trades"]]
 
     with_trades = trials.loc[trials["trade_count"] > 0]
@@ -99,13 +99,13 @@ def filter_trials(trials: Any, config: Dict[str, Any]) -> List:
         with_trades = with_trades.loc[with_trades["duration"] > filters["min_avg_time"]]
     if filters["max_avg_time"]:
         with_trades = with_trades.loc[with_trades["duration"] < filters["max_avg_time"]]
-    if filters["min_avg_profit"]:
+    if filters["min_avg_profit"] is not None:
         with_trades = with_trades.loc[with_trades["avg_profit"] > filters["min_avg_profit"]]
-    if filters["max_avg_profit"]:
+    if filters["max_avg_profit"] is not None:
         with_trades = with_trades.loc[with_trades["avg_profit"] < filters["max_avg_profit"]]
-    if filters["min_total_profit"]:
+    if filters["min_total_profit"] is not None:
         with_trades = with_trades.loc[with_trades["profit"] > filters["min_total_profit"]]
-    if filters["max_total_profit"]:
+    if filters["max_total_profit"] is not None:
         with_trades = with_trades.loc[with_trades["profit"] < filters["max_total_profit"]]
     if len(with_trades) != with_trades_len:
         trials = with_trades
@@ -119,7 +119,8 @@ def filter_trials(trials: Any, config: Dict[str, Any]) -> List:
 def norm_best(trials: Any, trials_last_col, filters: dict) -> List:
     metrics = ("profit", "avg_profit", "duration", "trade_count", "loss")
     min_ratio = filters["ratio_best"]
-    n_best = filters["n_best"]
+    types_best = filters["best"]
+    n_best = filters["n_best"] // len(types_best)
 
     # invert loss and duration to simplify
     trials["loss"] = trials["loss"].mul(-1)
@@ -141,7 +142,7 @@ def norm_best(trials: Any, trials_last_col, filters: dict) -> List:
     trials["norm_ratio"] = 0
     for m in metrics:
         norm_m = trials[f"norm_{m}"].values
-        norm_m[~isfinite(norm_m)] = 0 # reset infs and nans
+        norm_m[~isfinite(norm_m)] = 0  # reset infs and nans
         trials["norm_ratio"] += (norm_m > min_ratio).astype(int)
         trials["norm_sum"] += trials[f"norm_{m}"].values
 
@@ -149,7 +150,7 @@ def norm_best(trials: Any, trials_last_col, filters: dict) -> List:
     # trials["is_best"] = True
 
     best_trials = []
-    if filters["best"] == "ratio":
+    if "ratio" in types_best:
         # filter the trials to the ones that meet the min_ratio for all the metrics
         m_best = (
             trials.sort_values("norm_ratio")
@@ -158,7 +159,7 @@ def norm_best(trials: Any, trials_last_col, filters: dict) -> List:
             .to_dict("records")
         )
         best_trials.extend(m_best)
-    else:
+    if "sum" in types_best:
         m_best = (
             trials.sort_values("norm_sum")
             .loc[:, :trials_last_col]
@@ -169,45 +170,67 @@ def norm_best(trials: Any, trials_last_col, filters: dict) -> List:
 
     return best_trials
 
+
 def sample_trials(trials: Any, trials_last_col: Any, filters: Dict) -> List:
-    """ Pick one trial, every `step_value` of `step_metric`, sorted by `sort_metric` """
-    if filters["step_key"]:
-        step_k = filters["step_key"]
-        step_v = filters["step_values"][step_k]
-        step_start = trials[step_k].values.min()
-        step_stop = trials[step_k].values.max()
-        steps = arange(step_start, step_stop, step_v)
+    """
+    Pick one trial, every `step_value` of `step_metric`...
+    or pick n == `range` trials for every `step_metric`...
+    for every `step_metric`, sorted by `sort_metric` for every `sort_metric`...
+    """
+    metrics = ("profit", "avg_profit", "duration", "trade_count", "loss")
+    if filters["step_keys"]:
+        step_keys = metrics if filters["step_keys"] == ["all"] else filters["step_keys"]
+        sort_keys = metrics if filters["sort_keys"] == ["all"] else filters["sort_keys"]
+        step_values = filters["step_values"]
         flt_trials = []
-        last_epoch = None
-        sort_key = filters["sort_key"]
-        ascending = sort_key in ("duration", "loss")
-        if len(steps) > len(trials):
-            min_step = step_v * (len(steps) / len(trials))
-            raise OperationalException(
-                f"Step value of {step_v} for metric {step_k} is too small. "
-                f"Use a minimum of {min_step:.4f}, or choose closer bounds."
-            )
-        for n, s in enumerate(steps):
-            try:
-                t = (
-                    # the trials between the current step
-                    trials.loc[(trials[step_k].values >= s) & (trials[step_k].values <= s + step_v)]
-                    # sorted according to the specified key
-                    .sort_values(filters["sort_key"], ascending=ascending)
-                    # select the columns of the trial, and return the first row
-                    .loc[:, :trials_last_col]
-                    .iloc[0]
-                    .to_dict()
+        for step_k in step_keys:
+            for sort_k in sort_keys:
+                flt_trials.extend(
+                    step_over_trials(step_k, step_values, sort_k, trials, trials_last_col)
                 )
-                if t["current_epoch"] == last_epoch:
-                    break
-                else:
-                    last_epoch = t["current_epoch"]
-                    flt_trials.append(t)
-            except IndexError:
-                pass
     else:
         flt_trials = trials.loc[:, :trials_last_col].to_dict(orient="records")
+    return flt_trials
+
+
+def step_over_trials(
+    step_k: str, step_values: Dict, sort_k: str, trials, trials_last_col: str
+) -> List:
+    ascending = sort_k in ("duration", "loss")
+    step_start = trials[step_k].values.min()
+    step_stop = trials[step_k].values.max()
+    if step_values.get("range", 0):
+        step_v = (step_stop - step_start) / step_values["range"]
+    else:
+        step_v = step_values[step_k]
+    steps = arange(step_start, step_stop, step_v)
+    flt_trials = []
+    last_epoch = None
+    if len(steps) > len(trials):
+        min_step = step_v * (len(steps) / len(trials))
+        raise OperationalException(
+            f"Step value of {step_v} for metric {step_k} is too small. "
+            f"Use a minimum of {min_step:.4f}, or choose closer bounds."
+        )
+    for n, s in enumerate(steps):
+        try:
+            t = (
+                # the trials between the current step
+                trials.loc[(trials[step_k].values >= s) & (trials[step_k].values <= s + step_v)]
+                # sorted according to the specified key
+                .sort_values(sort_k, ascending=ascending)
+                # select the columns of the trial, and return the first row
+                .loc[:, :trials_last_col]
+                .iloc[0]
+                .to_dict()
+            )
+            if t["current_epoch"] == last_epoch:
+                break
+            else:
+                last_epoch = t["current_epoch"]
+                flt_trials.append(t)
+        except IndexError:
+            pass
     return flt_trials
 
 

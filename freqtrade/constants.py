@@ -16,7 +16,8 @@ HYPEROPT_LIST_STEP_VALUES = {
     "avg_profit": 0.01,
     "duration": 5,
     "trade_count": 25,
-    "loss": 1
+    "loss": 1,
+    "range": 0
 }
 RETRY_TIMEOUT = 30    # sec
 DEFAULT_HYPEROPT_LOSS = 'DefaultHyperOptLoss'
