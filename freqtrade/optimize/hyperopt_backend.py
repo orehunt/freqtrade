@@ -113,7 +113,7 @@ def filter_trials(trials: Any, config: Dict[str, Any]) -> List:
     if len(trials) > 0:
         return sample_trials(trials, trials_last_col, filters)
     else:
-        return trials.to_dict(orient="records")
+        return trials.loc[:, :trials_last_col].to_dict(orient="records")
 
 
 def norm_best(trials: Any, trials_last_col, filters: dict) -> List:
@@ -149,26 +149,13 @@ def norm_best(trials: Any, trials_last_col, filters: dict) -> List:
     # You're the best! Around!
     # trials["is_best"] = True
 
-    best_trials = []
     if "ratio" in types_best:
         # filter the trials to the ones that meet the min_ratio for all the metrics
-        m_best = (
-            trials.sort_values("norm_ratio")
-            .loc[:, :trials_last_col]
-            .iloc[-n_best:]
-            .to_dict("records")
-        )
-        best_trials.extend(m_best)
+        ratio_best = trials.sort_values("norm_ratio").loc[:, :trials_last_col].iloc[-n_best:]
     if "sum" in types_best:
-        m_best = (
-            trials.sort_values("norm_sum")
-            .loc[:, :trials_last_col]
-            .iloc[-n_best:]
-            .to_dict("records")
-        )
-        best_trials.extend(m_best)
+        sum_best = trials.sort_values("norm_sum").loc[:, :trials_last_col].iloc[-n_best:]
 
-    return best_trials
+    return concat([ratio_best, sum_best]).drop_duplicates(subset="current_epoch").to_dict("records")
 
 
 def sample_trials(trials: Any, trials_last_col: Any, filters: Dict) -> List:
@@ -189,16 +176,20 @@ def sample_trials(trials: Any, trials_last_col: Any, filters: Dict) -> List:
                     step_over_trials(step_k, step_values, sort_k, trials, trials_last_col)
                 )
     else:
-        flt_trials = trials.loc[:, :trials_last_col].to_dict(orient="records")
-    return flt_trials
+        flt_trials = [trials.loc[:, :trials_last_col]]
+    return concat(flt_trials).drop_duplicates(subset="current_epoch").to_dict(orient="records")
 
 
 def step_over_trials(
     step_k: str, step_values: Dict, sort_k: str, trials, trials_last_col: str
 ) -> List:
+    """ Apply the sampling of a metric_key:sort_key combination over the trials """
+    # for duration and loss we sort by the minimum
     ascending = sort_k in ("duration", "loss")
     step_start = trials[step_k].values.min()
     step_stop = trials[step_k].values.max()
+    # choose the value of each step automatically if
+    # a number of steps is specified
     if step_values.get("range", 0):
         step_v = (step_stop - step_start) / step_values["range"]
     else:
@@ -221,13 +212,12 @@ def step_over_trials(
                 .sort_values(sort_k, ascending=ascending)
                 # select the columns of the trial, and return the first row
                 .loc[:, :trials_last_col]
-                .iloc[0]
-                .to_dict()
+                .iloc[[-1]] # use double brackets to return the dataframe
             )
-            if t["current_epoch"] == last_epoch:
+            if t["current_epoch"].iat[-1] == last_epoch:
                 break
             else:
-                last_epoch = t["current_epoch"]
+                last_epoch = t["current_epoch"].iat[-1]
                 flt_trials.append(t)
         except IndexError:
             pass
