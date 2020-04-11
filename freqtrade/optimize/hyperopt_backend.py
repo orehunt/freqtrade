@@ -48,7 +48,10 @@ class Trial:
 
 def trials_to_df(trials: List, metrics: bool = False) -> Tuple[DataFrame, str]:
     df = DataFrame(trials)
-    last_col = df.columns[-1]
+    if len(df) > 0:
+        last_col = df.columns[-1]
+    else:
+        raise OperationalException("Trials were empty.")
     if metrics:
         df_metrics = DataFrame(t["results_metrics"] for t in trials)
         return concat([df, df_metrics], axis=1), last_col
@@ -190,7 +193,8 @@ def step_over_trials(
     step_stop = trials[step_k].values.max()
     # choose the value of each step automatically if
     # a number of steps is specified
-    if step_values.get("range", 0):
+    defined_range = step_values.get("range", 0)
+    if defined_range:
         step_v = (step_stop - step_start) / step_values["range"]
     else:
         step_v = step_values[step_k]
@@ -199,10 +203,13 @@ def step_over_trials(
     last_epoch = None
     if len(steps) > len(trials):
         min_step = step_v * (len(steps) / len(trials))
-        raise OperationalException(
-            f"Step value of {step_v} for metric {step_k} is too small. "
-            f"Use a minimum of {min_step:.4f}, or choose closer bounds."
-        )
+        if not defined_range:
+            raise OperationalException(
+                f"Step value of {step_v} for metric {step_k} is too small. "
+                f"Use a minimum of {min_step:.4f}, or choose closer bounds."
+            )
+        else:
+            step_v = min_step
     for n, s in enumerate(steps):
         try:
             t = (

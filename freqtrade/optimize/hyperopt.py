@@ -693,10 +693,19 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         preprocessed = self.backtesting.strategy.ohlcvdata_to_dataframe(data)
 
         # Trim startup period from analyzed dataframe
-        for pair, df in preprocessed.items():
-            preprocessed[pair] = trim_dataframe(df, timerange)
-            self.n_candles += len(preprocessed[pair])
-        min_date, max_date = get_timerange(data)
+        # make a new list of the preprocessed pairs because
+        # we delete from the preprocessed dict within the loop
+        pairs = [pair for pair in preprocessed.keys()]
+        for pair in pairs:
+            preprocessed[pair] = trim_dataframe(preprocessed[pair], timerange)
+            len_pair_df = len(preprocessed[pair])
+            if len_pair_df < 1:
+                del preprocessed[pair]
+            else:
+                self.n_candles += len_pair_df
+        if len(preprocessed) < 1:
+            raise OperationalException("Not enough data to support the provided startup candle count.")
+        min_date, max_date = get_timerange(preprocessed)
 
         logger.info(
             "Hyperopting with data from %s up to %s (%s days)..",
