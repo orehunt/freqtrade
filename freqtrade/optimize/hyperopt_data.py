@@ -1,16 +1,31 @@
 import logging
 import warnings
+import json
 from collections import OrderedDict
 from numpy import iinfo, int32
 from pathlib import Path
-from typing import List, Dict
+from typing import Dict, List, Any
+from abc import abstractmethod
+from time import sleep
+from os import makedirs
+from shutil import copyfile
+
 
 from joblib import dump, load
-from pandas import isna, json_normalize
+from multiprocessing.managers import Namespace
+from filelock import FileLock
+from pandas import DataFrame, isna, json_normalize, read_hdf, concat
+from numpy import arange, float64, isfinite
 from os import path
 import io
 
-from freqtrade.exceptions import OperationalException
+from sqlalchemy.pool import StaticPool
+from sqlalchemy import create_engine
+import pyarrow.parquet as pq
+import pyarrow as pa
+
+from freqtrade.constants import HYPEROPT_LIST_STEP_VALUES
+from freqtrade.exceptions import OperationalException, DependencyException
 from freqtrade.misc import plural, round_dict
 
 # Import IHyperOpt and IHyperOptLoss to allow unpickling classes from these modules
@@ -53,109 +68,55 @@ class HyperoptData:
     # a guessed number extracted by the space dimensions
     search_space_size: int
 
-    # used by update_max_epoch
-    avg_last_occurrence: int
-    current_best_epoch = 0
-    current_best_loss = VOID_LOSS
-    epochs_since_last_best: List = [0, 0]
-
-    min_epochs: int
-    max_epoch: int
-
     # evaluations
-    trials: List = []
-    num_trials_saved = 0
+    min_epochs: int
+    epochs_limit: callable
+    total_epochs: int
+    trials: DataFrame
+
+    # identifier for HyperOpt class, set of parameters, loss function
+    trials_instance: str
+    # store the indentifier string here
+    trials_instances_file: Path
+    Xi_cols: List = []
+    # when to save trials
+    trials_timeout: float
+    trials_maxout: int
+    # where to save trials
+    trials_file: Path
+    trials_dir: Path
 
     opt: Optimizer
 
+    metrics = ("profit", "avg_profit", "duration", "trade_count", "loss")
+
     def __init__(self, config):
         self.config = config
-        # epochs counting
-        self.total_epochs = self.config["epochs"] if "epochs" in self.config else 0
-        self.epochs_limit = lambda: self.total_epochs or self.max_epoch
 
-        # paths
-        self.trials_file = (
-            self.config["user_data_dir"] / "hyperopt_results" / "hyperopt_results.pickle"
+        self.total_epochs = self.config["epochs"] if "epochs" in self.config else 0
+
+        self.hyperopt_dir = "hyperopt_data"
+
+        self.trials_dir = self.config["user_data_dir"] / self.hyperopt_dir / "trials"
+
+        self.trials_instances_file = (
+            self.config["user_data_dir"] / self.hyperopt_dir / "trials_instances.json"
         )
         self.data_pickle_file = (
-            self.config["user_data_dir"] / "hyperopt_results" / "hyperopt_tickerdata.pkl"
-        )
-        self.opts_file = (
-            self.config["user_data_dir"] / "hyperopt_results" / "hyperopt_optimizers.pickle"
-        )
-        self.cv_trials_file = (
-            self.config["user_data_dir"] / "hyperopt_results" / "hyperopt_cv_results.pickle"
+            self.config["user_data_dir"] / self.hyperopt_dir / "hyperopt_tickerdata.pkl"
         )
 
-    def clean_hyperopt(self) -> None:
+    def clear_hyperopt(self) -> None:
         """
         Remove hyperopt pickle files to restart hyperopt.
         """
-        for f in [self.data_pickle_file, self.trials_file, self.cv_trials_file, self.opts_file]:
+        if not self.trials_dir.is_dir():
+            makedirs(self.trials_dir)
+        for f in [self.trials_file]:
             p = Path(f)
             if p.is_file():
                 logger.info(f"Removing `{p}`.")
                 p.unlink()
-
-    def save_trials(self, final: bool = False) -> None:
-        """
-        Save hyperopt trials
-        """
-        if self.cv:
-            trials_path = self.cv_trials_file
-        else:
-            trials_path = self.trials_file
-        num_trials = len(self.trials)
-        if num_trials > self.num_trials_saved:
-            logger.debug(f"\nSaving {num_trials} {plural(num_trials, 'epoch')}.")
-            # save_trials(self.trials, trials_path, self.num_trials_saved)
-            dump(self.trials, trials_path)
-            self.num_trials_saved = num_trials
-            if self.mode in ("single", "shared", "multi"):
-                self.save_opts()
-        if final:
-            logger.info(
-                f"{num_trials} {plural(num_trials, 'epoch')} " f"saved to '{self.trials_file}'."
-            )
-
-    def save_opts(self) -> None:
-        """
-        Save optimizers state to disk. The minimum required state could also be constructed
-        from the attributes [ models, space, rng ] with Xi, yi loaded from trials.
-        All we really care about are [rng, Xi, yi] since models are never passed over queues
-        and space is dependent on dimensions matching with hyperopt config
-        """
-        # synchronize with saved trials
-        opts = []
-        n_opts = 0
-        if self.multi:
-            while not backend.optimizers.empty():
-                opt = backend.optimizers.get()
-                opt = HyperoptData.opt_clear(opt)
-                opts.append(opt)
-            n_opts = len(opts)
-            for opt in opts:
-                backend.optimizers.put(opt)
-        else:
-            # when we clear the object for saving we have to make a copy to preserve state
-            opt = HyperoptData.opt_rand(self.opt, seed=False)
-            if self.opt:
-                n_opts = 1
-                opts = [HyperoptData.opt_clear(self.opt)]
-            # (the optimizer copy function also fits a new model with the known points)
-            self.opt = opt
-        logger.debug(f"Saving {n_opts} {plural(n_opts, 'optimizer')}.")
-        dump(opts, self.opts_file)
-
-    @staticmethod
-    def _read_trials(trials_file: Path) -> List:
-        """
-        Read hyperopt trials file
-        """
-        logger.info("Reading Trials from '%s'", trials_file)
-        trials = load(trials_file)
-        return trials
 
     @staticmethod
     def _space_params(params, space: str, r: int = None) -> Dict:
@@ -181,13 +142,126 @@ class HyperoptData:
                 result_dict.update(space_params)
 
     @staticmethod
-    def export_csv_file(
-        config: dict, results: list, total_epochs: int, highlight_best: bool, csv_file: str
+    def cast_trials_types(trials: DataFrame) -> DataFrame:
+        """ Force types for ambiguous metrics """
+        sep = "."
+        for col in (
+            "total_profit",
+            "loss",
+            f"results_metrics{sep}total_profit",
+            f"results_metrics{sep}avg_profit",
+            f"results_metrics{sep}duration",
+        ):
+            trials[col] = trials[col].astype(float64, copy=False)
+        return trials
+
+    @staticmethod
+    def alias_cols(trials: DataFrame, prefix: str, sep=".") -> (DataFrame, List[str]):
+        cols_names = trials.filter(regex=f"^{prefix}{sep}").columns  # with dot
+        stripped_names = []
+        for name in cols_names:
+            stripped = name.replace(f"{prefix}{sep}", "")
+            trials[stripped] = trials[name]
+            stripped_names.append(stripped)
+        return trials, stripped_names
+
+    @staticmethod
+    def save_trials(
+        trials: DataFrame,
+        trials_state: Namespace,
+        trials_file: str,
+        instance_name: str,
+        final: bool = False,
+        backup: bool = False,
+    ) -> None:
+        """
+        Save hyperopt trials
+        """
+        num_trials = len(trials)
+        interval = 0.5
+        saved = num_trials < 1
+        append = True
+        while not saved:
+            try:
+                logger.debug(f"\nSaving {num_trials} {plural(num_trials, 'epoch')}.")
+                # cast types
+                trials = HyperoptData.cast_trials_types(trials)
+                # save on storage to hdf, lock is blocking
+                with trials_state.lock:
+                    trials.to_hdf(
+                        trials_file,
+                        key=instance_name,
+                        mode="a",
+                        complib="blosc:zstd",
+                        append=append,
+                        format="table",
+                        data_columns=True,
+                        # this is needed because it is a string that can exceed
+                        # the size preset by pd, and in append mode it can't be changed
+                        min_itemsize={"results_explanation": 110},
+                    )
+                if not backup:
+                    trials_state.num_saved += num_trials
+                    if final:
+                        logger.info(
+                            f"{trials_state.num_saved} {plural(trials_state.num_saved, 'epoch')} "
+                            f"saved to '{trials_file}'."
+                        )
+                saved = True
+            except (IOError, OSError, AttributeError) as e:
+                # If a lock on the hdf file can't be acquired
+                if type(e) == AttributeError:
+                    # reset table as it has been corrupted
+                    append = False
+                logger.warn(f"Couldn't access the trials storage, retrying in {interval}..")
+                sleep(interval)
+                interval += 0.5
+
+    @abstractmethod
+    def log_trials(self, asked, trials_list: List = [], n=0):
+        """ Calculate epochs and save results to disk """
+
+    @staticmethod
+    def _read_trials(
+        trials_file: Path, trials_instance: str, trials_state: Namespace, backup: bool, where=""
+    ) -> List:
+        """
+        Read hyperopt trials file
+        """
+        # Only log at the beginning
+        if hasattr(backend, "trials") and not backend.trials.exit:
+            logger.info("Reading Trials from '%s'", trials_file)
+        trials = DataFrame()
+        try:
+            trials = read_hdf(trials_file, key=trials_instance, where=where)
+            # make a copy of the trials in case this optimization run corrupts it
+            # (wrongful termination)
+            if backup:
+                HyperoptData.save_trials(
+                    trials,
+                    trials_state,
+                    trials_file,
+                    instance_name=f"{trials_instance}_bak",
+                    backup=True,
+                )
+        except (
+            KeyError,
+            AttributeError,
+        ) as e:  # trials instance is not in the database or corrupted
+            # if corrupted
+            logger.warn(f"Instance table {trials_instance} appears corrupted, using backup...")
+            if type(e) == AttributeError:
+                trials = read_hdf(trials_file, key=f"{trials_instance}_bak", where=where)
+        return trials
+
+    @staticmethod
+    def trials_to_csv_file(
+        config: dict, trials: DataFrame, total_epochs: int, highlight_best: bool, csv_file: str
     ) -> None:
         """
         Log result to csv-file
         """
-        if not results:
+        if len(trials) < 1:
             return
 
         # Verification for overwrite
@@ -201,7 +275,6 @@ class HyperoptData:
             logger.error("Filed to create CSV-File!")
             return
 
-        trials = json_normalize(results, max_level=1)
         trials["Best"] = ""
         trials["Stake currency"] = config["stake_currency"]
         trials = trials[
@@ -257,117 +330,319 @@ class HyperoptData:
 
         trials = trials.drop(columns=["is_initial_point", "is_best", "is_profit"])
         trials.to_csv(csv_file, index=False, header=True, mode="w", encoding="UTF-8")
-        print("CSV-File created!")
+        logger.info(f"CSV-File created at {csv_file} !")
 
     @staticmethod
-    def load_previous_results(trials_file: Path) -> List:
+    def trials_to_dict(trials: DataFrame):
+        """ Convert back from json normalize, nesting levels:
+        results_metrics, params_dict : 1
+        params_details : 2
+        """
+        sep = "."  # separator is "." (dot)
+        for prefix in ("results_metrics", "params_dict", "params_details"):
+            match = f"^{prefix}{sep}"
+            cols_with_prefix = trials.filter(regex=match)  # with dot
+            cols_with_prefix.columns = cols_with_prefix.columns.str.replace(match, "")
+            trials = trials.loc[:, ~trials.columns.str.startswith(match)]
+            trials[prefix] = cols_with_prefix.to_dict("records")
+            if prefix == "params_details":
+                # one more level for spaces
+                spaces = {c.split(sep, 1)[0] for c in cols_with_prefix.columns}
+                for s in spaces:
+                    match = f"^{s}{sep}"
+                    space = cols_with_prefix.filter(regex=match)
+                    space.columns = space.columns.str.replace(match, "")
+                    cols_with_prefix = cols_with_prefix.loc[
+                        :, ~cols_with_prefix.columns.str.startswith(match)
+                    ]
+                    cols_with_prefix[s] = space.to_dict("records")
+                trials[prefix] = cols_with_prefix.to_dict("records")
+
+        return trials.to_dict("records")
+
+    @staticmethod
+    def _filter_options(config: Dict[str, Any]):
+        """ Parse filtering config options into dict """
+        return {
+            "enabled": config.get("hyperopt_list_filter", True),
+            "dedup": config.get("hyperopt_list_dedup", False),
+            "best": config.get("hyperopt_list_best", []),
+            "n_best": config.get("hyperopt_list_n_best", 10),
+            "ratio_best": config.get("hyperopt_list_ratio_best", 0.99),
+            "profitable": config.get("hyperopt_list_profitable", False),
+            "min_trades": config.get("hyperopt_list_min_trades", None),
+            "max_trades": config.get("hyperopt_list_max_trades", None),
+            "min_avg_time": config.get("hyperopt_list_min_avg_time", None),
+            "max_avg_time": config.get("hyperopt_list_max_avg_time", None),
+            "min_avg_profit": config.get("hyperopt_list_min_avg_profit", None),
+            "max_avg_profit": config.get("hyperopt_list_max_avg_profit", None),
+            "min_total_profit": config.get("hyperopt_list_min_total_profit", None),
+            "max_total_profit": config.get("hyperopt_list_max_total_profit", None),
+            "step_values": config.get("hyperopt_list_step_values", HYPEROPT_LIST_STEP_VALUES),
+            "step_keys": config.get("hyperopt_list_step_metric", []),
+            "sort_keys": config.get("hyperopt_list_sort_metric", ["loss"]),
+        }
+
+    @staticmethod
+    def list_or_df(d: DataFrame, return_list: bool) -> Any:
+        if return_list:
+            return d.to_dict("records")
+        else:
+            return d
+
+    @staticmethod
+    def filter_trials(trials: Any, config: Dict[str, Any], return_list=False) -> List:
+        """
+        Filter our items from the list of hyperopt trials
+        """
+        hd = HyperoptData
+        filters = hd._filter_options(config)
+        # add columns without prefixes for metrics
+        trials, _ = hd.alias_cols(trials, "results_metrics")
+
+        if not filters["enabled"]:
+            return hd.list_or_df(trials, return_list)
+        if filters["dedup"]:
+            return hd.list_or_df(hd.dedup_trials(trials), return_list)
+        if filters["best"]:
+            return hd.list_or_df(hd.norm_best(trials, filters), return_list)
+        if filters["profitable"]:
+            trials = trials.loc[trials["profit"] > 0]
+        if filters["min_trades"] is not None:
+            trials = trials.loc[trials["trade_count"] > filters["min_trades"]]
+        if filters["max_trades"] is not None:
+            trials = trials.loc[trials["trade_count"] < filters["max_trades"]]
+
+        with_trades = trials.loc[trials["trade_count"] > 0]
+        with_trades_len = len(with_trades)
+        if filters["min_avg_time"]:
+            with_trades = with_trades.loc[with_trades["duration"] > filters["min_avg_time"]]
+        if filters["max_avg_time"]:
+            with_trades = with_trades.loc[with_trades["duration"] < filters["max_avg_time"]]
+        if filters["min_avg_profit"] is not None:
+            with_trades = with_trades.loc[with_trades["avg_profit"] > filters["min_avg_profit"]]
+        if filters["max_avg_profit"] is not None:
+            with_trades = with_trades.loc[with_trades["avg_profit"] < filters["max_avg_profit"]]
+        if filters["min_total_profit"] is not None:
+            with_trades = with_trades.loc[with_trades["profit"] > filters["min_total_profit"]]
+        if filters["max_total_profit"] is not None:
+            with_trades = with_trades.loc[with_trades["profit"] < filters["max_total_profit"]]
+        if len(with_trades) != with_trades_len:
+            trials = with_trades
+
+        if len(trials) > 0:
+            return hd.list_or_df(hd.sample_trials(trials, filters), return_list)
+        else:
+            return hd.list_or_df(trials, return_list)
+
+    @staticmethod
+    def norm_best(trials: Any, filters: dict) -> List:
+        """ Normalize metrics and sort by sum or minimum score """
+        metrics = ("profit", "avg_profit", "duration", "trade_count", "loss")
+        min_ratio = filters["ratio_best"]
+        types_best = filters["best"]
+        n_best = filters["n_best"] // len(types_best)
+
+        # invert loss and duration to simplify
+        trials["loss"] = trials["loss"].mul(-1)
+        trials["duration"] = trials["duration"].mul(-1)
+        # calculate the normalized metrics as columns
+        for m in metrics:
+            m_col = trials[m].values
+            m_min = m_col.min()
+            m_max = m_col.max()
+            trials[f"norm_{m}"] = (m_col - m_min) / (m_max - m_min)
+        # re-invert
+        trials["loss"] = trials["loss"].mul(-1)
+        trials["duration"] = trials["duration"].mul(-1)
+
+        # calc the norm ratio between metrics:
+        # compare each normalized metric against the set minimum ratio;
+        # also get a sum of all the normalized metrics
+        trials["norm_sum"] = 0
+        trials["norm_ratio"] = 0
+        for m in metrics:
+            norm_m = trials[f"norm_{m}"].values
+            norm_m[~isfinite(norm_m)] = 0  # reset infs and nans
+            trials["norm_ratio"] += (norm_m > min_ratio).astype(int)
+            trials["norm_sum"] += trials[f"norm_{m}"].values
+
+        # You're the best! Around!
+        # trials["is_best"] = True
+
+        if "ratio" in types_best:
+            # filter the trials to the ones that meet the min_ratio for all the metrics
+            ratio_best = trials.sort_values("norm_ratio").iloc[-n_best:]
+        if "sum" in types_best:
+            sum_best = trials.sort_values("norm_sum").iloc[-n_best:]
+
+        return concat([ratio_best, sum_best]).drop_duplicates(subset="current_epoch")
+
+    @staticmethod
+    def dedup_trials(trials: DataFrame) -> DataFrame:
+        """ Filter out duplicate metrics, then filter duplicate epochs """
+        metrics = HyperoptData.metrics
+        dedup_metrics = []
+        for m in metrics:
+            if m in trials:
+                dedup_metrics.append(trials.drop_duplicates(subset=m))
+        return concat(dedup_metrics).drop_duplicates(subset="current_epoch")
+
+    @staticmethod
+    def sample_trials(trials: DataFrame, filters: Dict) -> DataFrame:
+        """
+        Pick one trial, every `step_value` of `step_metric`...
+        or pick n == `range` trials for every `step_metric`...
+        for every `step_metric`, sorted by `sort_metric` for every `sort_metric`...
+        """
+        metrics = HyperoptData.metrics
+        if filters["step_keys"]:
+            step_keys = metrics if filters["step_keys"] == ["all"] else filters["step_keys"]
+            sort_keys = metrics if filters["sort_keys"] == ["all"] else filters["sort_keys"]
+            step_values = filters["step_values"]
+            flt_trials = []
+            for step_k in step_keys:
+                for sort_k in sort_keys:
+                    flt_trials.extend(
+                        HyperoptData.step_over_trials(step_k, step_values, sort_k, trials)
+                    )
+        else:
+            flt_trials = [trials]
+        return concat(flt_trials).drop_duplicates(subset="current_epoch")
+
+    @staticmethod
+    def step_over_trials(step_k: str, step_values: Dict, sort_k: str, trials: DataFrame) -> List:
+        """ Apply the sampling of a metric_key:sort_key combination over the trials """
+        # for duration and loss we sort by the minimum
+        ascending = sort_k in ("duration", "loss")
+        step_start = trials[step_k].values.min()
+        step_stop = trials[step_k].values.max()
+        # choose the value of each step automatically if
+        # a number of steps is specified
+        defined_range = step_values.get("range", 0)
+        if defined_range:
+            step_v = (step_stop - step_start) / step_values["range"]
+        else:
+            step_v = step_values[step_k]
+        steps = arange(step_start, step_stop, step_v)
+        flt_trials = []
+        last_epoch = None
+        if len(steps) > len(trials):
+            min_step = step_v * (len(steps) / len(trials))
+            if not defined_range:
+                raise OperationalException(
+                    f"Step value of {step_v} for metric {step_k} is too small. "
+                    f"Use a minimum of {min_step:.4f}, or choose closer bounds."
+                )
+            else:
+                step_v = min_step
+        for n, s in enumerate(steps):
+            try:
+                t = (
+                    # the trials between the current step
+                    trials.loc[(trials[step_k].values >= s) & (trials[step_k].values <= s + step_v)]
+                    # sorted according to the specified key
+                    .sort_values(sort_k, ascending=ascending).iloc[
+                        [-1]
+                    ]  # use double brackets to return the dataframe
+                )
+                if t["current_epoch"].iat[-1] == last_epoch:
+                    break
+                else:
+                    last_epoch = t["current_epoch"].iat[-1]
+                    flt_trials.append(t)
+            except IndexError:
+                pass
+        return flt_trials
+
+    @staticmethod
+    def load_trials(
+        trials_file: Path, trials_instance: str, trials_state: Namespace = None, where="", backup=False
+    ) -> DataFrame:
         """
         Load data for epochs from the file if we have one
         """
-        trials: List = []
+        trials: DataFrame = DataFrame()
         if trials_file.is_file() and trials_file.stat().st_size > 0:
-            trials = HyperoptData._read_trials(trials_file)
-            if trials[0].get("is_best") is None:
-                raise OperationalException(
-                    "The file with Hyperopt results is incompatible with this version "
-                    "of Freqtrade and cannot be loaded."
-                )
-            logger.info(f"Loaded {len(trials)} previous evaluations from disk.")
+            trials = HyperoptData._read_trials(
+                trials_file, trials_instance, trials_state, backup, where
+            )
+            # Only log at the beginning
+            if hasattr(backend, "trials") and not backend.trials.exit:
+                logger.info(f"Loaded {len(trials)} previous trials from disk.")
         return trials
 
     @staticmethod
-    def load_previous_optimizers(opts_file: Path) -> List:
-        """ Load the state of previous optimizers from file """
-        opts: List[Optimizer] = []
-        if opts_file.is_file() and opts_file.stat().st_size > 0:
-            opts = load(opts_file)
-        n_opts = len(opts)
-        if n_opts > 0 and type(opts[-1]) != Optimizer:
-            raise OperationalException(
-                "The file storing optimizers state might be corrupted " "and cannot be loaded."
-            )
+    def get_last_instance(trials_instances_file: Path) -> str:
+        """
+        When an instance is not specified get the last one saved,
+        should be used by hyperopt related commands
+        """
+        with open(trials_instances_file, "r") as tif:
+            instances = json.load(tif)
+        if len(instances) < 1:
+            raise OperationalException(f"No instances were found at {trials_instances_file}")
         else:
-            logger.info(f"Loaded {n_opts} previous {plural(n_opts, 'optimizer')} from disk.")
-        return opts
+            return instances[-1]
+
+    @staticmethod
+    def get_trials_file(config: dict, trials_dir: Path) -> Path:
+        hyperopt = config["hyperopt"]
+        strategy = config["strategy"]
+        if not hyperopt or not strategy:
+            raise DependencyException("Strategy or Hyperopt name not specified, both are required.")
+        trials_file = trials_dir / f"{hyperopt}_{strategy}.hdf"
+        return trials_file
 
     def setup_optimizers(self):
-        """ Setup the optimizers objects, try to load from disk, or create new ones """
+        """
+        Setup the optimizers objects, applies random state from saved trials if present,
+        adds a few attributes to determine logic of execution during trials evaluation
+        """
         # try to load previous optimizers
-        opts = self.load_previous_optimizers(self.opts_file)
-        n_opts = len(opts)
-
         if self.multi:
+            # on startup distribute reproduced optimizers
+            backend.optimizers = backend.manager.Queue()
             max_opts = self.n_jobs
             rngs = []
-            # when sharing results there is only one optimizer that gets copied
-            if self.shared:
-                max_opts = 1
-            # put the restored optimizers in the queue
-            # only if they match the current number of jobs
-            if n_opts == max_opts:
-                for n in range(n_opts):
-                    rngs.append(opts[n].rs)
-                    # make sure to not store points and models in the optimizer
-                    backend.optimizers.put(HyperoptData.opt_clear(opts[n]))
-            # generate as many optimizers as are still needed to fill the job count
-            remaining = max_opts - backend.optimizers.qsize()
-            if remaining > 0:
-                opt = self.get_optimizer()
-                rngs = []
-                for _ in range(remaining):  # generate optimizers
-                    # random state is preserved
-                    rs = opt.rng.randint(0, iinfo(int32).max)
-                    opt_copy = opt.copy(random_state=rs)
-                    opt_copy.void_loss = VOID_LOSS
-                    opt_copy.void = False
-                    opt_copy.rs = rs
-                    rngs.append(rs)
-                    backend.optimizers.put(opt_copy)
-                del opt, opt_copy
-            # reconstruct observed points from epochs
-            # in shared mode each worker will remove the results once all the workers
-            # have read it (counter < 1)
-            counter = self.n_jobs
-
-            def empty_dict():
-                return {rs: [] for rs in rngs}
-
-            self.opt_empty_tuple = lambda: {rs: ((), ()) for rs in rngs}
-            self.Xi.update(empty_dict())
-            self.yi.update(empty_dict())
-            self.track_points()
-            # this is needed to keep track of results discovered within the same batch
-            # by each optimizer, use tuples! as the SyncManager doesn't handle nested dicts
-            Xi, yi = self.Xi, self.yi
-            results = {tuple(X): [yi[r][n], counter] for r in Xi for n, X in enumerate(Xi[r])}
-            results.update(self.opt_empty_tuple())
-            backend.results_shared = backend.manager.dict(results)
-        else:
-            # if we have more than 1 optimizer but are using single opt,
-            # pick one discard the rest...
-            if n_opts > 0:
-                self.opt = opts[-1]
+            # generate as many optimizers as the job count
+            opt = self.get_optimizer()
+            if len(self.trials) > 0:
+                rngs = self.trials["random_state"].drop_duplicates().to_list()
+                # make sure to only load as many random states as the job count
+                prev_rngs = rngs[-max_opts:]
             else:
-                self.opt = self.get_optimizer()
-                self.opt.void_loss = VOID_LOSS
-                self.opt.void = False
-                self.opt.rs = self.random_state
-            # in single mode restore the points directly to the optimizer
-            # but delete first in case we have filtered the starting list of points
-            self.opt = HyperoptData.opt_clear(self.opt)
-            rs = self.random_state
-            self.Xi[rs] = []
-            self.track_points()
-            if len(self.Xi[rs]) > 0:
-                self.opt.tell(self.Xi[rs], self.yi[rs], fit=False)
-            # delete points since in single mode the optimizer state sits in the main
-            # process and is not discarded
-            self.Xi, self.yi = {}, {}
-        del opts[:]
+                prev_rngs = []
+            rngs = []
+            for _ in range(max_opts):  # generate optimizers
+                # random state is preserved
+                if len(prev_rngs) > 0:
+                    rs = prev_rngs.pop(0)
+                else:
+                    rs = opt.rng.randint(0, iinfo(int32).max)
+                opt_copy = opt.copy(random_state=rs)
+                opt_copy.void_loss = VOID_LOSS
+                opt_copy.void = False
+                opt_copy.rs = rs
+                rngs.append(rs)
+                backend.optimizers.put(opt_copy)
+            del opt, opt_copy
+        else:
+            self.opt = self.get_optimizer()
+            self.opt.void_loss = VOID_LOSS
+            self.opt.void = False
+            self.opt.rs = self.random_state
+            if len(self.trials) > 0:
+                if self.random_state != self.trials.iat[-1, "rs"]:
+                    logger.warn("Random state in saved trials doesn't match runtime...")
+                self.opt.tell(self.trials["Xi"].to_list(), self.trials["yi"].to_list(), fit=False)
 
     @staticmethod
     def opt_rand(opt: Optimizer, rand: int = None, seed: bool = True) -> Optimizer:
-        """ return a new instance of the optimizer with modified rng """
+        """
+        Return a new instance of the optimizer with modified rng, from the previous
+        optimizer random state
+        """
         if seed:
             if not rand:
                 rand = opt.rng.randint(0, VOID_LOSS)
@@ -382,6 +657,6 @@ class HyperoptData:
 
     @staticmethod
     def opt_clear(opt: Optimizer):
-        """ clear state from an optimizer object """
+        """ Delete models and points from an optimizer instance """
         del opt.models[:], opt.Xi[:], opt.yi[:]
         return opt

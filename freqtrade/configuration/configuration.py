@@ -307,8 +307,8 @@ class Configuration:
         self._args_to_config(config, argname='hyperopt_min_trades',
                              logstring='Parameter --min-trades detected: {}')
 
-        self._args_to_config(config, argname='hyperopt_continue',
-                             logstring='Hyperopt continue: {}')
+        self._args_to_config(config, argname='hyperopt_clear',
+                             logstring='Hyperopt clear: {}')
 
         self._args_to_config(config, argname='hyperopt_loss',
                              logstring='Using Hyperopt loss class name: {}')

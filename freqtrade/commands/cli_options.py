@@ -274,10 +274,11 @@ AVAILABLE_CLI_OPTIONS = {
         metavar="INT",
         default=1,
     ),
-    "hyperopt_continue": Arg(
-        "--continue",
-        help="Continue hyperopt from previous runs. "
-        "By default, temporary files will be removed and hyperopt will start from scratch.",
+    "hyperopt_clear": Arg(
+        "--clear",
+        help="Clear hyperopt from previous runs. "
+        "When enabled, temporary files for the current Hyperopt class will be removed "
+        "and hyperopt will start from scratch.",
         default=False,
         action="store_true",
     ),

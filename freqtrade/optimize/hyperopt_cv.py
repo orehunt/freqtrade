@@ -8,6 +8,7 @@ from joblib import Parallel, delayed, wrap_non_picklable_objects
 # from freqtrade.optimize.hyperopt_backend import Trial
 from freqtrade.optimize.hyperopt_interface import IHyperOpt  # noqa: F401
 from freqtrade.optimize.hyperopt_loss_interface import IHyperOptLoss  # noqa: F401
+from freqtrade.optimize.hyperopt_data import HyperoptData
 import freqtrade.optimize.hyperopt_backend as backend
 
 # Suppress scikit-learn FutureWarnings from skopt
@@ -26,18 +27,24 @@ class HyperoptCV:
     target_trials: List
 
     @abstractmethod
-    def parallel_objective(self, asked, results_list: List = [], n=0):
-        """ objective run in single opt mode, run the backtest, store the results into a queue """
+    def parallel_objective(self, asked, trials_list: List = [], n=0):
+        """ objective run in single opt mode, run the backtest, store the trials into a queue """
 
-    def trials_params(self, offset: int):
-        for t in self.target_trials[offset:]:
-            yield t["params_dict"]
+    def trials_params(self, offset: int, jobs: int):
+        # use the right names for dimensions
+        self.target_trials, params_cols = HyperoptData.alias_cols(self.target_trials, "params_dict")
+        Xi = self.target_trials.loc[:, params_cols].to_dict("records")
+        for X in Xi[offset:]:
+            yield X
+        # loop over jobs to schedule the last dispatch to collect unsaved epochs
+        for j in range(jobs):
+            yield []
 
     def run_cv_backtest_parallel(self, parallel: Parallel, tries: int, first_try: int, jobs: int):
         """ evaluate a list of given parameters in parallel """
         parallel(
             delayed(wrap_non_picklable_objects(self.parallel_objective))(
-                params, backend.results_list, n=i
+                t, params, backend.epochs, backend.trials
             )
-            for params, i in zip(self.trials_params(first_try), range(first_try, first_try + tries))
+            for params, t in zip(self.trials_params(first_try, jobs), range(first_try, first_try + tries))
         )

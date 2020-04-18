@@ -1,12 +1,14 @@
 import locale
 import warnings
+import logging
 import sys
 from pprint import pprint
 from typing import Dict, Any
 
 import rapidjson
 from colorama import Fore, Style
-from pandas import isna, json_normalize
+from pandas import isna, json_normalize, DataFrame
+from multiprocessing.managers import Namespace
 import tabulate
 
 from freqtrade.misc import round_dict
@@ -17,6 +19,7 @@ from freqtrade.optimize.hyperopt_interface import IHyperOpt  # noqa: F401
 from freqtrade.optimize.hyperopt_loss_interface import IHyperOptLoss  # noqa: F401
 
 from freqtrade.optimize.hyperopt_data import HyperoptData
+import freqtrade.optimize.hyperopt_backend as backend
 
 # Suppress scikit-learn FutureWarnings from skopt
 with warnings.catch_warnings():
@@ -27,6 +30,7 @@ with warnings.catch_warnings():
 # from sklearn.ensemble import HistGradientBoostingRegressor
 # from xgboost import XGBoostRegressor
 
+logger = logging.getLogger(__name__)
 
 class HyperoptOut(HyperoptData):
     """ Output routines for Hyperopt """
@@ -37,11 +41,10 @@ class HyperoptOut(HyperoptData):
         self.print_all = self.config.get("print_all", False)
         self.print_colorized = self.config.get("print_colorized", False)
         self.print_json = self.config.get("print_json", False)
-        self.hyperopt_table_header = 0
 
     @staticmethod
     def print_epoch_details(
-        results,
+        trial,
         total_epochs: int,
         print_json: bool,
         no_header: bool = False,
@@ -50,14 +53,14 @@ class HyperoptOut(HyperoptData):
         """
         Display details of the hyperopt result
         """
-        params = results.get("params_details", {})
+        params = trial.get("params_details", {})
 
         # Default header string
         if header_str is None:
             header_str = "Best result"
 
         if not no_header:
-            explanation_str = HyperoptOut._format_explanation_string(results, total_epochs)
+            explanation_str = HyperoptOut._format_explanation_string(trial, total_epochs)
             print(f"\n{header_str}:\n\n{explanation_str}\n")
 
         if print_json:
@@ -97,21 +100,24 @@ class HyperoptOut(HyperoptData):
         # Round floats to `r` digits after the decimal point if requested
         return round_dict(d, r) if r else d
 
-    def print_results(self, results) -> None:
+    def print_results(self, trials, table_header: int, epochs=None) -> None:
         """
         Log results if it is better than any previous evaluation
         """
-        is_best = results["is_best"]
-        if self.print_all or is_best:
-            self.print_result_table(
-                self.config,
-                results,
-                self.epochs_limit(),
-                self.print_all,
-                self.print_colorized,
-                self.hyperopt_table_header,
-            )
-            self.hyperopt_table_header = 2
+        if not self.print_all:
+            trials = trials.loc[trials["is_best"]]
+        # needed by epochs_limit because max epochs reference the global reference to epochs
+        # but the workers access the proxied namespace directly
+        if epochs:
+            backend.epochs = epochs
+        self.print_result_table(
+            self.config,
+            trials,
+            self.epochs_limit(),
+            self.print_all,
+            self.print_colorized,
+            table_header
+        )
 
     @staticmethod
     def print_results_explanation(
@@ -141,7 +147,7 @@ class HyperoptOut(HyperoptData):
     @staticmethod
     def print_result_table(
         config: dict,
-        results: list,
+        trials: DataFrame,
         total_epochs: int,
         highlight_best: bool,
         print_colorized: bool,
@@ -150,14 +156,15 @@ class HyperoptOut(HyperoptData):
         """
         Log result table
         """
-        if not results:
+        if len(trials) < 1:
             return
 
         tabulate.PRESERVE_WHITESPACE = True
 
-        trials = json_normalize(results, max_level=1)
+        logger.debug("Formatting results...")
+
         trials["Best"] = ""
-        trials = trials[
+        trials = trials.loc[:,
             [
                 "Best",
                 "current_epoch",
@@ -214,17 +221,19 @@ class HyperoptOut(HyperoptData):
         )
         trials = trials.drop(columns=["Total profit"])
 
+        n_cols = len(trials.columns)
+        n_trials = len(trials)
         if print_colorized:
-            for i in range(len(trials)):
-                if trials.loc[i]["is_profit"]:
-                    for j in range(len(trials.loc[i]) - 3):
+            for i in range(n_trials):
+                if trials["is_profit"].iat[i]:
+                    for j in range(n_cols - 3):
                         trials.iat[i, j] = "{}{}{}".format(
-                            Fore.GREEN, str(trials.loc[i][j]), Fore.RESET
+                            Fore.GREEN, str(trials.iat[i, j]), Fore.RESET
                         )
-                if trials.loc[i]["is_best"] and highlight_best:
-                    for j in range(len(trials.loc[i]) - 3):
+                if trials["is_best"].iat[i] and highlight_best:
+                    for j in range(n_cols - 3):
                         trials.iat[i, j] = "{}{}{}".format(
-                            Style.BRIGHT, str(trials.loc[i][j]), Style.RESET_ALL
+                            Style.BRIGHT, str(trials.iat[i, j]), Style.RESET_ALL
                         )
 
         trials = trials.drop(columns=["is_initial_point", "is_best", "is_profit"])
@@ -263,7 +272,10 @@ class HyperoptOut(HyperoptData):
         )
 
     @staticmethod
-    def log_results_immediate(n) -> None:
+    def log_results_immediate(n, epochs: Namespace) -> None:
         """ Signals that a new job has been scheduled"""
-        print(".", end="")
-        sys.stdout.flush()
+        # get lock to avoid messing up the console
+        if epochs.lock.acquire(False):
+            print(".", end="")
+            sys.stdout.flush()
+            epochs.lock.release()
