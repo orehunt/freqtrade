@@ -11,6 +11,9 @@ LIE_STRATS_N = len(LIE_STRATS)
 ESTIMATORS = ["GBRT", "ET", "RF"]
 ESTIMATORS_N = len(ESTIMATORS)
 
+ACQ_FUNCS = ["LCB", "EI", "PI"]
+ACQ_FUNCS_N = len(ACQ_FUNCS)
+
 VOID_LOSS = iinfo(int32).max  # just a big enough number to be a bad point in the loss optimization
 
 testing = "pytest" in sys.modules

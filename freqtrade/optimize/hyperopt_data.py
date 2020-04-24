@@ -1,6 +1,7 @@
 import logging
 import warnings
 import json
+import random
 from collections import OrderedDict
 from numpy import iinfo, int32
 from pathlib import Path
@@ -14,7 +15,7 @@ from shutil import copyfile
 from joblib import dump, load
 from multiprocessing.managers import Namespace
 from filelock import FileLock
-from pandas import DataFrame, isna, json_normalize, read_hdf, concat
+from pandas import DataFrame, isna, json_normalize, read_hdf, concat, HDFStore
 from numpy import arange, float64, isfinite
 from os import path
 import io
@@ -173,6 +174,7 @@ class HyperoptData:
         instance_name: str,
         final: bool = False,
         backup: bool = False,
+        append: bool = True,
     ) -> None:
         """
         Save hyperopt trials
@@ -180,14 +182,15 @@ class HyperoptData:
         num_trials = len(trials)
         interval = 0.5
         saved = num_trials < 1
-        append = True
+        locked = False
         while not saved:
             try:
                 logger.debug(f"\nSaving {num_trials} {plural(num_trials, 'epoch')}.")
                 # cast types
-                trials = HyperoptData.cast_trials_types(trials)
+                trials = HyperoptData.cast_trials_types(trials).dropna()
                 # save on storage to hdf, lock is blocking
-                with trials_state.lock:
+                locked = trials_state.lock.acquire()
+                if trials_state.lock:
                     trials.to_hdf(
                         trials_file,
                         key=instance_name,
@@ -195,7 +198,10 @@ class HyperoptData:
                         complib="blosc:zstd",
                         append=append,
                         format="table",
-                        data_columns=True,
+                        # NOTE: make sure to only index the columns really used for indexing
+                        # since each parameter is stored in a different col, the col number can
+                        # be very high
+                        data_columns=["Xi_h", "random_state", "loss"],
                         # this is needed because it is a string that can exceed
                         # the size preset by pd, and in append mode it can't be changed
                         min_itemsize={"results_explanation": 110},
@@ -209,6 +215,8 @@ class HyperoptData:
                         )
                 saved = True
             except (IOError, OSError, AttributeError) as e:
+                if locked:
+                    trials_state.lock.release()
                 # If a lock on the hdf file can't be acquired
                 if type(e) == AttributeError:
                     # reset table as it has been corrupted
@@ -216,14 +224,22 @@ class HyperoptData:
                 logger.warn(f"Couldn't access the trials storage, retrying in {interval}..")
                 sleep(interval)
                 interval += 0.5
+            finally:
+                if locked:
+                    trials_state.lock.release()
 
     @abstractmethod
     def log_trials(self, asked, trials_list: List = [], n=0):
-        """ Calculate epochs and save results to disk """
+        """ Calculate epochs and save results to storage """
 
     @staticmethod
     def _read_trials(
-        trials_file: Path, trials_instance: str, trials_state: Namespace, backup: bool, where=""
+        trials_file: Path,
+        trials_instance: str,
+        trials_state: Namespace,
+        backup: bool,
+        where="",
+        start=None,
     ) -> List:
         """
         Read hyperopt trials file
@@ -233,7 +249,7 @@ class HyperoptData:
             logger.info("Reading Trials from '%s'", trials_file)
         trials = DataFrame()
         try:
-            trials = read_hdf(trials_file, key=trials_instance, where=where)
+            trials = read_hdf(trials_file, key=trials_instance, where=where, start=start)
             # make a copy of the trials in case this optimization run corrupts it
             # (wrongful termination)
             if backup:
@@ -249,8 +265,8 @@ class HyperoptData:
             AttributeError,
         ) as e:  # trials instance is not in the database or corrupted
             # if corrupted
-            logger.warn(f"Instance table {trials_instance} appears corrupted, using backup...")
             if type(e) == AttributeError:
+                logger.warn(f"Instance table {trials_instance} appears corrupted, using backup...")
                 trials = read_hdf(trials_file, key=f"{trials_instance}_bak", where=where)
         return trials
 
@@ -337,21 +353,25 @@ class HyperoptData:
         """ Convert back from json normalize, nesting levels:
         results_metrics, params_dict : 1
         params_details : 2
+        and drop NaN
         """
         sep = "."  # separator is "." (dot)
+        trials = trials.copy()
         for prefix in ("results_metrics", "params_dict", "params_details"):
-            match = f"^{prefix}{sep}"
+            # startswith does not accept regexp
+            match = f"{prefix}{sep}"
             cols_with_prefix = trials.filter(regex=match)  # with dot
-            cols_with_prefix.columns = cols_with_prefix.columns.str.replace(match, "")
+            cols_with_prefix.columns = cols_with_prefix.columns.str.replace(match, "", 1)
             trials = trials.loc[:, ~trials.columns.str.startswith(match)]
             trials[prefix] = cols_with_prefix.to_dict("records")
+
             if prefix == "params_details":
                 # one more level for spaces
                 spaces = {c.split(sep, 1)[0] for c in cols_with_prefix.columns}
                 for s in spaces:
-                    match = f"^{s}{sep}"
+                    match = f"{s}{sep}"
                     space = cols_with_prefix.filter(regex=match)
-                    space.columns = space.columns.str.replace(match, "")
+                    space.columns = space.columns.str.replace(match, "", 1)
                     cols_with_prefix = cols_with_prefix.loc[
                         :, ~cols_with_prefix.columns.str.startswith(match)
                     ]
@@ -391,7 +411,7 @@ class HyperoptData:
             return d
 
     @staticmethod
-    def filter_trials(trials: Any, config: Dict[str, Any], return_list=False) -> List:
+    def filter_trials(trials: Any, config: Dict[str, Any], return_list=False) -> Any:
         """
         Filter our items from the list of hyperopt trials
         """
@@ -400,7 +420,7 @@ class HyperoptData:
         # add columns without prefixes for metrics
         trials, _ = hd.alias_cols(trials, "results_metrics")
 
-        if not filters["enabled"]:
+        if not filters["enabled"] or len(trials) < 1:
             return hd.list_or_df(trials, return_list)
         if filters["dedup"]:
             return hd.list_or_df(hd.dedup_trials(trials), return_list)
@@ -524,7 +544,10 @@ class HyperoptData:
             step_v = (step_stop - step_start) / step_values["range"]
         else:
             step_v = step_values[step_k]
-        steps = arange(step_start, step_stop, step_v)
+        if step_start == step_stop:
+            steps = [step_start]
+        else:
+            steps = arange(step_start, step_stop, step_v)
         flt_trials = []
         last_epoch = None
         if len(steps) > len(trials):
@@ -557,7 +580,12 @@ class HyperoptData:
 
     @staticmethod
     def load_trials(
-        trials_file: Path, trials_instance: str, trials_state: Namespace = None, where="", backup=False
+        trials_file: Path,
+        trials_instance: str,
+        trials_state: Namespace = None,
+        where="",
+        backup=False,
+        clear=False,
     ) -> DataFrame:
         """
         Load data for epochs from the file if we have one
@@ -567,13 +595,20 @@ class HyperoptData:
             trials = HyperoptData._read_trials(
                 trials_file, trials_instance, trials_state, backup, where
             )
+            # clear the table by replacing it with an empty df
+            if clear:
+                try:
+                    store = HDFStore(trials_file)
+                    store.remove("/{}".format(trials_instance))
+                finally:
+                    store.close()
             # Only log at the beginning
             if hasattr(backend, "trials") and not backend.trials.exit:
-                logger.info(f"Loaded {len(trials)} previous trials from disk.")
+                logger.info(f"Loaded {len(trials)} previous trials from storage.")
         return trials
 
     @staticmethod
-    def get_last_instance(trials_instances_file: Path) -> str:
+    def get_last_instance(trials_instances_file: Path, cv=False) -> str:
         """
         When an instance is not specified get the last one saved,
         should be used by hyperopt related commands
@@ -583,7 +618,10 @@ class HyperoptData:
         if len(instances) < 1:
             raise OperationalException(f"No instances were found at {trials_instances_file}")
         else:
-            return instances[-1]
+            if cv:
+                return "{}_cv".format(instances[-1])
+            else:
+                return instances[-1]
 
     @staticmethod
     def get_trials_file(config: dict, trials_dir: Path) -> Path:
@@ -606,7 +644,6 @@ class HyperoptData:
             max_opts = self.n_jobs
             rngs = []
             # generate as many optimizers as the job count
-            opt = self.get_optimizer()
             if len(self.trials) > 0:
                 rngs = self.trials["random_state"].drop_duplicates().to_list()
                 # make sure to only load as many random states as the job count
@@ -614,28 +651,38 @@ class HyperoptData:
             else:
                 prev_rngs = []
             rngs = []
+            random.seed(self.random_state)
+            n_explorers = self.n_explorers
+            n_exploiters = self.n_exploiters
             for _ in range(max_opts):  # generate optimizers
                 # random state is preserved
                 if len(prev_rngs) > 0:
                     rs = prev_rngs.pop(0)
                 else:
-                    rs = opt.rng.randint(0, iinfo(int32).max)
-                opt_copy = opt.copy(random_state=rs)
+                    rs = random.randint(0, iinfo(int32).max)
+                # in multi mode generate a new optimizer
+                # to randomize the base estimator
+                opt_copy = self.get_optimizer(rs)
                 opt_copy.void_loss = VOID_LOSS
                 opt_copy.void = False
                 opt_copy.rs = rs
+                # assign role
+                if n_explorers:
+                    # explorers are positive
+                    opt_copy.role = n_explorers
+                    n_explorers -= 1
+                elif n_exploiters:
+                    # exploiters are negative
+                    opt_copy.role = -n_exploiters
+                    n_exploiters -= 1
                 rngs.append(rs)
                 backend.optimizers.put(opt_copy)
-            del opt, opt_copy
+            del opt_copy
         else:
             self.opt = self.get_optimizer()
             self.opt.void_loss = VOID_LOSS
             self.opt.void = False
             self.opt.rs = self.random_state
-            if len(self.trials) > 0:
-                if self.random_state != self.trials.iat[-1, "rs"]:
-                    logger.warn("Random state in saved trials doesn't match runtime...")
-                self.opt.tell(self.trials["Xi"].to_list(), self.trials["yi"].to_list(), fit=False)
 
     @staticmethod
     def opt_rand(opt: Optimizer, rand: int = None, seed: bool = True) -> Optimizer:
@@ -647,11 +694,12 @@ class HyperoptData:
             if not rand:
                 rand = opt.rng.randint(0, VOID_LOSS)
             opt.rng.seed(rand)
-        opt, opt.void_loss, opt.void, opt.rs = (
+        opt, opt.void_loss, opt.void, opt.rs, opt.role = (
             opt.copy(random_state=opt.rng),
             opt.void_loss,
             opt.void,
             opt.rs,
+            opt.role,
         )
         return opt
 

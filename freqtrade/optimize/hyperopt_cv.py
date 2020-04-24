@@ -32,19 +32,23 @@ class HyperoptCV:
 
     def trials_params(self, offset: int, jobs: int):
         # use the right names for dimensions
-        self.target_trials, params_cols = HyperoptData.alias_cols(self.target_trials, "params_dict")
-        Xi = self.target_trials.loc[:, params_cols].to_dict("records")
-        for X in Xi[offset:]:
-            yield X
-        # loop over jobs to schedule the last dispatch to collect unsaved epochs
-        for j in range(jobs):
-            yield []
+        if not backend.trials.exit:
+            self.target_trials, params_cols = HyperoptData.alias_cols(
+                self.target_trials, "params_dict"
+            )
+            Xi = self.target_trials.loc[:, params_cols].to_dict("records")
+            for t, X in enumerate(Xi[offset:]):
+                yield t, X
+        else:
+            # loop over jobs to schedule the last dispatch to collect unsaved epochs
+            for j in range(2*jobs):
+                yield j, []
 
-    def run_cv_backtest_parallel(self, parallel: Parallel, tries: int, first_try: int, jobs: int):
+    def run_cv_backtest_parallel(self, parallel: Parallel, jobs: int):
         """ evaluate a list of given parameters in parallel """
         parallel(
-            delayed(wrap_non_picklable_objects(self.parallel_objective))(
+            delayed(wrap_non_picklable_objects(self.parallel_objective_sig_handler))(
                 t, params, backend.epochs, backend.trials
             )
-            for params, t in zip(self.trials_params(first_try, jobs), range(first_try, first_try + tries))
+            for t, params in self.trials_params(0, jobs)
         )

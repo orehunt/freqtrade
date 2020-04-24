@@ -34,7 +34,10 @@ def start_hyperopt_list(args: Dict[str, Any]) -> None:
     )
 
     # Previous evaluations
-    trials = ho.load_trials(trials_file, ho.get_last_instance(trials_instances_file))
+    trials = ho.load_trials(
+        trials_file,
+        ho.get_last_instance(trials_instances_file, config.get("hyperopt_trials_instance")),
+    )
     total_epochs = len(trials)
 
     trials = ho.filter_trials(trials, config).copy()
@@ -45,15 +48,17 @@ def start_hyperopt_list(args: Dict[str, Any]) -> None:
 
     if not export_csv:
         try:
-            ho.print_result_table(
-                config, trials, total_epochs, not filters["best"], print_colorized, 0
+            print(
+                ho.get_result_table(
+                    config, trials, total_epochs, not filters["best"], print_colorized, 0
+                )
             )
         except KeyboardInterrupt:
             print("User interrupted..")
 
     if n_trials and not no_details:
-        best = trials.sort_values("loss").iloc[0]
-        ho.print_epoch_details(best, total_epochs, print_json, no_header)
+        best = trials.sort_values("loss").iloc[0:]
+        ho.print_epoch_details(ho.trials_to_dict(best)[0], total_epochs, print_json, no_header)
 
     if n_trials and export_csv:
         ho.export_csv_file(config, trials, total_epochs, not filters["best"], export_csv)
@@ -63,14 +68,20 @@ def start_hyperopt_show(args: Dict[str, Any]) -> None:
     """
     Show details of a hyperopt epoch previously evaluated
     """
-    from freqtrade.optimize.hyperopt import Hyperopt
+    from freqtrade.optimize.hyperopt import HyperoptOut
     from freqtrade.optimize.hyperopt_data import HyperoptData as hd
 
     config = setup_utils_configuration(args, RunMode.UTIL_NO_EXCHANGE)
 
     print_json = config.get("print_json", False)
     no_header = config.get("hyperopt_show_no_header", False)
-    trials_file = config["user_data_dir"] / "hyperopt_results" / "hyperopt_results.pickle"
+
+    ho = HyperoptOut(config)
+
+    trials_file = config.get("hyperopt_list_trials_file", ho.get_trials_file(config, ho.trials_dir))
+    trials_instances_file = config.get(
+        "hyperopt_list_trials_instances_file", ho.trials_instances_file
+    )
     n = config.get("hyperopt_show_index", -1)
 
     # Previous evaluations
@@ -100,6 +111,6 @@ def start_hyperopt_show(args: Dict[str, Any]) -> None:
 
     if trials:
         val = trials[n]
-        Hyperopt.print_epoch_details(
+        HyperoptOut.print_epoch_details(
             val, total_epochs, print_json, no_header, header_str="Epoch details"
         )

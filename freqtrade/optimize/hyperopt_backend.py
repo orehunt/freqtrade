@@ -1,34 +1,31 @@
-from typing import Any, Dict, List, Tuple
+from typing import Any, List, Dict
 from queue import Queue
 from multiprocessing.managers import SyncManager, Namespace
 from multiprocessing import Lock
 import signal
-from filelock import FileLock
-from pandas import DataFrame, concat, read_hdf
-from numpy import arange, isfinite
-from pathlib import Path
-from time import time as now
 from functools import partial
+from progressbar.bar import ProgressBar
 
-from freqtrade.constants import HYPEROPT_LIST_STEP_VALUES
-from freqtrade.exceptions import OperationalException
 
 from skopt import Optimizer
 
 hyperopt: Any = None
 manager: SyncManager
+pbar: ProgressBar = None
 # Each worker stores the optimizer in the global state
 opt: Optimizer
 optimizers: Queue
 # Manage trials state
 # num_done: int = 0
 # num_saved: int = 0
+# testing: Dict = {}
 # exit: bool = False
 # tail = []
 trials: Namespace
 trials_list: List = [] # (worker local)
 # each worker index position of known past trials (worker local)
 trials_index = 0
+just_saved = 0
 
 # trials counting, variables stored in the epochs namespace, accessed by lock
 # lock = Lock()
@@ -46,7 +43,8 @@ timer: float = 0
 Xi: List = []
 yi: List = []
 # keep track of the points in the worker optimizer
-Xi_h: List = []
+Xi_h: Dict = {}
+tested_h: List = []
 
 def manager_sig_handler(signal, frame, backend: None):
     backend.trials.exit = True
@@ -54,17 +52,3 @@ def manager_sig_handler(signal, frame, backend: None):
 
 def manager_init(backend: Any):
     signal.signal(signal.SIGINT, partial(manager_sig_handler, backend=backend))
-
-def trials_to_df(trials: List, metrics: bool = False) -> Tuple[DataFrame, str]:
-    df = DataFrame(trials)
-    if len(df) > 0:
-        last_col = df.columns[-1]
-    else:
-        raise OperationalException("Trials were empty.")
-    if metrics:
-        df_metrics = DataFrame(t["results_metrics"] for t in trials)
-        return concat([df, df_metrics], axis=1), last_col
-    else:
-        return df, last_col
-
-

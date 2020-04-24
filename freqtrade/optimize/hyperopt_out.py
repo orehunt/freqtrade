@@ -10,6 +10,9 @@ from colorama import Fore, Style
 from pandas import isna, json_normalize, DataFrame
 from multiprocessing.managers import Namespace
 import tabulate
+import progressbar
+from os import path
+import io
 
 from freqtrade.misc import round_dict
 
@@ -30,7 +33,10 @@ with warnings.catch_warnings():
 # from sklearn.ensemble import HistGradientBoostingRegressor
 # from xgboost import XGBoostRegressor
 
+progressbar.streams.wrap_stderr()
+progressbar.streams.wrap_stdout()
 logger = logging.getLogger(__name__)
+
 
 class HyperoptOut(HyperoptData):
     """ Output routines for Hyperopt """
@@ -44,11 +50,7 @@ class HyperoptOut(HyperoptData):
 
     @staticmethod
     def print_epoch_details(
-        trial,
-        total_epochs: int,
-        print_json: bool,
-        no_header: bool = False,
-        header_str: str = None,
+        trial, total_epochs: int, print_json: bool, no_header: bool = False, header_str: str = None
     ) -> None:
         """
         Display details of the hyperopt result
@@ -67,7 +69,11 @@ class HyperoptOut(HyperoptData):
             result_dict: Dict = {}
             for s in ["buy", "sell", "roi", "stoploss", "trailing"]:
                 HyperoptData._params_update_for_json(result_dict, params, s)
-            print(rapidjson.dumps(result_dict, default=str, number_mode=rapidjson.NM_NATIVE))
+            print(
+                rapidjson.dumps(
+                    result_dict, default=str, number_mode=(rapidjson.NM_NATIVE | rapidjson.NM_NAN)
+                )
+            )
 
         else:
             HyperoptOut._params_pretty_print(params, "buy", "Buy hyperspace params:")
@@ -110,13 +116,15 @@ class HyperoptOut(HyperoptData):
         # but the workers access the proxied namespace directly
         if epochs:
             backend.epochs = epochs
-        self.print_result_table(
-            self.config,
-            trials,
-            self.epochs_limit(),
-            self.print_all,
-            self.print_colorized,
-            table_header
+        print(
+            self.get_result_table(
+                self.config,
+                trials,
+                self.epochs_limit(),
+                self.print_all,
+                self.print_colorized,
+                table_header,
+            )
         )
 
     @staticmethod
@@ -145,7 +153,7 @@ class HyperoptOut(HyperoptData):
         )
 
     @staticmethod
-    def print_result_table(
+    def get_result_table(
         config: dict,
         trials: DataFrame,
         total_epochs: int,
@@ -157,14 +165,15 @@ class HyperoptOut(HyperoptData):
         Log result table
         """
         if len(trials) < 1:
-            return
+            return ""
 
         tabulate.PRESERVE_WHITESPACE = True
 
         logger.debug("Formatting results...")
 
         trials["Best"] = ""
-        trials = trials.loc[:,
+        trials = trials.loc[
+            :,
             [
                 "Best",
                 "current_epoch",
@@ -176,7 +185,7 @@ class HyperoptOut(HyperoptData):
                 "loss",
                 "is_initial_point",
                 "is_best",
-            ]
+            ],
         ]
         trials.columns = [
             "Best",
@@ -252,7 +261,7 @@ class HyperoptOut(HyperoptData):
             table = tabulate.tabulate(
                 trials.to_dict(orient="list"), tablefmt="psql", headers="keys", stralign="right"
             )
-        print(table)
+        return table
 
     @staticmethod
     def _format_results_explanation_string(stake_cur: str, results_metrics: Dict) -> str:
@@ -279,3 +288,58 @@ class HyperoptOut(HyperoptData):
             print(".", end="")
             sys.stdout.flush()
             epochs.lock.release()
+
+    @staticmethod
+    def _get_pbar_widgets(total_epochs: Any, print_colorized: bool) -> list:
+        # Define progressbar
+        if print_colorized:
+            return [
+                " [Epoch ",
+                progressbar.Counter(),
+                " of ",
+                total_epochs,
+                " (",
+                progressbar.Percentage(),
+                ")] ",
+                progressbar.Bar(
+                    marker=progressbar.AnimatedMarker(
+                        fill="\N{FULL BLOCK}",
+                        fill_wrap=Fore.GREEN + "{}" + Fore.RESET,
+                        marker_wrap=Style.BRIGHT + "{}" + Style.RESET_ALL,
+                    )
+                ),
+                " [",
+                progressbar.ETA(),
+                ", ",
+                progressbar.Timer(),
+                "]",
+            ]
+        else:
+            return [
+                " [Epoch ",
+                progressbar.Counter(),
+                " of ",
+                total_epochs,
+                " (",
+                progressbar.Percentage(),
+                ")] ",
+                progressbar.Bar(marker=progressbar.AnimatedMarker(fill="\N{FULL BLOCK}")),
+                " [",
+                progressbar.ETA(),
+                ", ",
+                progressbar.Timer(),
+                "]",
+            ]
+
+    @staticmethod
+    def _print_progress(trials_state: Namespace, total_epochs: int, print_colorized: bool) -> list:
+        if not backend.pbar:
+            backend.pbar = progressbar.ProgressBar(
+                maxval=progressbar.UnknownLength,
+                redirect_stdout=True,
+                redirect_stderr=True,
+                widgets=HyperoptOut._get_pbar_widgets(str(total_epochs), print_colorized),
+            )
+        backend.pbar.update(trials_state.num_done)
+        if trials_state.exit:
+            backend.pbar.finish()

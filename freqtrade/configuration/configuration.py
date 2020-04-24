@@ -277,7 +277,7 @@ class Configuration:
                              argname='explore',
                              logstring='Acquisition strategy set to random {}...')
         self._args_to_config(config,
-                             argname='n_points',
+                             argname='ask_points',
                              logstring='Optimizers will be asked for {} points...')
         self._args_to_config(config,
                              argname='spaces',

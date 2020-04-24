@@ -253,6 +253,32 @@ def test_price_to_precision(default_conf, mocker, price, precision_mode, precisi
     assert pytest.approx(exchange.price_to_precision(pair, price)) == expected
 
 
+@pytest.mark.parametrize("price,precision_mode,precision,expected", [
+    (2.34559, 2, 4, 0.0001),
+    (2.34559, 2, 5, 0.00001),
+    (2.34559, 2, 3, 0.001),
+    (2.9999, 2, 3, 0.001),
+    (200.0511, 2, 3, 0.001),
+    # Tests for Tick_size
+    (2.34559, 4, 0.0001, 0.0001),
+    (2.34559, 4, 0.00001, 0.00001),
+    (2.34559, 4, 0.0025, 0.0025),
+    (2.9909, 4, 0.0025, 0.0025),
+    (234.43, 4, 0.5, 0.5),
+    (234.43, 4, 0.0025, 0.0025),
+    (234.43, 4, 0.00013, 0.00013),
+
+])
+def test_price_get_one_pip(default_conf, mocker, price, precision_mode, precision, expected):
+    markets = PropertyMock(return_value={'ETH/BTC': {'precision': {'price': precision}}})
+    exchange = get_patched_exchange(mocker, default_conf, id="binance")
+    mocker.patch('freqtrade.exchange.Exchange.markets', markets)
+    mocker.patch('freqtrade.exchange.Exchange.precisionMode',
+                 PropertyMock(return_value=precision_mode))
+    pair = 'ETH/BTC'
+    assert pytest.approx(exchange.price_get_one_pip(pair, price)) == expected
+
+
 def test_set_sandbox(default_conf, mocker):
     """
     Test working scenario
@@ -1703,6 +1729,20 @@ def test_cancel_order_dry_run(default_conf, mocker, exchange_name):
     default_conf['dry_run'] = True
     exchange = get_patched_exchange(mocker, default_conf, id=exchange_name)
     assert exchange.cancel_order(order_id='123', pair='TKN/BTC') is None
+
+
+@pytest.mark.parametrize("exchange_name", EXCHANGES)
+@pytest.mark.parametrize("order,result", [
+    ({'status': 'closed', 'filled': 10}, False),
+    ({'status': 'closed', 'filled': 0.0}, True),
+    ({'status': 'canceled', 'filled': 0.0}, True),
+    ({'status': 'canceled', 'filled': 10.0}, False),
+    ({'status': 'unknown', 'filled': 10.0}, False),
+    ({'result': 'testest123'}, False),
+    ])
+def test_check_order_canceled_empty(mocker, default_conf, exchange_name, order, result):
+    exchange = get_patched_exchange(mocker, default_conf, id=exchange_name)
+    assert exchange.check_order_canceled_empty(order) == result
 
 
 # Ensure that if not dry_run, we should call API

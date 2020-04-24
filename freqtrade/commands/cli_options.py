@@ -200,14 +200,14 @@ AVAILABLE_CLI_OPTIONS = {
         metavar="NAME",
         default=constants.HYPEROPT_MODE,
     ),
-    "n_points": Arg(
-        "--n-points",
+    "ask_points": Arg(
+        "--ask-points",
         help="Controls how many points to ask to the optimizer "
         "increase if cpu usage of each core "
         "appears low (default: %(default)d).",
         type=int,
         metavar="INT",
-        default=constants.HYPEROPT_N_POINTS,
+        default=constants.HYPEROPT_ASK_POINTS,
     ),
     "lie_strat": Arg(
         "--lie-strat",

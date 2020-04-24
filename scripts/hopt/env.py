@@ -22,9 +22,10 @@ def set_environment(args: dict, paths: list, config) -> None:
         os.environ["FQT_TEST_COND"] = args.z
     if args.ind:
         os.environ["FQT_IND_MODE"] = args.ind
+        os.environ["FQT_PREDS"] = "1"
     if args.amt != 0 or args.ne:
         os.environ["FQT_SKIP_COND"] = "1"
-    if args.ind:
-        os.environ["FQT_IND_MODE"] = args.ind
     if args.sgn:
         os.environ["FQT_SGN"] = args.sgn
+    if args.k:
+        os.environ["FQT_K"] = str(args.k)
