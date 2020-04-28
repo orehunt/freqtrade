@@ -3,11 +3,8 @@ IStrategy interface
 This module defines the interface to apply for strategies
 """
 import logging
-<<<<<<< HEAD
 import sys
-=======
 import warnings
->>>>>>> fedcf1db52a5ee7c157e40d2217ce9d1a59fb504
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from enum import Enum
