@@ -36,7 +36,7 @@ def start_hyperopt_list(args: Dict[str, Any]) -> None:
     # Previous evaluations
     trials = ho.load_trials(
         trials_file,
-        ho.get_last_instance(trials_instances_file, config.get("hyperopt_trials_instance")),
+        config.get("hyperopt_trials_instance", ho.get_last_instance(trials_instances_file)),
     )
     total_epochs = len(trials)
 

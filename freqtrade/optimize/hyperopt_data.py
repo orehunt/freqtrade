@@ -131,14 +131,6 @@ class HyperoptData:
             space_params = HyperoptData._space_params(params, space)
             if space in ["buy", "sell"]:
                 result_dict.setdefault("params", {}).update(space_params)
-            elif space == "roi":
-                # Convert keys in min_roi dict to strings because
-                # rapidjson cannot dump dicts with integer keys...
-                # OrderedDict is used to keep the numeric order of the items
-                # in the dict.
-                result_dict["minimal_roi"] = OrderedDict(
-                    (str(k), v) for k, v in space_params.items()
-                )
             else:  # 'stoploss', 'trailing'
                 result_dict.update(space_params)
 
@@ -183,6 +175,11 @@ class HyperoptData:
         interval = 0.5
         saved = num_trials < 1
         locked = False
+        # strings need to be padded when using append mode
+        min_itemsize = {"results_explanation": 110}
+        if "roi" in trials.columns: # roi stored as json
+            min_itemsize["roi"] = 190
+
         while not saved:
             try:
                 logger.debug(f"\nSaving {num_trials} {plural(num_trials, 'epoch')}.")
@@ -204,7 +201,7 @@ class HyperoptData:
                         data_columns=["Xi_h", "random_state", "loss"],
                         # this is needed because it is a string that can exceed
                         # the size preset by pd, and in append mode it can't be changed
-                        min_itemsize={"results_explanation": 110},
+                        min_itemsize=min_itemsize,
                     )
                 if not backup:
                     trials_state.num_saved += num_trials
@@ -370,7 +367,7 @@ class HyperoptData:
                 spaces = {c.split(sep, 1)[0] for c in cols_with_prefix.columns}
                 for s in spaces:
                     match = f"{s}{sep}"
-                    space = cols_with_prefix.filter(regex=match)
+                    space = cols_with_prefix.filter(regex=f"^{match}")
                     space.columns = space.columns.str.replace(match, "", 1)
                     cols_with_prefix = cols_with_prefix.loc[
                         :, ~cols_with_prefix.columns.str.startswith(match)
@@ -600,6 +597,8 @@ class HyperoptData:
                 try:
                     store = HDFStore(trials_file)
                     store.remove("/{}".format(trials_instance))
+                except KeyError:
+                    pass
                 finally:
                     store.close()
             # Only log at the beginning
@@ -622,6 +621,19 @@ class HyperoptData:
                 return "{}_cv".format(instances[-1])
             else:
                 return instances[-1]
+
+    @staticmethod
+    def clear_instance(trials_file: Path, instance_name: str) -> bool:
+        success = False
+        try:
+            store = HDFStore(trials_file)
+            store.remove("/{}".format(instance_name))
+            success = True
+        except KeyError:
+            pass
+        finally:
+            store.close()
+            return success
 
     @staticmethod
     def get_trials_file(config: dict, trials_dir: Path) -> Path:

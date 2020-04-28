@@ -11,6 +11,7 @@ from abc import abstractmethod
 from time import time as now
 from sys import getsizeof
 from functools import partial
+
 # from pyinstrument import Profiler
 
 # profiler = Profiler()
@@ -26,7 +27,8 @@ from pandas import read_sql, read_parquet, read_hdf, HDFStore
 from sqlalchemy.orm import Session
 from sqlalchemy.engine import Engine
 from sqlalchemy import create_engine
-from numpy import finfo, float64, array
+from numpy import finfo, float64, array, nanvar, nanstd, nanmean, nanmedian, nanmin, nanmax
+from decimal import Decimal
 
 # Import IHyperOpt and IHyperOptLoss to allow unpickling classes from these modules
 import freqtrade.optimize.hyperopt_backend as backend
@@ -252,7 +254,9 @@ class HyperoptMulti(HyperoptOut):
     def opt_params_Xi(v: dict):
         return list(v["params_dict"].values())
 
-    def opt_startup_points(self, opt: Optimizer, trials_state: Namespace, is_shared: bool):
+    def opt_startup_points(
+        self, opt: Optimizer, trials_state: Namespace, is_shared: bool
+    ) -> Optimizer:
         """
         Check for new points saved by other workers (or by previous runs), once every the workers
         saves a batch
@@ -312,6 +316,9 @@ class HyperoptMulti(HyperoptOut):
             backend.Xi_h.update(dict(zip(params_df["Xi_h"].values, params_df["loss"].values)))
         if backend.Xi:  # or just tell prev points
             opt.tell(backend.Xi, backend.yi)
+        else:
+            # get a new point by copy if didn't tell new ones
+            opt = HyperoptMulti.opt_rand(opt)
 
         del backend.Xi[:], backend.yi[:]
         return opt
@@ -356,16 +363,6 @@ class HyperoptMulti(HyperoptOut):
             trials_state.num_done += n + 1
 
         backend.just_saved = self.maybe_log_trials(trials_state, epochs)
-        if backend.just_saved:
-            for h in backend.tested_h:
-                try:
-                    del trials_state.testing[h]
-                finally:
-                    pass
-            del backend.tested_h[:]
-            # after saving epochs also update optimizer acquisition
-            # since there will be new loss scores
-            opt = self.opt_adjust_acq(opt, jobs, epochs, trials_state)
 
         # save optimizer stat and the last points that will be told on the next run
         backend.Xi, backend.yi = [], []
@@ -373,6 +370,17 @@ class HyperoptMulti(HyperoptOut):
             backend.Xi.append(HyperoptMulti.opt_params_Xi(t))
             backend.yi.append(t["loss"])
             backend.Xi_h[t["Xi_h"]] = t["loss"]
+
+        if backend.just_saved:
+            for h in backend.tested_h:
+                try:
+                    del trials_state.testing[h]
+                except KeyError:
+                    pass
+            del backend.tested_h[:]
+            # after saving epochs also update optimizer acquisition
+            # since there will be new loss scores
+            opt = self.opt_adjust_acq(opt, jobs, epochs, trials_state)
         self.opt_state(s_opt=opt)
 
     def maybe_log_trials(self, trials_state: Namespace, epochs: Namespace) -> int:
@@ -419,7 +427,7 @@ class HyperoptMulti(HyperoptOut):
         gc.enable()
 
         is_shared = self.shared
-        asked: Dict[str, List] = {"": None}
+        asked: Dict[str, List] = {}
         asked_d: Dict[str, List] = {}
         # check early if this is the last run
         if trials_state.exit:
@@ -437,10 +445,8 @@ class HyperoptMulti(HyperoptOut):
         tested_yi = []
         untested_Xi = []  # to test
         # if opt.void == -1 the optimizer failed to give a new point (between dispatches), stop
-        # if asked == asked_d  the points returned are the same, stop
         # if opt.Xi > sss the optimizer has more points than the estimated search space size, stop
-        while opt.void != -1 and asked != asked_d and len(opt.Xi) < self.search_space_size:
-            asked_d = asked
+        while opt.void != -1 and len(opt.Xi) < self.search_space_size:
             asked = opt.ask(n_points=self.opt_ask_points, strategy=self.lie_strat())
             # The optimizer doesn't return a list when points are asked with None (skopt behaviour)
             if not self.opt_ask_points:
@@ -473,18 +479,22 @@ class HyperoptMulti(HyperoptOut):
                     # if yes fit a new model with the new points
                     opt.tell(tested_Xi[n_told:], tested_yi[n_told:])
                     told = n_tested_Xi
-                else:  # or get new points from a different random state
+                elif asked != asked_d:  # or get new points from a different random state
                     opt = HyperoptMulti.opt_rand(opt)
+                    # getting a point by copy is the last try before
+                    # terminating because of convergence
+                    asked_d = asked
+                else:
+                    break
             else:
                 break
         # return early if there is nothing to test
         if len(untested_Xi) < 1:
             opt.void = -1
             self.opt_state(s_opt=opt)
-            # it's more likely for exploiters (role<0) to converge
-            # so we only consider explorers empty runs for termination
+            # Terminate after enough workers didn't receive a point to test
             trials_state.empty_strikes += 1
-            if trials_state.empty_strikes >= self.trials_maxout // self.n_explorers:
+            if trials_state.empty_strikes >= self.trials_maxout:
                 trials_state.exit = True
             return
         # run the backtest for each point to do (untested_Xi)
@@ -500,33 +510,94 @@ class HyperoptMulti(HyperoptOut):
         self, opt: Optimizer, jobs: int, epochs: Namespace, trials_state: Namespace
     ) -> Optimizer:
         """ Tune exploration/exploitaion balance of optimizers """
-        # can only tune if we know the loss scores
-        if backend.Xi_h:
+
+        # can only tune if we know the loss scores, and past initial points
+        if len(backend.Xi_h) >= self.n_initial_points:
+            # how many epochs since no best
+            xi, kappa = None, None
+            last_period = epochs.epochs_since_last_best[-1]
+            n_tail = abs(backend.just_saved * self.n_jobs)
             loss = array(list(backend.Xi_h.values()))
-            abs_role = abs(opt.role)
-            # if half past the scheduled max, change acquisition
-            if trials_state.num_done > (epochs.max_epoch - epochs.current_best_epoch) // 2:
-                loss_min = loss.min()
-                # for explorers
-                if opt.role > 0:
-                    # calc xi in relation to the set of loss scores
-                    loss_max = loss.max()
-                    xi = (loss_max / loss_min) * ((loss_max - loss_min) / abs_role)
-                    # calc kappa in relation to the variance of the loss score value
-                    kappa = loss.var() / opt.role
-                elif opt.role < 0:
-                    # calc xi in relation to the best and last loss score
-                    loss_last = loss[-1]
-                    xi = (loss_min / loss_last) * ((loss_min - loss_last) / abs_role)
-                    # calc kappa in relation to the variance of the last n epochs since
-                    # last best
-                    kappa = loss[epochs.epochs_since_last_best[-1] :].var() / abs_role
-            # else reset to average values
+            # calculate base values, dependent on loss score
+            if not len(loss[-last_period:]):
+                # take the full length at the beginning
+                loss_last = loss[-n_tail:]
+                loss_tail = loss[-backend.just_saved :]
             else:
-                xi = loss.std() / abs_role
-                kappa = loss.var() / abs_role
+                # if exploitation phase was triggered before, if so, track from the beginning of the phase
+                # NOTE: it is an absolute index
+                if backend.exploit:
+                    loss_last = loss[backend.exploit :]
+                else:
+                    loss_last = loss[-last_period:]
+                loss_tail = loss[-n_tail:]
+
+            # increase exploitation around
+            # any obs that exhibits a better (lower) score
+            if nanmedian(loss_tail) < nanmedian(loss_last) or nanmean(loss_tail) < nanmean(
+                loss_last
+            ):
+                # set the index of the beginning of exploitation
+                backend.exploit = len(loss) - n_tail
+                # default xi is 0.01, we want some 10e even lower values
+                if opt.acq_func in ("PI", "gp_hedge"):
+                    _, digits, exponent = Decimal(nanvar(loss_tail)).as_tuple()
+                    xi = nanstd(loss_tail) * 10 ** -abs(len(digits) + exponent - 1)
+                # with EI that supports negatives we can just use negative std
+                elif opt.acq_func == "EI":
+                    xi = -nanstd(loss_tail)
+                # LCB uses kappa instead of xi, and is based on variance
+                if opt.acq_func in ("LCB", "gp_hedge"):
+                    kappa = nanvar([epochs.current_best_loss, nanmin(loss_tail)]) or nanvar(
+                        # use mean when we just found a new best as var would be 0
+                        [epochs.current_best_loss, nanmean(loss_tail)]
+                    )
+            else:  # or use average values from the last period
+                # reset exploitation
+                backend.exploit = 0
+                # adjust to tail position as we are in general more exploitative
+                # at the beginning and more explorative towards the end
+                tail_position = (epochs.current_best_epoch + last_period) / epochs.max_epoch
+                if opt.acq_func in ("PI", "EI", "gp_hedge"):
+                    xi = nanstd(loss_last) * tail_position
+                if opt.acq_func in ("LCB", "gp_hedge"):
+                    kappa = nanvar(loss_last) * tail_position
             opt.acq_func_kwargs = {"xi": xi, "kappa": kappa}
+            # don't need to update_next point since model is fit
+            # at the beginning of the next test
         return opt
+
+    # def opt_adjust_acq(
+    #     self, opt: Optimizer, jobs: int, epochs: Namespace, trials_state: Namespace
+    # ) -> Optimizer:
+    #     """ Tune exploration/exploitaion balance of optimizers """
+    #     # can only tune if we know the loss scores
+    #     if backend.Xi_h:
+    #         loss = array(list(backend.Xi_h.values()))
+    #         abs_role = abs(opt.role)
+    #         # if half past the scheduled max, change acquisition
+    #         if trials_state.num_done > (epochs.max_epoch - epochs.current_best_epoch) // 2:
+    #             loss_min = loss.min()
+    #             # for explorers
+    #             if opt.role > 0:
+    #                 # calc xi in relation to the set of loss scores
+    #                 loss_max = loss.max()
+    #                 xi = (loss_max / loss_min) * ((loss_max - loss_min) / abs_role)
+    #                 # calc kappa in relation to the variance of the loss score value
+    #                 kappa = loss.var() / opt.role
+    #             elif opt.role < 0:
+    #                 # calc xi in relation to the best and last loss score
+    #                 loss_last = loss[-1]
+    #                 xi = (loss_min / loss_last) * ((loss_min - loss_last) / abs_role)
+    #                 # calc kappa in relation to the variance of the last n epochs since
+    #                 # last best
+    #                 kappa = loss[epochs.epochs_since_last_best[-1] :].var() / abs_role
+    #         # else reset to average values
+    #         else:
+    #             xi = loss.std() / abs_role
+    #             kappa = loss.var() / abs_role
+    #         opt.acq_func_kwargs = {"xi": xi, "kappa": kappa}
+    #     return opt
 
     @staticmethod
     def filter_void_losses(trials: List, opt: Optimizer) -> List:

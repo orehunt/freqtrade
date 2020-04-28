@@ -15,6 +15,7 @@ pbar: ProgressBar = None
 # Each worker stores the optimizer in the global state
 opt: Optimizer
 optimizers: Queue
+exploit: int = 0
 # Manage trials state
 # num_done: int = 0
 # num_saved: int = 0

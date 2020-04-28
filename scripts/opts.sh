@@ -38,6 +38,13 @@ dir=cfg/
 opt_dir=hyperopt_results
 userdir=${userdir:-user_data}
 exchange_name=${exchange_name:-exchange_testing}
+exchange_tag=${exchange_name/*_}
+if [ "$exchange_tag" == "$exchange_name" ]; then
+    exchange_tag=
+else
+    exchange_tag=_${exchange_tag}
+fi
+exchange_name=${exchange_name/_*}
 if [ -n "$strategy_name" ]; then
     strategy=$dir/strategies/${strategy_name}.json
 else
@@ -48,11 +55,15 @@ hyperopt=$dir/hyperopt.json
 edge=$dir/edge_backtesting.json
 live=$dir/live.json
 askbid=$dir/askbid.json
-exchange=${exchange:-$dir/${exchange_name}.json}
+exchange=${exchange:-$dir/${exchange_name}${exchange_tag}.json}
 paths=$dir/paths.json
 pairlists=$dir/pairlists.json
 pairs_dir=${dir}/pairlists
-amounts=$dir/amounts_backtesting.json
+if [ -e "${dir}/${exchange_name}/amounts_backtesting.json" ]; then
+    amounts=$dir/${exchange_name}/amounts_backtesting.json
+else
+    amounts=$dir/amounts_backtesting.json
+fi
 amounts_default=$dir/amounts/default.json
 amounts_pairs=$dir/amounts/pairs_amounts.json
 

@@ -28,7 +28,7 @@ class HyperoptCV:
 
     @abstractmethod
     def parallel_objective(self, asked, trials_list: List = [], n=0):
-        """ objective run in single opt mode, run the backtest, store the trials into a queue """
+        """ objective run in single opt mode, run the backtest and log the results """
 
     def trials_params(self, offset: int, jobs: int):
         # use the right names for dimensions

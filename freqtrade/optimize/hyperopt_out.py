@@ -2,6 +2,7 @@ import locale
 import warnings
 import logging
 import sys
+import json
 from pprint import pprint
 from typing import Dict, Any
 
@@ -67,7 +68,9 @@ class HyperoptOut(HyperoptData):
 
         if print_json:
             result_dict: Dict = {}
-            for s in ["buy", "sell", "roi", "stoploss", "trailing"]:
+            if "roi" in trial:
+                result_dict["minimal_roi"] = json.loads(trial["roi"])
+            for s in ["buy", "sell", "stoploss", "trailing"]:
                 HyperoptData._params_update_for_json(result_dict, params, s)
             print(
                 rapidjson.dumps(
