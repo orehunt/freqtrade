@@ -861,6 +861,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
 
         # We don't need exchange instance anymore while running hyperopt
         self.backtesting.exchange = None  # type: ignore
+        self.backtesting.pairlists = None  # type: ignore
 
         # Set dimensions, trials instance and paths and load from storage
         self.setup_trials()

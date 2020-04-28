@@ -544,7 +544,6 @@ A fixed slot (mirroring `bid_strategy.order_book_top`) can be defined by setting
     Using `ask_strategy.order_book_max` higher than 1 will result in improper dry-run results (significantly better than real orders executed on exchange), since dry-run assumes orders to be filled almost instantly.
     It is therefore advised to not use this setting for dry-runs.
 
-
 #### Sell price without Orderbook enabled
 
 When not using orderbook (`ask_strategy.use_order_book=False`), the price at the `ask_strategy.price_side` side (defaults to `"ask"`) from the ticker will be used as the sell price.
@@ -585,7 +584,7 @@ It uses configuration from `exchange.pair_whitelist` and `exchange.pair_blacklis
 
 #### Volume Pair List
 
-`VolumePairList` selects `number_assets` top pairs based on `sort_key`, which can be one of `askVolume`, `bidVolume` and `quoteVolume` and defaults to `quoteVolume`.
+`VolumePairList` selects `number_assets` top pairs based on `sort_key`, which can only be `quoteVolume`.
 
 `VolumePairList` considers outputs of previous pairlists unless  it's the first configured pairlist, it does not consider `pair_whitelist`, but selects the top assets from all available markets (with matching stake-currency) on the exchange.
 
@@ -593,8 +592,6 @@ It uses configuration from `exchange.pair_whitelist` and `exchange.pair_blacklis
 
 `VolumePairList` is based on the ticker data, as reported by the ccxt library:
 
-* The `bidVolume` is the volume (amount) of current best bid in the orderbook.
-* The `askVolume` is the volume (amount) of current best ask in the orderbook.
 * The `quoteVolume` is the amount of quote (stake) currency traded (bought or sold) in last 24 hours.
 
 ```json
@@ -622,6 +619,7 @@ Min price precision is 8 decimals. If price is 0.00000011 - one step would be 0.
 These pairs are dangerous since it may be impossible to place the desired stoploss - and often result in high losses.
 
 #### Spread Filter
+
 Removes pairs that have a difference between asks and bids above the specified ratio (default `0.005`).
 Example:
 If `DOGE/BTC` maximum bid is 0.00000026 and minimum ask is 0.00000027 the ratio is calculated as: `1 - bid/ask ~= 0.037` which is `> 0.005` 
