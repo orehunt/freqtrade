@@ -47,6 +47,7 @@ freqtrade $plot_type \
           -c $amounts \
           -c $amounts_default \
           -c $amounts_tuned \
+          -c $askbid \
           -c $pairlists \
           -c $paths \
           -i $timeframe \

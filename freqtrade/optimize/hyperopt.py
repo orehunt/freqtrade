@@ -499,12 +499,14 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             # store roi as json to remember dict k:v mapping
             # without custom hyperopt class
             if has_roi_space:
-                v["roi"] = json.dumps({
-                    str(k): v
-                    for k, v in self.custom_hyperopt.generate_roi_table(
-                        v["params_dict"]
-                    ).items()
-                })
+                v["roi"] = json.dumps(
+                    {
+                        str(k): v
+                        for k, v in self.custom_hyperopt.generate_roi_table(
+                            v["params_dict"]
+                        ).items()
+                    }
+                )
             logger.debug(f"Optimizer epoch evaluated: {v}")
             if is_best:
                 current_best = current
@@ -536,7 +538,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         hyperopt_params = hash([d.name for d in self.dimensions])
         self.trials_file = self.get_trials_file(self.config, self.trials_dir)
         self.trials_instance = f"{hyperopt_loss}_{hyperopt_params}"
-        logger.info(f"Hyperopt state will be saved to " f"key {self.trials_instance:.40}[...]")
+        logger.info(f"Hyperopt state will be saved to " f"key {self.trials_instance:.64}[...]")
         # clean state depending on mode
         try:
             if self.config.get("hyperopt_clear") and not self.cv:
@@ -557,7 +559,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         except KeyError:
             pass
         finally:
-            if 'store' in vars():
+            if "store" in vars():
                 store.close()
 
         load_instance = self.config.get("hyperopt_trials_instance")
@@ -579,9 +581,17 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                 backup=(backup or not self.cv),
                 clear=False,
             )
+            logger.info(f"Loaded {len(self.trials)} previous trials from storage.")
             if self.cv:
+                if len(self.trials) < 1:
+                    raise OperationalException("CV requires a starting dataset.")
                 # in cross validation apply filtering
                 self.target_trials = self.filter_trials(self.trials, self.config)
+                logger.info(
+                    "Filtered {} trials down to {}.".format(
+                        len(self.trials), len(self.target_trials)
+                    )
+                )
                 self.dimensions = [
                     k for k in self.target_trials.filter(regex="^params_dict\.").columns
                 ]

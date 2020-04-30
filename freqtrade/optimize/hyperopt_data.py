@@ -1,4 +1,5 @@
 import logging
+import os
 import warnings
 import json
 import random
@@ -99,6 +100,9 @@ class HyperoptData:
         self.hyperopt_dir = "hyperopt_data"
 
         self.trials_dir = self.config["user_data_dir"] / self.hyperopt_dir / "trials"
+
+        if not os.path.exists(self.trials_dir):
+            os.makedirs(self.trials_dir)
 
         self.trials_instances_file = (
             self.config["user_data_dir"] / self.hyperopt_dir / "trials_instances.json"
@@ -601,9 +605,6 @@ class HyperoptData:
                     pass
                 finally:
                     store.close()
-            # Only log at the beginning
-            if hasattr(backend, "trials") and not backend.trials.exit:
-                logger.info(f"Loaded {len(trials)} previous trials from storage.")
         return trials
 
     @staticmethod
