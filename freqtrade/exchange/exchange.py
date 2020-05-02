@@ -135,7 +135,10 @@ class Exchange:
         """
         logger.debug("Exchange object destroyed, closing async loop")
         if self._api_async and inspect.iscoroutinefunction(self._api_async.close):
-            asyncio.get_event_loop().run_until_complete(self._api_async.close())
+            try:
+                asyncio.get_event_loop().run_until_complete(self._api_async.close())
+            except RuntimeError:
+                asyncio.new_event_loop().run_until_complete(self._api_async.close())
 
     def _init_ccxt(self, exchange_config: Dict[str, Any], ccxt_module: CcxtModuleType = ccxt,
                    ccxt_kwargs: dict = None) -> ccxt.Exchange:

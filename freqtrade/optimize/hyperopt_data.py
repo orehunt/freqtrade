@@ -181,7 +181,7 @@ class HyperoptData:
         locked = False
         # strings need to be padded when using append mode
         min_itemsize = {"results_explanation": 110}
-        if "roi" in trials.columns: # roi stored as json
+        if "roi" in trials.columns:  # roi stored as json
             min_itemsize["roi"] = 190
 
         while not saved:
@@ -388,8 +388,8 @@ class HyperoptData:
             "enabled": config.get("hyperopt_list_filter", True),
             "dedup": config.get("hyperopt_list_dedup", False),
             "best": config.get("hyperopt_list_best", []),
-            "n_best": config.get("hyperopt_list_n_best", 10),
-            "ratio_best": config.get("hyperopt_list_ratio_best", 0.99),
+            "pct_best": config.get("hyperopt_list_pct_best", 0.1),
+            "cutoff_best": config.get("hyperopt_list_cutoff_best", 0.99),
             "profitable": config.get("hyperopt_list_profitable", False),
             "min_trades": config.get("hyperopt_list_min_trades", None),
             "max_trades": config.get("hyperopt_list_max_trades", None),
@@ -423,10 +423,6 @@ class HyperoptData:
 
         if not filters["enabled"] or len(trials) < 1:
             return hd.list_or_df(trials, return_list)
-        if filters["dedup"]:
-            return hd.list_or_df(hd.dedup_trials(trials), return_list)
-        if filters["best"]:
-            return hd.list_or_df(hd.norm_best(trials, filters), return_list)
         if filters["profitable"]:
             trials = trials.loc[trials["profit"] > 0]
         if filters["min_trades"] is not None:
@@ -452,7 +448,15 @@ class HyperoptData:
             trials = with_trades
 
         if len(trials) > 0:
-            return hd.list_or_df(hd.sample_trials(trials, filters), return_list)
+            flt_trials = []
+            if filters["dedup"]:
+                flt_trials.append(hd.dedup_trials(trials))
+            if filters["best"]:
+                flt_trials.append(hd.norm_best(trials, filters))
+            flt_trials.append(hd.sample_trials(trials, filters))
+            return hd.list_or_df(
+                concat(flt_trials).drop_duplicates(subset="current_epoch"), return_list
+            )
         else:
             return hd.list_or_df(trials, return_list)
 
@@ -460,9 +464,11 @@ class HyperoptData:
     def norm_best(trials: Any, filters: dict) -> List:
         """ Normalize metrics and sort by sum or minimum score """
         metrics = ("profit", "avg_profit", "duration", "trade_count", "loss")
-        min_ratio = filters["ratio_best"]
+        min_ratio = filters["cutoff_best"]
         types_best = filters["best"]
-        n_best = filters["n_best"] // len(types_best)
+        n_best = int(len(trials) * filters["pct_best"] // len(types_best))
+        if n_best < 2:
+            n_best = 2
 
         # invert loss and duration to simplify
         trials["loss"] = trials["loss"].mul(-1)
@@ -493,11 +499,11 @@ class HyperoptData:
 
         if "ratio" in types_best:
             # filter the trials to the ones that meet the min_ratio for all the metrics
-            ratio_best = trials.sort_values("norm_ratio").iloc[-n_best:]
+            cutoff_best = trials.sort_values("norm_ratio").iloc[-n_best:]
         if "sum" in types_best:
             sum_best = trials.sort_values("norm_sum").iloc[-n_best:]
 
-        return concat([ratio_best, sum_best]).drop_duplicates(subset="current_epoch")
+        return concat([cutoff_best, sum_best]).drop_duplicates(subset="current_epoch")
 
     @staticmethod
     def dedup_trials(trials: DataFrame) -> DataFrame:
@@ -554,12 +560,11 @@ class HyperoptData:
         if len(steps) > len(trials):
             min_step = step_v * (len(steps) / len(trials))
             if not defined_range:
-                raise OperationalException(
+                logger.warn(
                     f"Step value of {step_v} for metric {step_k} is too small. "
-                    f"Use a minimum of {min_step:.4f}, or choose closer bounds."
+                    f"Using a minimum of {min_step:.4f}"
                 )
-            else:
-                step_v = min_step
+            step_v = min_step
         for n, s in enumerate(steps):
             try:
                 t = (

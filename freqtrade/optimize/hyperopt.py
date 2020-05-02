@@ -82,12 +82,6 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
     def __init__(self, config: Dict[str, Any]) -> None:
         super().__init__(config)
 
-        self.backtesting = Backtesting(self.config)
-
-        self.custom_hyperopt = HyperOptResolver.load_hyperopt(self.config)
-        self.custom_hyperoptloss = HyperOptLossResolver.load_hyperoptloss(self.config)
-        self.calculate_loss = self.custom_hyperoptloss.hyperopt_loss_function
-
         # runtime
         self.n_jobs = self.config.get("hyperopt_jobs", -1)
         if self.n_jobs < 0:
@@ -98,8 +92,15 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         # or every n jobs
         self.trials_maxout = self.config.get("hyperopt_trials_maxout", self.n_jobs)
 
-        # configure multi mode
+        # configure multi mode, before backtesting to not spawn another exchange instance
+        # inside the manager
         self.setup_multi()
+
+        self.backtesting = Backtesting(self.config)
+
+        self.custom_hyperopt = HyperOptResolver.load_hyperopt(self.config)
+        self.custom_hyperoptloss = HyperOptLossResolver.load_hyperoptloss(self.config)
+        self.calculate_loss = self.custom_hyperoptloss.hyperopt_loss_function
 
         # Populate functions here (hasattr is slow so should not be run during "regular" operations)
         if hasattr(self.custom_hyperopt, "populate_indicators"):
@@ -587,11 +588,14 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                     raise OperationalException("CV requires a starting dataset.")
                 # in cross validation apply filtering
                 self.target_trials = self.filter_trials(self.trials, self.config)
-                logger.info(
-                    "Filtered {} trials down to {}.".format(
-                        len(self.trials), len(self.target_trials)
+                if len(self.target_trials) < 1:
+                    self.target_trials = self.trials
+                else:
+                    logger.info(
+                        "Filtered {} trials down to {}.".format(
+                            len(self.trials), len(self.target_trials)
+                        )
                     )
-                )
                 self.dimensions = [
                     k for k in self.target_trials.filter(regex="^params_dict\.").columns
                 ]
@@ -870,8 +874,8 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         dump(preprocessed, self.data_pickle_file)
 
         # We don't need exchange instance anymore while running hyperopt
-        self.backtesting.exchange = None  # type: ignore
-        self.backtesting.pairlists = None  # type: ignore
+        self.backtesting.exchange = None
+        self.backtesting.pairlists = None
 
         # Set dimensions, trials instance and paths and load from storage
         self.setup_trials()

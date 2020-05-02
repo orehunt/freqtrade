@@ -1,7 +1,8 @@
 #!/bin/bash
 
-while getopts "td:q:e:i:p:f:xm:ctd:s:n:g:u:l:r:y:o:v:b:j" o; do
+while getopts "ta:d:q:e:i:p:f:xm:ctd:s:n:g:u:l:r:y:o:v:b:j" o; do
     case "$o" in
+        a) stake_amount="$OPTARG" ;;
         t) dltype="--dl-trades" ;;
         d) days="$OPTARG" ;;
         q) quote="$OPTARG" ;;
@@ -78,6 +79,9 @@ if [ -n "$tuned_amounts" ]; then
 else
     amounts_tuned=$dir/roi/${timeframe}.json
 fi
+
+[ -n "$open_trades" ] && open_trades_arg="--max-open-trades $open_trades"
+[ -n "$stake_amount" ] && stake_amount_arg="--stake-amount $stake_amount"
 
 days=${days:-21}
 timestamp="$(date +%s)"

@@ -168,6 +168,8 @@ class HyperoptMulti(HyperoptOut):
         backend.trials.num_saved = 0
         # terminate early if all tests are being filtered out
         backend.trials.empty_strikes = 0
+        # in shared mode the void_loss value is the same across workers
+        backend.trials.void_loss = VOID_LOSS
         # at the end collect the remaining trials to save here
         backend.trials.tail = backend.manager.list([])
         # stores the hashes of points currently getting tested
@@ -500,7 +502,7 @@ class HyperoptMulti(HyperoptOut):
         # run the backtest for each point to do (untested_Xi)
         trials = [self.backtest_params(X) for X in untested_Xi]
         # filter losses
-        void_filtered = HyperoptMulti.filter_void_losses(trials, opt)
+        void_filtered = HyperoptMulti.filter_void_losses(trials, opt, trials_state, is_shared)
 
         self.opt_log_trials(opt, void_filtered, t, jobs, is_shared, trials_state, epochs)
         # disable gc at the end to prevent disposal of global vars
@@ -600,14 +602,19 @@ class HyperoptMulti(HyperoptOut):
     #     return opt
 
     @staticmethod
-    def filter_void_losses(trials: List, opt: Optimizer) -> List:
+    def filter_void_losses(trials: List, opt: Optimizer, trials_state: Namespace, is_shared=False) -> List:
         """ Remove out of bound losses from the results """
-        if opt.void_loss == VOID_LOSS and len(opt.yi) < 1:
+        if opt.void_loss == VOID_LOSS and len(backend.Xi_h) < 1:
             # only exclude results at the beginning when void loss is yet to be set
             void_filtered = list(filter(lambda t: t["loss"] != VOID_LOSS, trials))
         else:
             if opt.void_loss == VOID_LOSS:  # set void loss once
-                opt.void_loss = max(opt.yi)
+                if is_shared:
+                    if trials_state.void_loss == VOID_LOSS:
+                        trials_state.void_loss = max(backend.Xi_h.values())
+                    opt.void_loss = trials_state.void_loss
+                else:
+                    opt.void_loss = max(backend.Xi_h.values())
             void_filtered = []
             # default bad losses to set void_loss
             for n, t in enumerate(trials):
