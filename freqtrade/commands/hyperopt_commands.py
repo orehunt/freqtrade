@@ -96,7 +96,7 @@ def start_hyperopt_show(args: Dict[str, Any]) -> None:
     trials = hd.filter_trials(trials, config)
     trials_epochs = len(trials)
 
-    if n > trials_epochs:
+    if n > filtered_epochs:
         raise OperationalException(
             f"The index of the epoch to show should be less than {trials_epochs + 1}."
         )
