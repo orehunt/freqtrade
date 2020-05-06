@@ -5,6 +5,7 @@ import random
 import os
 import gc
 import tempfile
+import sys
 from psutil import virtual_memory
 from typing import Any, Dict, List, Tuple
 from abc import abstractmethod
@@ -27,7 +28,18 @@ from pandas import read_sql, read_parquet, read_hdf, HDFStore
 from sqlalchemy.orm import Session
 from sqlalchemy.engine import Engine
 from sqlalchemy import create_engine
-from numpy import finfo, float64, array, nanvar, nanstd, nanmean, nanmedian, nanmin, nanmax
+from numpy import (
+    finfo,
+    float64,
+    array,
+    nanvar,
+    nanstd,
+    nanmean,
+    nanmedian,
+    nanmin,
+    nanmax,
+    isfinite,
+)
 from decimal import Decimal
 
 # Import IHyperOpt and IHyperOptLoss to allow unpickling classes from these modules
@@ -72,8 +84,10 @@ class HyperoptMulti(HyperoptOut):
         # at the end dispatch wrap up tasks
         if backend.trials.exit:
             for t in range(jobs):
+                HyperoptOut._print_progress(t, jobs, self.trials_maxout)
                 yield t
             return
+
         # termination window
         w = self.trials_maxout * jobs
         t = len(self.trials)
@@ -86,6 +100,7 @@ class HyperoptMulti(HyperoptOut):
                     t, jobs, backend.trials, backend.epochs
                 ):
                     break
+            HyperoptOut._print_progress(t, jobs, self.trials_maxout)
             yield t
 
     def setup_multi(self):
@@ -159,6 +174,10 @@ class HyperoptMulti(HyperoptOut):
         backend.epochs = backend.manager.Namespace()
         # when changing epochs counting and saving trials
         backend.epochs.lock = backend.manager.Lock()
+        # tracks the balance between explorers (+) and exploiters (-)
+        backend.epochs.explo = 0
+        # tracks number of duplicate points received by asking
+        backend.epochs.convergence = 0
         backend.trials = backend.manager.Namespace()
         # prevent reading to the store while saving
         backend.trials.lock = backend.manager.Lock()
@@ -356,13 +375,13 @@ class HyperoptMulti(HyperoptOut):
             # points evaluated so far..
             initial_points = opt._n_initial_points
             # set initial point flag and optimizer random state
-            for n, v in enumerate(void_filtered):
+            for n, v in enumerate(void_filtered, 1):
                 v["is_initial_point"] = initial_points - n > 0
                 v["random_state"] = rs
                 # hash Xi to allow queries over it since it's a list
                 v["Xi_h"] = hash(HyperoptMulti.opt_params_Xi(v))
             backend.trials_list.extend(void_filtered)
-            trials_state.num_done += n + 1
+            trials_state.num_done += n
 
         backend.just_saved = self.maybe_log_trials(trials_state, epochs)
 
@@ -380,9 +399,14 @@ class HyperoptMulti(HyperoptOut):
                 except KeyError:
                     pass
             del backend.tested_h[:]
+            # decrement the count of buffered trials by the number of saved trials
+            trials_state.num_done -= backend.just_saved + 1
             # after saving epochs also update optimizer acquisition
             # since there will be new loss scores
-            opt = self.opt_adjust_acq(opt, jobs, epochs, trials_state)
+            opt = self.opt_adjust_acq(opt, jobs, epochs, trials_state, is_shared)
+            # update the void loss to a worse one
+            if opt.yi:
+                opt.void_loss = max(opt.yi)
         self.opt_state(s_opt=opt)
 
     def maybe_log_trials(self, trials_state: Namespace, epochs: Namespace) -> int:
@@ -422,7 +446,6 @@ class HyperoptMulti(HyperoptOut):
         Shared: optimizers share the results as soon as they are completed;
         Multi: optimizers share results but only following the points asked by the model
         """
-        HyperoptOut.log_results_immediate(t, epochs)
         if not backend.timer:
             backend.timer = now()
         opt = HyperoptMulti.opt_state(optimizers)
@@ -462,7 +485,8 @@ class HyperoptMulti(HyperoptOut):
                 past_Xi = prev_asked[h][0]
                 past_yi = prev_asked[h][1]
                 if past_yi is not None:
-                    logger.warn("A point was previously asked by another worker..")
+                    logger.debug("A point was previously asked by another worker..")
+                    epochs.convergence += 1
                     if past_Xi not in tested_Xi:
                         tested_Xi.append(past_Xi)
                         tested_yi.append(past_yi)
@@ -508,18 +532,28 @@ class HyperoptMulti(HyperoptOut):
         # disable gc at the end to prevent disposal of global vars
         gc.disable()
 
+    @staticmethod
     def opt_adjust_acq(
-        self, opt: Optimizer, jobs: int, epochs: Namespace, trials_state: Namespace
+            opt: Optimizer, jobs: int, epochs: Namespace, trials_state: Namespace, is_shared: bool
     ) -> Optimizer:
         """ Tune exploration/exploitaion balance of optimizers """
 
+        opt.n_initial_points_
         # can only tune if we know the loss scores, and past initial points
-        if len(backend.Xi_h) >= self.n_initial_points:
+        # in multi mode only use optimizer initial points count
+        if (is_shared and len(backend.Xi_h) >= opt.n_initial_points_) or (
+            not is_shared and opt._n_initial_points < 0
+        ):
             # how many epochs since no best
             xi, kappa = None, None
             last_period = epochs.epochs_since_last_best[-1]
-            n_tail = abs(backend.just_saved * self.n_jobs)
-            loss = array(list(backend.Xi_h.values()))
+            n_tail = backend.just_saved * jobs
+            if is_shared:
+                loss = array(list(backend.Xi_h.values()))
+            else:
+                loss = array(opt.Xi)
+                last_period = last_period // jobs
+                n_tail = backend.just_saved * (len(backend.Xi_h) // len(opt.Xi) or 2)
             # calculate base values, dependent on loss score
             if not len(loss[-last_period:]):
                 # take the full length at the beginning
@@ -539,6 +573,8 @@ class HyperoptMulti(HyperoptOut):
             if nanmedian(loss_tail) < nanmedian(loss_last) or nanmean(loss_tail) < nanmean(
                 loss_last
             ):
+                # exploiters decrement
+                epochs.explo -= 1
                 # set the index of the beginning of exploitation
                 backend.exploit = len(loss) - n_tail
                 # default xi is 0.01, we want some 10e even lower values
@@ -555,6 +591,8 @@ class HyperoptMulti(HyperoptOut):
                         [epochs.current_best_loss, nanmean(loss_tail)]
                     )
             else:  # or use average values from the last period
+                # explorers incremenet
+                epochs.explo += 1
                 # reset exploitation
                 backend.exploit = 0
                 # adjust to tail position as we are in general more exploitative
@@ -578,7 +616,7 @@ class HyperoptMulti(HyperoptOut):
     #         loss = array(list(backend.Xi_h.values()))
     #         abs_role = abs(opt.role)
     #         # if half past the scheduled max, change acquisition
-    #         if trials_state.num_done > (epochs.max_epoch - epochs.current_best_epoch) // 2:
+    #         if trials_state.num_saved + trials_state.num_done > (epochs.max_epoch - epochs.current_best_epoch) // 2:
     #             loss_min = loss.min()
     #             # for explorers
     #             if opt.role > 0:
@@ -602,7 +640,9 @@ class HyperoptMulti(HyperoptOut):
     #     return opt
 
     @staticmethod
-    def filter_void_losses(trials: List, opt: Optimizer, trials_state: Namespace, is_shared=False) -> List:
+    def filter_void_losses(
+        trials: List, opt: Optimizer, trials_state: Namespace, is_shared=False
+    ) -> List:
         """ Remove out of bound losses from the results """
         if opt.void_loss == VOID_LOSS and len(backend.Xi_h) < 1:
             # only exclude results at the beginning when void loss is yet to be set
@@ -618,7 +658,7 @@ class HyperoptMulti(HyperoptOut):
             void_filtered = []
             # default bad losses to set void_loss
             for n, t in enumerate(trials):
-                if t["loss"] == VOID_LOSS:
+                if t["loss"] == VOID_LOSS or not isfinite(t["loss"]):
                     trials[n]["loss"] = opt.void_loss
             void_filtered = trials
         return void_filtered

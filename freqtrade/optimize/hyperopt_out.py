@@ -8,12 +8,13 @@ from typing import Dict, Any
 
 import rapidjson
 from colorama import Fore, Style
-from pandas import isna, json_normalize, DataFrame
+from pandas import DataFrame, isna
 from multiprocessing.managers import Namespace
 import tabulate
-import progressbar
-from os import path
-import io
+import sys
+from tqdm import tqdm
+from tqdm.contrib import DummyTqdmFile
+import enlighten
 
 from freqtrade.misc import round_dict
 
@@ -34,8 +35,6 @@ with warnings.catch_warnings():
 # from sklearn.ensemble import HistGradientBoostingRegressor
 # from xgboost import XGBoostRegressor
 
-progressbar.streams.wrap_stderr()
-progressbar.streams.wrap_stdout()
 logger = logging.getLogger(__name__)
 
 
@@ -293,56 +292,53 @@ class HyperoptOut(HyperoptData):
             epochs.lock.release()
 
     @staticmethod
-    def _get_pbar_widgets(total_epochs: Any, print_colorized: bool) -> list:
-        # Define progressbar
-        if print_colorized:
-            return [
-                " [Epoch ",
-                progressbar.Counter(),
-                " of ",
-                total_epochs,
-                " (",
-                progressbar.Percentage(),
-                ")] ",
-                progressbar.Bar(
-                    marker=progressbar.AnimatedMarker(
-                        fill="\N{FULL BLOCK}",
-                        fill_wrap=Fore.GREEN + "{}" + Fore.RESET,
-                        marker_wrap=Style.BRIGHT + "{}" + Style.RESET_ALL,
-                    )
-                ),
-                " [",
-                progressbar.ETA(),
-                ", ",
-                progressbar.Timer(),
-                "]",
-            ]
-        else:
-            return [
-                " [Epoch ",
-                progressbar.Counter(),
-                " of ",
-                total_epochs,
-                " (",
-                progressbar.Percentage(),
-                ")] ",
-                progressbar.Bar(marker=progressbar.AnimatedMarker(fill="\N{FULL BLOCK}")),
-                " [",
-                progressbar.ETA(),
-                ", ",
-                progressbar.Timer(),
-                "]",
-            ]
+    def _init_progressbar(print_colorized: bool, total_epochs: int, cv=False):
+        global logger
+        if backend.pbar:
+            backend.pbar["total"].close()
+        color='green'
+        resume = backend.trials.num_saved
+        opt_format = (
+            "Avg: {Style.BRIGHT}{Fore.BLUE}{backend.epochs.avg_last_occurrence} "
+            "{Style.RESET_ALL}"
+            "Exp: {Style.BRIGHT}{Fore.CYAN}{backend.epochs.explo} "
+            "{Style.RESET_ALL}"
+            "Cvg: {Style.BRIGHT}{Fore.MAGENTA}{backend.epochs.convergence} "
+            "{Style.RESET_ALL}"
+        ) if not cv else ""
+        trials_format = (
+            "Best: "
+            "{Style.BRIGHT}{backend.epochs.current_best_epoch} [{backend.epochs.current_best_loss:.02}] "
+            "{Style.RESET_ALL}"
+            f"{opt_format}"
+            "Buf: {Style.BRIGHT}{Fore.YELLOW}{backend.trials.num_done} "
+            "{Style.RESET_ALL}"
+            "Empty: {Style.BRIGHT}{Fore.RED}{backend.trials.empty_strikes} "
+            "{Style.RESET_ALL}["
+            )
+        bar_format = (
+            f"{trials_format}"
+            "{desc_pad}{percentage:3.0f}%|{bar}| "
+            "{count:{len_total}d}/{total:d} "
+            "[{elapsed}<{eta}, {rate:.2f}{unit_pad}{unit}/s]"
+        )
+        counter_format = (
+            f"{trials_format}"
+            "{desc_pad}{count:d} {unit}{unit_pad}{elapsed},"
+            " {rate:.2f}{unit_pad}{unit}/s]{fill}"
+        )
+        backend.pbar["manager"] = enlighten.Manager()
+        backend.pbar["total"] = backend.pbar["manager"].counter(
+            total=total_epochs,
+            unit="epochs",
+            bar_format=bar_format,
+            counter_format=counter_format,
+            color=color,
+            additional_fields={"Style": Style, "Fore": Fore, "backend": backend},
+        )
 
     @staticmethod
-    def _print_progress(trials_state: Namespace, total_epochs: int, print_colorized: bool) -> list:
-        if not backend.pbar:
-            backend.pbar = progressbar.ProgressBar(
-                maxval=progressbar.UnknownLength,
-                redirect_stdout=True,
-                redirect_stderr=True,
-                widgets=HyperoptOut._get_pbar_widgets(str(total_epochs), print_colorized),
-            )
-        backend.pbar.update(trials_state.num_done)
-        if trials_state.exit:
-            backend.pbar.finish()
+    def _print_progress(t: int, jobs: int, maxout: int, finish=False):
+        backend.pbar["total"].update(backend.trials.num_saved - backend.pbar["total"].count)
+        if finish:
+            backend.pbar["total"].close()

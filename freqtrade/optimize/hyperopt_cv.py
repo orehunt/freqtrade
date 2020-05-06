@@ -9,6 +9,7 @@ from joblib import Parallel, delayed, wrap_non_picklable_objects
 from freqtrade.optimize.hyperopt_interface import IHyperOpt  # noqa: F401
 from freqtrade.optimize.hyperopt_loss_interface import IHyperOptLoss  # noqa: F401
 from freqtrade.optimize.hyperopt_data import HyperoptData
+from freqtrade.optimize.hyperopt_out import HyperoptOut
 import freqtrade.optimize.hyperopt_backend as backend
 
 # Suppress scikit-learn FutureWarnings from skopt
@@ -38,10 +39,12 @@ class HyperoptCV:
             )
             Xi = self.target_trials.loc[:, params_cols].to_dict("records")
             for t, X in enumerate(Xi[offset:]):
+                HyperoptOut._print_progress(t, jobs, self.trials_maxout)
                 yield t, X
         else:
             # loop over jobs to schedule the last dispatch to collect unsaved epochs
             for j in range(2*jobs):
+                HyperoptOut._print_progress(j, jobs, self.trials_maxout)
                 yield j, []
 
     def run_cv_backtest_parallel(self, parallel: Parallel, jobs: int):

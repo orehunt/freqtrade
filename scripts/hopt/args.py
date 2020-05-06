@@ -40,7 +40,7 @@ def parse_hopt_args() -> dict:
     parser.add_argument("-i", help="timeframe", type=str, default="1h")
     parser.add_argument("-rand", help="random state", type=int)
     parser.add_argument("-psco", help="print scores", action="store_true")
-    parser.add_argument("-inst", help="trials instance name", type=str)
+    parser.add_argument("-inst", help="trials instance name", type=str, default="")
     parser.add_argument(
         "-lo", help="loss function, if split the first part is for trials instance", type=str
     )

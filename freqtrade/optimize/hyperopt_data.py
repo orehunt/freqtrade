@@ -17,7 +17,7 @@ from joblib import dump, load
 from multiprocessing.managers import Namespace
 from filelock import FileLock
 from pandas import DataFrame, isna, json_normalize, read_hdf, concat, HDFStore
-from numpy import arange, float64, isfinite
+from numpy import arange, float64, isfinite, nanmean
 from os import path
 import io
 
@@ -149,7 +149,7 @@ class HyperoptData:
             f"results_metrics{sep}avg_profit",
             f"results_metrics{sep}duration",
         ):
-            trials[col] = trials[col].astype(float64, copy=False)
+            trials[col] = trials[col].astype(float64, copy=False).fillna(0)
         return trials
 
     @staticmethod
@@ -188,10 +188,12 @@ class HyperoptData:
             try:
                 logger.debug(f"\nSaving {num_trials} {plural(num_trials, 'epoch')}.")
                 # cast types
-                trials = HyperoptData.cast_trials_types(trials).dropna()
+                trials = HyperoptData.cast_trials_types(trials)
+                # print(trials.loc[trials.isna().any(axis=1)])
+                trials = HyperoptData.cast_trials_types(trials)
                 # save on storage to hdf, lock is blocking
                 locked = trials_state.lock.acquire()
-                if trials_state.lock:
+                if locked:
                     trials.to_hdf(
                         trials_file,
                         key=instance_name,
@@ -253,7 +255,7 @@ class HyperoptData:
             trials = read_hdf(trials_file, key=trials_instance, where=where, start=start)
             # make a copy of the trials in case this optimization run corrupts it
             # (wrongful termination)
-            if backup:
+            if backup and len(trials) > 0:
                 HyperoptData.save_trials(
                     trials,
                     trials_state,
@@ -261,14 +263,20 @@ class HyperoptData:
                     instance_name=f"{trials_instance}_bak",
                     backup=True,
                 )
+            elif len(trials) < 1:
+                logger.warn(f"Instance table {trials_instance} appears empty, using backup...")
+                trials = read_hdf(trials_file, key=f"{trials_instance}_bak", where=where)
         except (
             KeyError,
             AttributeError,
         ) as e:  # trials instance is not in the database or corrupted
             # if corrupted
-            if type(e) == AttributeError:
-                logger.warn(f"Instance table {trials_instance} appears corrupted, using backup...")
-                trials = read_hdf(trials_file, key=f"{trials_instance}_bak", where=where)
+            if backup or not start:
+                try:
+                    logger.warn(f"Instance table {trials_instance} either empty or corrupted, trying backup...")
+                    trials = read_hdf(trials_file, key=f"{trials_instance}_bak", where=where)
+                except KeyError:
+                    logger.warn(f"Backup not found...")
         return trials
 
     @staticmethod
@@ -390,7 +398,6 @@ class HyperoptData:
             "best": config.get("hyperopt_list_best", []),
             "pct_best": config.get("hyperopt_list_pct_best", 0.1),
             "cutoff_best": config.get("hyperopt_list_cutoff_best", 0.99),
-            "profitable": config.get("hyperopt_list_profitable", False),
             "min_trades": config.get("hyperopt_list_min_trades", None),
             "max_trades": config.get("hyperopt_list_max_trades", None),
             "min_avg_time": config.get("hyperopt_list_min_avg_time", None),
@@ -423,8 +430,6 @@ class HyperoptData:
 
         if not filters["enabled"] or len(trials) < 1:
             return hd.list_or_df(trials, return_list)
-        if filters["profitable"]:
-            trials = trials.loc[trials["profit"] > 0]
         if filters["min_trades"] is not None:
             trials = trials.loc[trials["trade_count"] > filters["min_trades"]]
         if filters["max_trades"] is not None:
@@ -464,11 +469,6 @@ class HyperoptData:
     def norm_best(trials: Any, filters: dict) -> List:
         """ Normalize metrics and sort by sum or minimum score """
         metrics = ("profit", "avg_profit", "duration", "trade_count", "loss")
-        min_ratio = filters["cutoff_best"]
-        types_best = filters["best"]
-        n_best = int(len(trials) * filters["pct_best"] // len(types_best))
-        if n_best < 2:
-            n_best = 2
 
         # invert loss and duration to simplify
         trials["loss"] = trials["loss"].mul(-1)
@@ -483,6 +483,15 @@ class HyperoptData:
         trials["loss"] = trials["loss"].mul(-1)
         trials["duration"] = trials["duration"].mul(-1)
 
+        # Calc cutoff percentage based on normalization
+        types_best = filters["best"]
+        if filters["cutoff_best"] == "std":
+            min_ratio = lambda m: 1 - trials[m].values.std()
+        elif filters["cutoff_best"] == "mean":
+            min_ratio = lambda m: 1 - trials[m].values.mean()
+        else:
+            min_ratio = lambda m: filters["cutoff_best"]
+
         # calc the norm ratio between metrics:
         # compare each normalized metric against the set minimum ratio;
         # also get a sum of all the normalized metrics
@@ -491,11 +500,22 @@ class HyperoptData:
         for m in metrics:
             norm_m = trials[f"norm_{m}"].values
             norm_m[~isfinite(norm_m)] = 0  # reset infs and nans
-            trials["norm_ratio"] += (norm_m > min_ratio).astype(int)
+            trials["norm_ratio"] += (norm_m > min_ratio(m)).astype(int)
             trials["norm_sum"] += trials[f"norm_{m}"].values
 
         # You're the best! Around!
         # trials["is_best"] = True
+
+        # Calc number of trials to keep based on summed normalization
+        if filters["pct_best"] == "std":
+            pct_best = trials["norm_sum"].values.std()
+        elif filters["pct_best"] == "mean":
+            pct_best = trials["norm_sum"].values.mean()
+        else:
+            pct_best = filters["pct_best"]
+        n_best = int(len(trials) * pct_best // len(types_best))
+        if n_best < 2:
+            n_best = 2
 
         if "ratio" in types_best:
             # filter the trials to the ones that meet the min_ratio for all the metrics
@@ -542,19 +562,28 @@ class HyperoptData:
         """ Apply the sampling of a metric_key:sort_key combination over the trials """
         # for duration and loss we sort by the minimum
         ascending = sort_k in ("duration", "loss")
-        step_start = trials[step_k].values.min()
-        step_stop = trials[step_k].values.max()
+        finite_k = trials[step_k].loc[isfinite(trials[step_k])]
+        step_start = finite_k.values.min()
+        step_stop = finite_k.values.max()
         # choose the value of each step automatically if
         # a number of steps is specified
-        defined_range = step_values.get("range", 0)
+        defined_range = step_values.get("range", "mean")
         if defined_range:
-            step_v = (step_stop - step_start) / step_values["range"]
+            if defined_range == "mean":
+                step_v = nanmean((finite_k - finite_k.shift(1)))
+            elif defined_range == "std":
+                step_v = finite_k.values.std()
+            else:
+                step_v = (step_stop - step_start) / step_values["range"]
         else:
             step_v = step_values[step_k]
         if step_start == step_stop:
             steps = [step_start]
         else:
-            steps = arange(step_start, step_stop, step_v)
+            try:
+                steps = arange(step_start, step_stop, step_v)
+            except ValueError:
+                steps = []
         flt_trials = []
         last_epoch = None
         if len(steps) > len(trials):

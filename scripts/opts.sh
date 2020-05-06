@@ -7,7 +7,7 @@ while getopts "ta:d:q:e:i:p:f:xm:ctd:s:n:g:u:l:r:y:o:v:b:j" o; do
         d) days="$OPTARG" ;;
         q) quote="$OPTARG" ;;
         e) exchange_name="$OPTARG" ;;
-        i) timeframe="$OPTARG" ;;
+        i) timeframe="$OPTARG"; instance="$OPTARG" ;;
         g) timerange="$OPTARG" ;;
         p) pairs="--pairs $OPTARG" ;;
         f) pairsfile="--pairs-file $OPTARG"; profile=$OPTARG ;;

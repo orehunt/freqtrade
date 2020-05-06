@@ -1,17 +1,18 @@
-from typing import Any, List, Dict
+from typing import Any, List, Dict, TextIO
 from queue import Queue
 from multiprocessing.managers import SyncManager, Namespace
 from multiprocessing import Lock
 import signal
 from functools import partial
-from progressbar.bar import ProgressBar
-
+from tqdm import tqdm
 
 from skopt import Optimizer
 
 hyperopt: Any = None
 manager: SyncManager
-pbar: ProgressBar = None
+# pbar: tqdm = None
+pbar: dict = {}
+
 # Each worker stores the optimizer in the global state
 opt: Optimizer
 optimizers: Queue

@@ -107,7 +107,7 @@ class StrategyResolver(IResolver):
         """
         if attribute in config:
             setattr(strategy, attribute, config[attribute])
-            logger.info("Override strategy '%s' with value in config file: %s.",
+            logger.debug("Override strategy '%s' with value in config file: %s.",
                         attribute, config[attribute])
         elif hasattr(strategy, attribute):
             val = getattr(strategy, attribute)

@@ -29,3 +29,7 @@ def set_environment(args: dict, paths: list, config) -> None:
         os.environ["FQT_SGN"] = args.sgn
     if args.k:
         os.environ["FQT_K"] = str(args.k)
+    if args.exc:
+        os.environ["FQT_EXC"] = args.exc
+    if args.ne:
+        os.environ["FQT_N_WEIGHTS"] = args.ne.split(",")[0].split(":")[1]
