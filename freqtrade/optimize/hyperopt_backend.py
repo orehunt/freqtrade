@@ -1,6 +1,7 @@
 from typing import Any, Dict, List
 from queue import Queue
 from multiprocessing.managers import SyncManager, Namespace
+from threading import Lock
 import signal
 from functools import partial
 
@@ -15,13 +16,7 @@ pbar: dict = {}
 opt: Optimizer
 optimizers: Queue
 exploit: int = 0
-# Manage trials state
-# num_done: int = 0
-# num_saved: int = 0
-# testing: Dict = {}
-# exit: bool = False
-# tail = []
-trials: Namespace
+
 trials_list: List = []  # (worker local)
 # each worker index position of known past trials (worker local)
 trials_index = 0
@@ -34,7 +29,6 @@ just_saved = 0
 # epochs_since_last_best: List = [0, 0]
 # avg_last_occurrence: int
 # max_epoch: int
-epochs: Namespace
 
 # timer, keep track how hyperopt runtime, use it to decide when to save on storage (worker local)
 timer: float = 0
@@ -46,9 +40,34 @@ yi: List = []
 Xi_h: Dict = {}
 tested_h: List = []
 
+# Manage trials state
+class TrialsState(Namespace):
+    exit: bool
+    lock: Lock
+    num_saved: int
+    num_done: int
+    testing: dict
+    tail: List
+    empty_strikes: int
+    void_loss: float
+    table_header: int
 
-def manager_sig_handler(signal, frame, backend: None):
-    backend.trials.exit = True
+trials = TrialsState()
+
+class Epochs(Namespace):
+    lock: Lock
+    convergence: int
+    epochs_since_last_best: List
+    explo: int
+    current_best_loss: float
+    current_best_epoch: int
+    max_epoch: int
+    avg_last_occurrence: int
+
+epochs: Epochs
+
+def manager_sig_handler(signal, frame, trials_state: TrialsState):
+    trials_state.exit = True
     return
 
 

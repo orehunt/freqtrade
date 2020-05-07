@@ -77,6 +77,9 @@ class IStrategy(ABC):
     _populate_fun_len: int = 0
     _buy_fun_len: int = 0
     _sell_fun_len: int = 0
+    # amounts
+    amounts: dict
+
     # associated minimal roi
     minimal_roi: Dict
 

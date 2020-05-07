@@ -3,6 +3,7 @@ from typing import List
 from abc import abstractmethod
 
 from joblib import Parallel, delayed, wrap_non_picklable_objects
+from pandas import DataFrame
 
 # Import IHyperOpt and IHyperOptLoss to allow unpickling classes from these modules
 # from freqtrade.optimize.hyperopt_backend import Trial
@@ -11,6 +12,7 @@ from freqtrade.optimize.hyperopt_loss_interface import IHyperOptLoss  # noqa: F4
 from freqtrade.optimize.hyperopt_data import HyperoptData
 from freqtrade.optimize.hyperopt_out import HyperoptOut
 import freqtrade.optimize.hyperopt_backend as backend
+from freqtrade.optimize.hyperopt_backend import TrialsState, Epochs
 
 # Suppress scikit-learn FutureWarnings from skopt
 with warnings.catch_warnings():
@@ -25,10 +27,18 @@ with warnings.catch_warnings():
 class HyperoptCV:
     """ cross validation """
 
-    target_trials: List
+    target_trials: DataFrame
+    trials_maxout: int
+    trials_timeout: float
 
     @abstractmethod
-    def parallel_objective(self, asked, trials_list: List = [], n=0):
+    def parallel_objective(self, t: int, params, epochs: Epochs, trials_state: TrialsState):
+        """ objective run in single opt mode, run the backtest and log the results """
+
+    @abstractmethod
+    def parallel_objective_sig_handler(
+        self, t: int, params: list, epochs: Epochs, trials_state: TrialsState
+    ):
         """ objective run in single opt mode, run the backtest and log the results """
 
     def trials_params(self, offset: int, jobs: int):

@@ -5,7 +5,7 @@ import json
 import random
 from numpy import iinfo, int32
 from pathlib import Path
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Callable, Tuple
 from abc import abstractmethod
 from time import sleep
 from os import makedirs
@@ -24,6 +24,7 @@ from freqtrade.misc import plural, round_dict
 
 # Import IHyperOpt and IHyperOptLoss to allow unpickling classes from these modules
 import freqtrade.optimize.hyperopt_backend as backend
+from freqtrade.optimize.hyperopt_backend import TrialsState, Epochs
 
 # from freqtrade.optimize.hyperopt_backend import Trial
 from freqtrade.optimize.hyperopt_interface import IHyperOpt  # noqa: F401
@@ -64,7 +65,7 @@ class HyperoptData:
 
     # evaluations
     min_epochs: int
-    epochs_limit: callable
+    epochs_limit: Callable
     total_epochs: int
     trials: DataFrame
 
@@ -145,7 +146,7 @@ class HyperoptData:
         return trials
 
     @staticmethod
-    def alias_cols(trials: DataFrame, prefix: str, sep=".") -> (DataFrame, List[str]):
+    def alias_cols(trials: DataFrame, prefix: str, sep=".") -> Tuple[DataFrame, List[str]]:
         cols_names = trials.filter(regex=f"^{prefix}{sep}").columns  # with dot
         stripped_names = []
         for name in cols_names:
@@ -157,9 +158,9 @@ class HyperoptData:
     @staticmethod
     def save_trials(
         trials: DataFrame,
-        trials_state: Namespace,
-        trials_file: str,
+        trials_file: Path,
         instance_name: str,
+        trials_state: TrialsState = TrialsState(),
         final: bool = False,
         backup: bool = False,
         append: bool = True,
@@ -224,15 +225,15 @@ class HyperoptData:
                     trials_state.lock.release()
 
     @abstractmethod
-    def log_trials(self, asked, trials_list: List = [], n=0):
+    def log_trials(self, trials_state: TrialsState, epochs: Epochs):
         """ Calculate epochs and save results to storage """
 
     @staticmethod
     def _read_trials(
         trials_file: Path,
         trials_instance: str,
-        trials_state: Namespace,
         backup: bool,
+        trials_state: TrialsState = backend.trials,
         where="",
         start=None,
     ) -> List:
@@ -250,9 +251,9 @@ class HyperoptData:
             if backup and len(trials) > 0:
                 HyperoptData.save_trials(
                     trials,
-                    trials_state,
                     trials_file,
                     instance_name=f"{trials_instance}_bak",
+                    trials_state=trials_state,
                     backup=True,
                 )
             elif len(trials) < 1:
@@ -577,7 +578,7 @@ class HyperoptData:
         return concat(flt_trials).drop_duplicates(subset="current_epoch")
 
     @staticmethod
-    def find_steps(step_k: str, step_values: Dict, trials: DataFrame) -> List:
+    def find_steps(step_k: str, step_values: Dict, trials: DataFrame) -> Tuple[List, Any]:
         """
         compute the range of steps to perform over the trials metrics
         """
@@ -645,7 +646,7 @@ class HyperoptData:
     def load_trials(
         trials_file: Path,
         trials_instance: str,
-        trials_state: Namespace = None,
+        trials_state: TrialsState = backend.trials,
         where="",
         backup=False,
         clear=False,
@@ -656,7 +657,7 @@ class HyperoptData:
         trials: DataFrame = DataFrame()
         if trials_file.is_file() and trials_file.stat().st_size > 0:
             trials = HyperoptData._read_trials(
-                trials_file, trials_instance, trials_state, backup, where
+                trials_file, trials_instance, backup, trials_state, where
             )
             # clear the table by replacing it with an empty df
             if clear:

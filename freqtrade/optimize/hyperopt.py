@@ -8,7 +8,7 @@ import logging
 import json
 from collections import deque
 from math import factorial
-from typing import Any, Dict, List, Optional, Tuple, Set
+from typing import Any, Dict, List, Optional, Tuple, Set, Callable
 from time import time as now
 
 from colorama import init as colorama_init
@@ -33,6 +33,7 @@ from freqtrade.exceptions import OperationalException
 
 # Import IHyperOpt and IHyperOptLoss to allow unpickling classes from these modules
 import freqtrade.optimize.hyperopt_backend as backend
+from freqtrade.optimize.hyperopt_backend import TrialsState, Epochs
 
 from freqtrade.optimize.hyperopt_multi import HyperoptMulti
 from freqtrade.optimize.hyperopt_out import HyperoptOut
@@ -41,7 +42,7 @@ from freqtrade.optimize.hyperopt_constants import (
     VOID_LOSS,
     CYCLE_LIE_STRATS,
     CYCLE_ESTIMATORS,
-    CYCLE_ACQ_FUNCS
+    CYCLE_ACQ_FUNCS,
 )
 
 # from freqtrade.optimize.hyperopt_backend import Trial
@@ -353,7 +354,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             for t, asked in self.ask_and_tell(jobs)
         )
 
-    def point_func(self, opt: Optimizer, to_ask: List) -> callable:
+    def point_func(self, opt: Optimizer, to_ask: deque) -> Callable:
         """
         this is needed because when we ask None points, the optimizer doesn't return a list
         """
@@ -370,6 +371,8 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
 
             def point():
                 return tuple(opt.ask(strategy=self.lie_strat()))
+
+        return point
 
     def ask_and_tell(self, jobs: int):
         """
@@ -435,7 +438,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             yield t, a
 
     def parallel_objective_sig_handler(
-        self, t: int, params: list, epochs: Namespace, trials_state: Namespace
+        self, t: int, params: list, epochs: Epochs, trials_state: TrialsState
     ):
         """
         To handle Ctrl-C the worker main function has to be wrapped into a try/catch;
@@ -447,7 +450,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             trials_state.exit = True
             return self.parallel_objective(t, params, epochs, trials_state)
 
-    def parallel_objective(self, t: int, params, epochs: Namespace, trials_state: Namespace):
+    def parallel_objective(self, t: int, params, epochs: Epochs, trials_state: TrialsState):
         """ Run one single test and eventually save trials """
         # flush trials if terminating
         if trials_state.exit:
@@ -472,7 +475,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
 
         self.maybe_log_trials(trials_state, epochs)
 
-    def log_trials(self, trials_state: Namespace, epochs: Namespace) -> int:
+    def log_trials(self, trials_state: TrialsState, epochs: Epochs) -> int:
         """
         Log results if it is better than any previous evaluation
         """
@@ -519,7 +522,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         # TODO: print the header at the beginning so this is not carried over on each iteration
         trials_state.table_header = 2
 
-        self.save_trials(trials, trials_state, self.trials_file, self.trials_instance)
+        self.save_trials(trials, self.trials_file, self.trials_instance, trials_state)
         # release lock and clear saved trials from global state
         epochs.lock.release()
         del backend.trials_list[:]
@@ -618,12 +621,14 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             if self.cv and not load_instance or load_instance == "cv":
                 self.clear_instance(self.trials_file, self.trials_instance)
 
+    def epochs_limit(self) -> int:
+        return self.total_epochs or backend.epochs.max_epoch
+
     def setup_epochs(self) -> bool:
         """ used to resume the best epochs state from previous trials """
         locked = backend.epochs.lock.acquire(True, timeout=60)
         if not locked:
             raise OperationalException("Couldn't acquire lock at startup during epochs setup.")
-        self.epochs_limit = lambda: self.total_epochs or backend.epochs.max_epoch
         ep = backend.epochs
         ep.current_best_epoch = 0
         ep.current_best_loss = float(VOID_LOSS)
@@ -657,8 +662,8 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                 )
             else:
                 ep.avg_last_occurrence = min(self.min_epochs, self.opt_points)
-                avg_best_occurrence = self.min_trials
-            ep.max_epoch = len_trials + avg_best_occurrence
+                avg_best_occurrence = self.min_epochs
+            ep.max_epoch = int(len_trials + avg_best_occurrence)
         # if total epochs are not set, max_epoch takes its place
         if self.total_epochs < 1:
             ep.max_epoch = int(self.min_epochs + len(self.trials))
@@ -736,7 +741,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
 
         return n_initial_points, min_epochs, search_space_size
 
-    def update_max_epoch(self, current_best: int, current: int, ep: Namespace):
+    def update_max_epoch(self, current_best: int, current: int, ep: Epochs):
         """ calculate max epochs: store the number of non best epochs
             between each best, and get the mean of that value """
         # if there isn't a new best, update the last period
@@ -799,7 +804,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         logger.info(f"Parameters set for optimization: {len(self.Xi_cols)}")
 
     def _maybe_terminate(
-        self, t: int, jobs: int, trials_state: Namespace, epochs: Namespace
+        self, t: int, jobs: int, trials_state: TrialsState, epochs: Epochs
     ) -> bool:
         """ signal workers to terminate if conditions are met """
         done = trials_state.num_done
@@ -900,8 +905,8 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         dump(preprocessed, self.data_pickle_file)
 
         # We don't need exchange instance anymore while running hyperopt
-        self.backtesting.exchange = None
-        self.backtesting.pairlists = None
+        self.backtesting.exchange = None  # type: ignore
+        self.backtesting.pairlists = None  # type: ignore
 
         # Set dimensions, trials instance and paths and load from storage
         self.setup_trials()
