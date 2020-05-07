@@ -455,6 +455,7 @@ AVAILABLE_CLI_OPTIONS = {
         choices=["DB", "file"],
         default="file",
     ),
+    "trade_ids": Arg("--trade-ids", help="Specify the list of trade ids.", nargs="+",),
     # hyperopt-list, hyperopt-show
     "hyperopt_list_profitable": Arg(
         "--profitable", help="Select only profitable epochs.", action="store_true"

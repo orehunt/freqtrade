@@ -56,8 +56,11 @@ class FreqtradeBot:
         # Init objects
         self.config = config
 
-        self._sell_rate_cache = TTLCache(maxsize=100, ttl=5)
-        self._buy_rate_cache = TTLCache(maxsize=100, ttl=5)
+        # Cache values for 1800 to avoid frequent polling of the exchange for prices
+        # Caching only applies to RPC methods, so prices for open trades are still
+        # refreshed once every iteration.
+        self._sell_rate_cache = TTLCache(maxsize=100, ttl=1800)
+        self._buy_rate_cache = TTLCache(maxsize=100, ttl=1800)
 
         self.strategy: IStrategy = StrategyResolver.load_strategy(self.config)
 
@@ -1006,7 +1009,7 @@ class FreqtradeBot:
         if wallet_amount >= amount:
             return amount
         elif wallet_amount > amount * 0.98:
-            logger.info(f"{pair} - Falling back to wallet-amount.")
+            logger.info(f"{pair} - Falling back to wallet-amount {wallet_amount} -> {amount}.")
             return wallet_amount
         else:
             raise DependencyException(
