@@ -444,11 +444,10 @@ class HyperoptMulti(HyperoptOut):
         if not backend.timer:
             backend.timer = now()
         opt = HyperoptMulti.opt_state(optimizers)
+        # enable gc after referencing optimizer
         gc.enable()
 
         is_shared = self.shared
-        asked: Dict[str, List] = {}
-        asked_d: Dict[str, List] = {}
         # check early if this is the last run
         if trials_state.exit:
             trials_state.tail.extend(backend.trials_list)
@@ -460,6 +459,29 @@ class HyperoptMulti(HyperoptOut):
         # every once in a while the optimizer global state is gced, so reload points
         opt = self.opt_startup_points(opt, trials_state, is_shared)
 
+        untested_Xi = self.opt_ask_points(opt, epochs, trials_state)
+
+        # return early if there is nothing to test
+        if len(untested_Xi) < 1:
+            opt.void = -1
+            self.opt_state(s_opt=opt)
+            # Terminate after enough workers didn't receive a point to test
+            trials_state.empty_strikes += 1
+            if trials_state.empty_strikes >= self.trials_maxout:
+                trials_state.exit = True
+            return
+        # run the backtest for each point to do (untested_Xi)
+        trials = [self.backtest_params(X) for X in untested_Xi]
+        # filter losses
+        void_filtered = HyperoptMulti.filter_void_losses(trials, opt, trials_state, is_shared)
+
+        self.opt_log_trials(opt, void_filtered, t, jobs, is_shared, trials_state, epochs)
+        # disable gc at the end to prevent disposal of global vars
+        gc.disable()
+
+    def opt_ask_points(self, opt: Optimizer, epochs: Namespace, trials_state: Namespace) -> List:
+        asked: Dict[str, List] = {}
+        asked_d: Dict[str, List] = {}
         n_told = 0  # told while looping
         tested_Xi = []  # already tested
         tested_yi = []
@@ -509,23 +531,34 @@ class HyperoptMulti(HyperoptOut):
                     break
             else:
                 break
-        # return early if there is nothing to test
-        if len(untested_Xi) < 1:
-            opt.void = -1
-            self.opt_state(s_opt=opt)
-            # Terminate after enough workers didn't receive a point to test
-            trials_state.empty_strikes += 1
-            if trials_state.empty_strikes >= self.trials_maxout:
-                trials_state.exit = True
-            return
-        # run the backtest for each point to do (untested_Xi)
-        trials = [self.backtest_params(X) for X in untested_Xi]
-        # filter losses
-        void_filtered = HyperoptMulti.filter_void_losses(trials, opt, trials_state, is_shared)
+        return untested_Xi
 
-        self.opt_log_trials(opt, void_filtered, t, jobs, is_shared, trials_state, epochs)
-        # disable gc at the end to prevent disposal of global vars
-        gc.disable()
+    @staticmethod
+    def opt_acq_window(opt: Optimizer, is_shared: bool, jobs: int, epochs: Namespace):
+        """ Determine the ranges of yi to compare for acquisition adjustments """
+        last_period = epochs.epochs_since_last_best[-1]
+        n_tail = backend.just_saved * jobs
+        if is_shared:
+            loss = array(list(backend.Xi_h.values()))
+        else:
+            loss = array(opt.Xi)
+            last_period = last_period // jobs
+            n_tail = backend.just_saved * (len(backend.Xi_h) // len(opt.Xi) or 2)
+        # calculate base values, dependent on loss score
+        if not len(loss[-last_period:]):
+            # take the full length at the beginning
+            loss_last = loss[-n_tail:]
+            loss_tail = loss[-backend.just_saved :]
+        else:
+            # if exploitation phase was triggered before, if so,
+            # track from the beginning of the phase
+            # NOTE: it is an absolute index
+            if backend.exploit:
+                loss_last = loss[backend.exploit :]
+            else:
+                loss_last = loss[-last_period:]
+            loss_tail = loss[-n_tail:]
+        return loss, n_tail, last_period, loss_tail, loss_last
 
     @staticmethod
     def opt_adjust_acq(
@@ -541,28 +574,9 @@ class HyperoptMulti(HyperoptOut):
         ):
             # how many epochs since no best
             xi, kappa = None, None
-            last_period = epochs.epochs_since_last_best[-1]
-            n_tail = backend.just_saved * jobs
-            if is_shared:
-                loss = array(list(backend.Xi_h.values()))
-            else:
-                loss = array(opt.Xi)
-                last_period = last_period // jobs
-                n_tail = backend.just_saved * (len(backend.Xi_h) // len(opt.Xi) or 2)
-            # calculate base values, dependent on loss score
-            if not len(loss[-last_period:]):
-                # take the full length at the beginning
-                loss_last = loss[-n_tail:]
-                loss_tail = loss[-backend.just_saved :]
-            else:
-                # if exploitation phase was triggered before, if so,
-                # track from the beginning of the phase
-                # NOTE: it is an absolute index
-                if backend.exploit:
-                    loss_last = loss[backend.exploit :]
-                else:
-                    loss_last = loss[-last_period:]
-                loss_tail = loss[-n_tail:]
+            loss, n_tail, last_period, loss_tail, loss_last = HyperoptMulti.opt_acq_window(
+                opt, is_shared, jobs, epochs
+            )
 
             # increase exploitation around
             # any obs that exhibits a better (lower) score

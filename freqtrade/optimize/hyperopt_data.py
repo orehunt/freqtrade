@@ -577,10 +577,10 @@ class HyperoptData:
         return concat(flt_trials).drop_duplicates(subset="current_epoch")
 
     @staticmethod
-    def step_over_trials(step_k: str, step_values: Dict, sort_k: str, trials: DataFrame) -> List:
-        """ Apply the sampling of a metric_key:sort_key combination over the trials """
-        # for duration and loss we sort by the minimum
-        ascending = sort_k in ("duration", "loss")
+    def find_steps(step_k: str, step_values: Dict, trials: DataFrame) -> List:
+        """
+        compute the range of steps to perform over the trials metrics
+        """
         finite_k = trials[step_k].loc[isfinite(trials[step_k])]
         step_start = finite_k.values.min()
         step_stop = finite_k.values.max()
@@ -603,8 +603,6 @@ class HyperoptData:
                 steps = arange(step_start, step_stop, step_v)
             except ValueError:
                 steps = []
-        flt_trials = []
-        last_epoch = None
         if len(steps) > len(trials):
             min_step = step_v * (len(steps) / len(trials))
             if not defined_range:
@@ -613,6 +611,17 @@ class HyperoptData:
                     f"Using a minimum of {min_step:.4f}"
                 )
             step_v = min_step
+        return steps, step_v
+
+    @staticmethod
+    def step_over_trials(step_k: str, step_values: Dict, sort_k: str, trials: DataFrame) -> List:
+        """ Apply the sampling of a metric_key:sort_key combination over the trials """
+        # for duration and loss we sort by the minimum
+        ascending = sort_k in ("duration", "loss")
+        flt_trials = []
+        last_epoch = None
+        steps, step_v = HyperoptData.find_steps(step_k, step_values, trials)
+
         for n, s in enumerate(steps):
             try:
                 t = (

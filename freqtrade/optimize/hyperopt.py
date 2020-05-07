@@ -353,19 +353,10 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             for t, asked in self.ask_and_tell(jobs)
         )
 
-    def ask_and_tell(self, jobs: int):
+    def point_func(self, opt: Optimizer, to_ask: List) -> callable:
         """
-        loop to manage optimizer state in single optimizer mode, everytime a job is
-        dispatched, we check the optimizer for points, to ask and to tell if any,
-        but only fit a new model every n_points, because if we fit at every result previous
-        points become invalid.
+        this is needed because when we ask None points, the optimizer doesn't return a list
         """
-        fit = False
-        to_ask: deque = deque()
-        evald: Set[Tuple] = set()
-        opt: Optimizer = self.opt
-
-        # this is needed because when we ask None points, the optimizer doesn't return a list
         if self.opt_ask_points:
 
             def point():
@@ -380,9 +371,18 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             def point():
                 return tuple(opt.ask(strategy=self.lie_strat()))
 
-        if len(self.trials) > 0:
-            if self.random_state != self.trials.iloc[-1]["random_state"]:
-                logger.warn("Random state in saved trials doesn't match runtime...")
+    def ask_and_tell(self, jobs: int):
+        """
+        loop to manage optimizer state in single optimizer mode, everytime a job is
+        dispatched, we check the optimizer for points, to ask and to tell if any,
+        but only fit a new model every n_points, because if we fit at every result previous
+        points become invalid.
+        """
+        fit = False
+        to_ask: deque = deque()
+        evald: Set[Tuple] = set()
+        opt: Optimizer = self.opt
+        point = self.point_func(opt, to_ask)
 
         locked = False
         t = 0
@@ -526,21 +526,8 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
 
         return i
 
-    def setup_trials(self, load_trials=True, backup=None):
-        """ The trials instance is the key used to identify the hdf table """
-        # If the Hyperopt class has been previously initialized
-        if self.config.get("skip_trials_setup", False):
-            return
-        self.dimensions: List[Any]
-        self.dimensions = self.hyperopt_space()
-        self.trials_file = self.get_trials_file(self.config, self.trials_dir)
-        self.trials_instance = "{}.{}.{}.{}".format(
-            self.config["hyperopt_loss"],
-            len(self.dimensions),
-            "_".join(sorted(self.config["spaces"])),
-            hash([d.name for d in self.dimensions]),
-        )
-        logger.info(f"Hyperopt state will be saved to " f"key {self.trials_instance:.64}[...]")
+    def cleanup_store_tables(self):
+        """ Executes store cleanup options """
         # clean state depending on mode
         try:
             # optionally delete hdf file
@@ -566,6 +553,24 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         finally:
             if "store" in vars():
                 store.close()
+
+    def setup_trials(self, load_trials=True, backup=None):
+        """ The trials instance is the key used to identify the hdf table """
+        # If the Hyperopt class has been previously initialized
+        if self.config.get("skip_trials_setup", False):
+            return
+        self.dimensions: List[Any]
+        self.dimensions = self.hyperopt_space()
+        self.trials_file = self.get_trials_file(self.config, self.trials_dir)
+        self.trials_instance = "{}.{}.{}.{}".format(
+            self.config["hyperopt_loss"],
+            len(self.dimensions),
+            "_".join(sorted(self.config["spaces"])),
+            hash([d.name for d in self.dimensions]),
+        )
+        logger.info(f"Hyperopt state will be saved to " f"key {self.trials_instance:.64}[...]")
+
+        self.cleanup_store_tables()
 
         load_instance = self.config.get("hyperopt_trials_instance")
         if load_trials:
@@ -603,6 +608,9 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                 self.dimensions = [
                     k for k in self.target_trials.filter(regex="^params_dict.").columns
                 ]
+            elif len(self.trials) > 0 and not self.multi:
+                if self.random_state != self.trials.iloc[-1]["random_state"]:
+                    logger.warn("Random state in saved trials doesn't match runtime...")
         if self.cv:
             # CV trials are saved in their own table
             self.trials_instance += "_cv"
