@@ -6,7 +6,6 @@ import random
 import warnings
 import logging
 import json
-import sys
 from collections import deque
 from math import factorial, log
 from typing import Any, Dict, List, Optional, Tuple, Set
@@ -23,7 +22,6 @@ from pandas import DataFrame, json_normalize, Timedelta
 
 from freqtrade.data.converter import trim_dataframe
 from freqtrade.data.history import get_timerange
-from freqtrade.configuration import TimeRange
 from freqtrade.optimize.backtesting import Backtesting
 from freqtrade.exceptions import OperationalException
 
@@ -361,7 +359,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         fit = False
         to_ask: deque = deque()
         evald: Set[Tuple] = set()
-        opt = self.opt
+        opt: Optimizer = self.opt
 
         # this is needed because when we ask None points, the optimizer doesn't return a list
         if self.opt_ask_points:
@@ -411,14 +409,20 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                     if locked:
                         backend.trials.lock.release()
                     logger.debug("Couldn't read trials from disk")
+                if backend.trials.exit or self._maybe_terminate(
+                        t, jobs, backend.trials, backend.epochs
+                ):
+                    break
 
             a = point()
             # check for termination when getting duplicates
             if a in evald:
                 opt.update_next()
                 a = point()
+                if a in evald:
+                    break
                 if backend.trials.exit or self._maybe_terminate(
-                    t, jobs, backend.trials, backend.epochs
+                        t, jobs, backend.trials, backend.epochs
                 ):
                     break
             evald.add(a)
@@ -462,9 +466,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             backend.trials_list.append(v)
             trials_state.num_done += 1
 
-        backend.just_saved = self.maybe_log_trials(trials_state, epochs)
-        if backend.just_saved:
-            trials_state.num_done -= backend.just_saved
+        self.maybe_log_trials(trials_state, epochs)
 
     def log_trials(self, trials_state: Namespace, epochs: Namespace) -> int:
         """
@@ -476,7 +478,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             if trials_state.exit:
                 epochs.lock.acquire()
             else:
-                return
+                return 0
         ep = epochs
 
         batch_start = trials_state.num_saved
@@ -537,12 +539,13 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         logger.info(f"Hyperopt state will be saved to " f"key {self.trials_instance:.64}[...]")
         # clean state depending on mode
         try:
+            # optionally delete hdf file
             if self.config.get("hyperopt_clear") and not self.cv:
                 self.clear_hyperopt()
             store = HDFStore(self.trials_file)
             keys = store.keys()
             # optionally remove previous trials of an instance
-            if self.config.get("hyperopt_reset"):
+            if self.config.get("hyperopt_reset") and not self.cv:
                 table = "/{}".format(self.trials_instance)
                 for tbl in (table, f"{table}_bak"):
                     if tbl in keys:
@@ -833,9 +836,10 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                 # since the list was passed through the manager, make a copy
                 if backend.trials.tail:
                     backend.trials_list = [t for t in backend.trials.tail]
-                    self.log_trials(backend.trials, backend.epochs)
+                    backend.just_saved = self.log_trials(backend.trials, backend.epochs)
+                    backend.trials.num_done -= backend.just_saved
                 HyperoptOut._print_progress(
-                    len(backend.trials_list), jobs, self.trials_maxout, finish=True
+                    backend.just_saved, jobs, self.trials_maxout, finish=True
                 )
 
     def start(self) -> None:

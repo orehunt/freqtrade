@@ -1,10 +1,8 @@
-from typing import Any, List, Dict, TextIO
+from typing import Any, Dict, List
 from queue import Queue
 from multiprocessing.managers import SyncManager, Namespace
-from multiprocessing import Lock
 import signal
 from functools import partial
-from tqdm import tqdm
 
 from skopt import Optimizer
 

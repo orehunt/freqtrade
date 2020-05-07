@@ -3,28 +3,20 @@ import os
 import warnings
 import json
 import random
-from collections import OrderedDict
 from numpy import iinfo, int32
 from pathlib import Path
 from typing import Dict, List, Any
 from abc import abstractmethod
 from time import sleep
 from os import makedirs
-from shutil import copyfile
 
 
-from joblib import dump, load
 from multiprocessing.managers import Namespace
-from filelock import FileLock
-from pandas import DataFrame, isna, json_normalize, read_hdf, concat, HDFStore
+from pandas import DataFrame, HDFStore, concat, isna, read_hdf
 from numpy import arange, float64, isfinite, nanmean
 from os import path
 import io
 
-from sqlalchemy.pool import StaticPool
-from sqlalchemy import create_engine
-import pyarrow.parquet as pq
-import pyarrow as pa
 
 from freqtrade.constants import HYPEROPT_LIST_STEP_VALUES
 from freqtrade.exceptions import OperationalException, DependencyException
@@ -692,7 +684,7 @@ class HyperoptData:
             rngs = []
             # generate as many optimizers as the job count
             if len(self.trials) > 0:
-                rngs = self.trials["random_state"].drop_duplicates().to_list()
+                rngs = self.trials["random_state"].drop_duplicates().values.tolist()
                 # make sure to only load as many random states as the job count
                 prev_rngs = rngs[-max_opts:]
             else:

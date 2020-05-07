@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 
 OPTS="$(realpath $(dirname $_))"
 . ${OPTS}/opts.sh
@@ -20,5 +20,5 @@ $main_exec edge \
            -c $edge \
            --userdir $userdir \
            $dmmp \
-           --timerange=$timerange \
+           --timerange "$timerange" \
            -i $timeframe

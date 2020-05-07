@@ -12,8 +12,6 @@ from pandas import DataFrame, isna
 from multiprocessing.managers import Namespace
 import tabulate
 import sys
-from tqdm import tqdm
-from tqdm.contrib import DummyTqdmFile
 import enlighten
 
 from freqtrade.misc import round_dict
@@ -296,16 +294,20 @@ class HyperoptOut(HyperoptData):
         global logger
         if backend.pbar:
             backend.pbar["total"].close()
-        color='green'
+        color = "green"
         resume = backend.trials.num_saved
         opt_format = (
-            "Avg: {Style.BRIGHT}{Fore.BLUE}{backend.epochs.avg_last_occurrence} "
-            "{Style.RESET_ALL}"
-            "Exp: {Style.BRIGHT}{Fore.CYAN}{backend.epochs.explo} "
-            "{Style.RESET_ALL}"
-            "Cvg: {Style.BRIGHT}{Fore.MAGENTA}{backend.epochs.convergence} "
-            "{Style.RESET_ALL}"
-        ) if not cv else ""
+            (
+                "Avg: {Style.BRIGHT}{Fore.BLUE}{backend.epochs.avg_last_occurrence} "
+                "{Style.RESET_ALL}"
+                "Exp: {Style.BRIGHT}{Fore.CYAN}{backend.epochs.explo} "
+                "{Style.RESET_ALL}"
+                "Cvg: {Style.BRIGHT}{Fore.MAGENTA}{backend.epochs.convergence} "
+                "{Style.RESET_ALL}"
+            )
+            if not cv
+            else ""
+        )
         trials_format = (
             "Best: "
             "{Style.BRIGHT}{backend.epochs.current_best_epoch} [{backend.epochs.current_best_loss:.02}] "
@@ -315,7 +317,7 @@ class HyperoptOut(HyperoptData):
             "{Style.RESET_ALL}"
             "Empty: {Style.BRIGHT}{Fore.RED}{backend.trials.empty_strikes} "
             "{Style.RESET_ALL}["
-            )
+        )
         bar_format = (
             f"{trials_format}"
             "{desc_pad}{percentage:3.0f}%|{bar}| "
