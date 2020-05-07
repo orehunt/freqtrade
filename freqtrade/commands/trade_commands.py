@@ -19,7 +19,7 @@ def start_trading(args: Dict[str, Any]) -> int:
         worker = Worker(args)
         worker.run()
     except KeyboardInterrupt:
-        logger.info('SIGINT received, aborting ...')
+        logger.info("SIGINT received, aborting ...")
     finally:
         if worker:
             logger.info("worker found ... calling exit")

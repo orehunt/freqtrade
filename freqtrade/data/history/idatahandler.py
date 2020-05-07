@@ -20,7 +20,6 @@ logger = logging.getLogger(__name__)
 
 
 class IDataHandler(ABC):
-
     def __init__(self, datadir: Path) -> None:
         self._datadir = datadir
 
@@ -47,9 +46,9 @@ class IDataHandler(ABC):
         """
 
     @abstractmethod
-    def _ohlcv_load(self, pair: str, timeframe: str,
-                    timerange: Optional[TimeRange] = None,
-                    ) -> DataFrame:
+    def _ohlcv_load(
+        self, pair: str, timeframe: str, timerange: Optional[TimeRange] = None,
+    ) -> DataFrame:
         """
         Internal method used to load data for one pair from disk.
         Implements the loading and conversion to a Pandas dataframe.
@@ -121,13 +120,16 @@ class IDataHandler(ABC):
         :return: True when deleted, false if file did not exist.
         """
 
-    def ohlcv_load(self, pair, timeframe: str,
-                   timerange: Optional[TimeRange] = None,
-                   fill_missing: bool = True,
-                   drop_incomplete: bool = True,
-                   startup_candles: int = 0,
-                   warn_no_data: bool = True
-                   ) -> DataFrame:
+    def ohlcv_load(
+        self,
+        pair,
+        timeframe: str,
+        timerange: Optional[TimeRange] = None,
+        fill_missing: bool = True,
+        drop_incomplete: bool = True,
+        startup_candles: int = 0,
+        warn_no_data: bool = True,
+    ) -> DataFrame:
         """
         Load cached candle (OHLCV) data for the given pair.
 
@@ -145,12 +147,11 @@ class IDataHandler(ABC):
         if startup_candles > 0 and timerange_startup:
             timerange_startup.subtract_start(timeframe_to_seconds(timeframe) * startup_candles)
 
-        pairdf = self._ohlcv_load(pair, timeframe,
-                                  timerange=timerange_startup)
+        pairdf = self._ohlcv_load(pair, timeframe, timerange=timerange_startup)
         if self._check_empty_df(pairdf, pair, timeframe, warn_no_data):
             return pairdf
         else:
-            enddate = pairdf.iloc[-1]['date']
+            enddate = pairdf.iloc[-1]["date"]
 
             if timerange_startup:
                 self._validate_pairdata(pair, pairdf, timerange_startup)
@@ -159,11 +160,13 @@ class IDataHandler(ABC):
                     return pairdf
 
             # incomplete candles should only be dropped if we didn't trim the end beforehand.
-            pairdf = clean_ohlcv_dataframe(pairdf, timeframe,
-                                           pair=pair,
-                                           fill_missing=fill_missing,
-                                           drop_incomplete=(drop_incomplete and
-                                                            enddate == pairdf.iloc[-1]['date']))
+            pairdf = clean_ohlcv_dataframe(
+                pairdf,
+                timeframe,
+                pair=pair,
+                fill_missing=fill_missing,
+                drop_incomplete=(drop_incomplete and enddate == pairdf.iloc[-1]["date"]),
+            )
             self._check_empty_df(pairdf, pair, timeframe, warn_no_data)
             return pairdf
 
@@ -175,7 +178,7 @@ class IDataHandler(ABC):
             if warn_no_data:
                 logger.warning(
                     f'No history data for pair: "{pair}", timeframe: {timeframe}. '
-                    'Use `freqtrade download-data` to download the data'
+                    "Use `freqtrade download-data` to download the data"
                 )
             return True
         return False
@@ -187,16 +190,20 @@ class IDataHandler(ABC):
         :param timerange: Timerange specified for start and end dates
         """
 
-        if timerange.starttype == 'date':
+        if timerange.starttype == "date":
             start = datetime.fromtimestamp(timerange.startts, tz=timezone.utc)
-            if pairdata.iloc[0]['date'] > start:
-                logger.warning(f"Missing data at start for pair {pair}, "
-                               f"data starts at {pairdata.iloc[0]['date']:%Y-%m-%d %H:%M:%S}")
-        if timerange.stoptype == 'date':
+            if pairdata.iloc[0]["date"] > start:
+                logger.warning(
+                    f"Missing data at start for pair {pair}, "
+                    f"data starts at {pairdata.iloc[0]['date']:%Y-%m-%d %H:%M:%S}"
+                )
+        if timerange.stoptype == "date":
             stop = datetime.fromtimestamp(timerange.stopts, tz=timezone.utc)
-            if pairdata.iloc[-1]['date'] < stop:
-                logger.warning(f"Missing data at end for pair {pair}, "
-                               f"data ends at {pairdata.iloc[-1]['date']:%Y-%m-%d %H:%M:%S}")
+            if pairdata.iloc[-1]["date"] < stop:
+                logger.warning(
+                    f"Missing data at end for pair {pair}, "
+                    f"data ends at {pairdata.iloc[-1]['date']:%Y-%m-%d %H:%M:%S}"
+                )
 
 
 def get_datahandlerclass(datatype: str) -> Type[IDataHandler]:
@@ -208,18 +215,21 @@ def get_datahandlerclass(datatype: str) -> Type[IDataHandler]:
     :return: Datahandler class
     """
 
-    if datatype == 'json':
+    if datatype == "json":
         from .jsondatahandler import JsonDataHandler
+
         return JsonDataHandler
-    elif datatype == 'jsongz':
+    elif datatype == "jsongz":
         from .jsondatahandler import JsonGzDataHandler
+
         return JsonGzDataHandler
     else:
         raise ValueError(f"No datahandler for datatype {datatype} available.")
 
 
-def get_datahandler(datadir: Path, data_format: str = None,
-                    data_handler: IDataHandler = None) -> IDataHandler:
+def get_datahandler(
+    datadir: Path, data_format: str = None, data_handler: IDataHandler = None
+) -> IDataHandler:
     """
     :param datadir: Folder to save data
     :data_format: dataformat to use
@@ -227,6 +237,6 @@ def get_datahandler(datadir: Path, data_format: str = None,
     """
 
     if not data_handler:
-        HandlerClass = get_datahandlerclass(data_format or 'json')
+        HandlerClass = get_datahandlerclass(data_format or "json")
         data_handler = HandlerClass(datadir)
     return data_handler

@@ -7,8 +7,18 @@ from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
 import arrow
-from sqlalchemy import (Boolean, Column, DateTime, Float, Integer, String,
-                        create_engine, desc, func, inspect)
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    Float,
+    Integer,
+    String,
+    create_engine,
+    desc,
+    func,
+    inspect,
+)
 from sqlalchemy.exc import NoSuchModuleError
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import Query
@@ -22,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 
 _DECL_BASE: Any = declarative_base()
-_SQL_DOCS_URL = 'http://docs.sqlalchemy.org/en/latest/core/engines.html#database-urls'
+_SQL_DOCS_URL = "http://docs.sqlalchemy.org/en/latest/core/engines.html#database-urls"
 
 
 def init(db_url: str, clean_open_orders: bool = False) -> None:
@@ -38,18 +48,18 @@ def init(db_url: str, clean_open_orders: bool = False) -> None:
     kwargs = {}
 
     # Take care of thread ownership if in-memory db
-    if db_url == 'sqlite://':
-        kwargs.update({
-            'connect_args': {'check_same_thread': False},
-            'poolclass': StaticPool,
-            'echo': False,
-        })
+    if db_url == "sqlite://":
+        kwargs.update(
+            {"connect_args": {"check_same_thread": False}, "poolclass": StaticPool, "echo": False,}
+        )
 
     try:
         engine = create_engine(db_url, **kwargs)
     except NoSuchModuleError:
-        raise OperationalException(f"Given value for db_url: '{db_url}' "
-                                   f"is no valid database URL! (See {_SQL_DOCS_URL})")
+        raise OperationalException(
+            f"Given value for db_url: '{db_url}' "
+            f"is no valid database URL! (See {_SQL_DOCS_URL})"
+        )
 
     # https://docs.sqlalchemy.org/en/13/orm/contextual.html#thread-local-scope
     # Scoped sessions proxy requests to the appropriate thread-local session.
@@ -60,7 +70,7 @@ def init(db_url: str, clean_open_orders: bool = False) -> None:
     check_migrate(engine)
 
     # Clean dry_run DB if the db is not in-memory
-    if clean_open_orders and db_url != 'sqlite://':
+    if clean_open_orders and db_url != "sqlite://":
         clean_dry_run_db()
 
 
@@ -78,37 +88,40 @@ def check_migrate(engine) -> None:
     """
     inspector = inspect(engine)
 
-    cols = inspector.get_columns('trades')
+    cols = inspector.get_columns("trades")
     tabs = inspector.get_table_names()
-    table_back_name = 'trades_bak'
+    table_back_name = "trades_bak"
     for i, table_back_name in enumerate(tabs):
-        table_back_name = f'trades_bak{i}'
-        logger.debug(f'trying {table_back_name}')
+        table_back_name = f"trades_bak{i}"
+        logger.debug(f"trying {table_back_name}")
 
     # Check for latest column
-    if not has_column(cols, 'close_profit_abs'):
-        logger.info(f'Running database migration - backup available as {table_back_name}')
+    if not has_column(cols, "close_profit_abs"):
+        logger.info(f"Running database migration - backup available as {table_back_name}")
 
-        fee_open = get_column_def(cols, 'fee_open', 'fee')
-        fee_close = get_column_def(cols, 'fee_close', 'fee')
-        open_rate_requested = get_column_def(cols, 'open_rate_requested', 'null')
-        close_rate_requested = get_column_def(cols, 'close_rate_requested', 'null')
-        stop_loss = get_column_def(cols, 'stop_loss', '0.0')
-        stop_loss_pct = get_column_def(cols, 'stop_loss_pct', 'null')
-        initial_stop_loss = get_column_def(cols, 'initial_stop_loss', '0.0')
-        initial_stop_loss_pct = get_column_def(cols, 'initial_stop_loss_pct', 'null')
-        stoploss_order_id = get_column_def(cols, 'stoploss_order_id', 'null')
-        stoploss_last_update = get_column_def(cols, 'stoploss_last_update', 'null')
-        max_rate = get_column_def(cols, 'max_rate', '0.0')
-        min_rate = get_column_def(cols, 'min_rate', 'null')
-        sell_reason = get_column_def(cols, 'sell_reason', 'null')
-        strategy = get_column_def(cols, 'strategy', 'null')
-        ticker_interval = get_column_def(cols, 'ticker_interval', 'null')
-        open_trade_price = get_column_def(cols, 'open_trade_price',
-                                          f'amount * open_rate * (1 + {fee_open})')
+        fee_open = get_column_def(cols, "fee_open", "fee")
+        fee_close = get_column_def(cols, "fee_close", "fee")
+        open_rate_requested = get_column_def(cols, "open_rate_requested", "null")
+        close_rate_requested = get_column_def(cols, "close_rate_requested", "null")
+        stop_loss = get_column_def(cols, "stop_loss", "0.0")
+        stop_loss_pct = get_column_def(cols, "stop_loss_pct", "null")
+        initial_stop_loss = get_column_def(cols, "initial_stop_loss", "0.0")
+        initial_stop_loss_pct = get_column_def(cols, "initial_stop_loss_pct", "null")
+        stoploss_order_id = get_column_def(cols, "stoploss_order_id", "null")
+        stoploss_last_update = get_column_def(cols, "stoploss_last_update", "null")
+        max_rate = get_column_def(cols, "max_rate", "0.0")
+        min_rate = get_column_def(cols, "min_rate", "null")
+        sell_reason = get_column_def(cols, "sell_reason", "null")
+        strategy = get_column_def(cols, "strategy", "null")
+        ticker_interval = get_column_def(cols, "ticker_interval", "null")
+        open_trade_price = get_column_def(
+            cols, "open_trade_price", f"amount * open_rate * (1 + {fee_open})"
+        )
         close_profit_abs = get_column_def(
-            cols, 'close_profit_abs',
-            f"(amount * close_rate * (1 - {fee_close})) - {open_trade_price}")
+            cols,
+            "close_profit_abs",
+            f"(amount * close_rate * (1 - {fee_close})) - {open_trade_price}",
+        )
 
         # Schema migration necessary
         engine.execute(f"alter table trades rename to {table_back_name}")
@@ -119,7 +132,8 @@ def check_migrate(engine) -> None:
         _DECL_BASE.metadata.create_all(engine)
 
         # Copy data back - following the correct schema
-        engine.execute(f"""insert into trades
+        engine.execute(
+            f"""insert into trades
                 (id, exchange, pair, is_open, fee_open, fee_close, open_rate,
                 open_rate_requested, close_rate, close_rate_requested, close_profit,
                 stake_amount, amount, open_date, close_date, open_order_id,
@@ -148,11 +162,12 @@ def check_migrate(engine) -> None:
                 {strategy} strategy, {ticker_interval} ticker_interval,
                 {open_trade_price} open_trade_price, {close_profit_abs} close_profit_abs
                 from {table_back_name}
-             """)
+             """
+        )
 
         # Reread columns - the above recreated the table!
         inspector = inspect(engine)
-        cols = inspector.get_columns('trades')
+        cols = inspector.get_columns("trades")
 
 
 def cleanup() -> None:
@@ -170,7 +185,7 @@ def clean_dry_run_db() -> None:
     """
     for trade in Trade.query.filter(Trade.open_order_id.isnot(None)).all():
         # Check we are updating only a dry_run order not a prod one
-        if 'dry_run' in trade.open_order_id:
+        if "dry_run" in trade.open_order_id:
             trade.open_order_id = None
 
 
@@ -178,7 +193,8 @@ class Trade(_DECL_BASE):
     """
     Class used to define a trade structure
     """
-    __tablename__ = 'trades'
+
+    __tablename__ = "trades"
 
     id = Column(Integer, primary_key=True)
     exchange = Column(String, nullable=False)
@@ -224,43 +240,46 @@ class Trade(_DECL_BASE):
         self.recalc_open_trade_price()
 
     def __repr__(self):
-        open_since = self.open_date.strftime('%Y-%m-%d %H:%M:%S') if self.is_open else 'closed'
+        open_since = self.open_date.strftime("%Y-%m-%d %H:%M:%S") if self.is_open else "closed"
 
-        return (f'Trade(id={self.id}, pair={self.pair}, amount={self.amount:.8f}, '
-                f'open_rate={self.open_rate:.8f}, open_since={open_since})')
+        return (
+            f"Trade(id={self.id}, pair={self.pair}, amount={self.amount:.8f}, "
+            f"open_rate={self.open_rate:.8f}, open_since={open_since})"
+        )
 
     def to_json(self) -> Dict[str, Any]:
         return {
-            'trade_id': self.id,
-            'pair': self.pair,
-            'is_open': self.is_open,
-            'fee_open': self.fee_open,
-            'fee_close': self.fee_close,
-            'open_date_hum': arrow.get(self.open_date).humanize(),
-            'open_date': self.open_date.strftime("%Y-%m-%d %H:%M:%S"),
-            'close_date_hum': (arrow.get(self.close_date).humanize()
-                               if self.close_date else None),
-            'close_date': (self.close_date.strftime("%Y-%m-%d %H:%M:%S")
-                           if self.close_date else None),
-            'open_rate': self.open_rate,
-            'open_rate_requested': self.open_rate_requested,
-            'open_trade_price': self.open_trade_price,
-            'close_rate': self.close_rate,
-            'close_rate_requested': self.close_rate_requested,
-            'amount': round(self.amount, 8),
-            'stake_amount': round(self.stake_amount, 8),
-            'close_profit': self.close_profit,
-            'sell_reason': self.sell_reason,
-            'stop_loss': self.stop_loss,
-            'stop_loss_pct': (self.stop_loss_pct * 100) if self.stop_loss_pct else None,
-            'initial_stop_loss': self.initial_stop_loss,
-            'initial_stop_loss_pct': (self.initial_stop_loss_pct * 100
-                                      if self.initial_stop_loss_pct else None),
-            'min_rate': self.min_rate,
-            'max_rate': self.max_rate,
-            'strategy': self.strategy,
-            'ticker_interval': self.ticker_interval,
-            'open_order_id': self.open_order_id,
+            "trade_id": self.id,
+            "pair": self.pair,
+            "is_open": self.is_open,
+            "fee_open": self.fee_open,
+            "fee_close": self.fee_close,
+            "open_date_hum": arrow.get(self.open_date).humanize(),
+            "open_date": self.open_date.strftime("%Y-%m-%d %H:%M:%S"),
+            "close_date_hum": (arrow.get(self.close_date).humanize() if self.close_date else None),
+            "close_date": (
+                self.close_date.strftime("%Y-%m-%d %H:%M:%S") if self.close_date else None
+            ),
+            "open_rate": self.open_rate,
+            "open_rate_requested": self.open_rate_requested,
+            "open_trade_price": self.open_trade_price,
+            "close_rate": self.close_rate,
+            "close_rate_requested": self.close_rate_requested,
+            "amount": round(self.amount, 8),
+            "stake_amount": round(self.stake_amount, 8),
+            "close_profit": self.close_profit,
+            "sell_reason": self.sell_reason,
+            "stop_loss": self.stop_loss,
+            "stop_loss_pct": (self.stop_loss_pct * 100) if self.stop_loss_pct else None,
+            "initial_stop_loss": self.initial_stop_loss,
+            "initial_stop_loss_pct": (
+                self.initial_stop_loss_pct * 100 if self.initial_stop_loss_pct else None
+            ),
+            "min_rate": self.min_rate,
+            "max_rate": self.max_rate,
+            "strategy": self.strategy,
+            "ticker_interval": self.ticker_interval,
+            "open_order_id": self.open_order_id,
         }
 
     def adjust_min_max_rates(self, current_price: float) -> None:
@@ -270,8 +289,9 @@ class Trade(_DECL_BASE):
         self.max_rate = max(current_price, self.max_rate or self.open_rate)
         self.min_rate = min(current_price, self.min_rate or self.open_rate)
 
-    def adjust_stop_loss(self, current_price: float, stoploss: float,
-                         initial: bool = False) -> None:
+    def adjust_stop_loss(
+        self, current_price: float, stoploss: float, initial: bool = False
+    ) -> None:
         """
         This adjusts the stop loss to it's most recently observed setting
         :param current_price: Current rate the asset is traded
@@ -310,7 +330,8 @@ class Trade(_DECL_BASE):
             f"initial_stop_loss={self.initial_stop_loss:.8f}, "
             f"stop_loss={self.stop_loss:.8f}. "
             f"Trailing stoploss saved us: "
-            f"{float(self.stop_loss) - float(self.initial_stop_loss):.8f}.")
+            f"{float(self.stop_loss) - float(self.initial_stop_loss):.8f}."
+        )
 
     def update(self, order: Dict) -> None:
         """
@@ -318,30 +339,30 @@ class Trade(_DECL_BASE):
         :param order: order retrieved by exchange.get_order()
         :return: None
         """
-        order_type = order['type']
+        order_type = order["type"]
         # Ignore open and cancelled orders
-        if order['status'] == 'open' or order['price'] is None:
+        if order["status"] == "open" or order["price"] is None:
             return
 
-        logger.info('Updating trade (id=%s) ...', self.id)
+        logger.info("Updating trade (id=%s) ...", self.id)
 
-        if order_type in ('market', 'limit') and order['side'] == 'buy':
+        if order_type in ("market", "limit") and order["side"] == "buy":
             # Update open rate and actual amount
-            self.open_rate = Decimal(order['price'])
-            self.amount = Decimal(order.get('filled', order['amount']))
+            self.open_rate = Decimal(order["price"])
+            self.amount = Decimal(order.get("filled", order["amount"]))
             self.recalc_open_trade_price()
-            logger.info('%s_BUY has been fulfilled for %s.', order_type.upper(), self)
+            logger.info("%s_BUY has been fulfilled for %s.", order_type.upper(), self)
             self.open_order_id = None
-        elif order_type in ('market', 'limit') and order['side'] == 'sell':
-            self.close(order['price'])
-            logger.info('%s_SELL has been fulfilled for %s.', order_type.upper(), self)
-        elif order_type in ('stop_loss_limit', 'stop-loss'):
+        elif order_type in ("market", "limit") and order["side"] == "sell":
+            self.close(order["price"])
+            logger.info("%s_SELL has been fulfilled for %s.", order_type.upper(), self)
+        elif order_type in ("stop_loss_limit", "stop-loss"):
             self.stoploss_order_id = None
             self.close_rate_requested = self.stop_loss
-            logger.info('%s is hit for %s.', order_type.upper(), self)
-            self.close(order['average'])
+            logger.info("%s is hit for %s.", order_type.upper(), self)
+            self.close(order["average"])
         else:
-            raise ValueError(f'Unknown order type: {order_type}')
+            raise ValueError(f"Unknown order type: {order_type}")
         cleanup()
 
     def close(self, rate: float) -> None:
@@ -356,8 +377,7 @@ class Trade(_DECL_BASE):
         self.is_open = False
         self.open_order_id = None
         logger.info(
-            'Marking %s as closed as the trade is fulfilled and found no open orders for it.',
-            self
+            "Marking %s as closed as the trade is fulfilled and found no open orders for it.", self
         )
 
     def _calc_open_trade_price(self) -> float:
@@ -376,8 +396,9 @@ class Trade(_DECL_BASE):
         """
         self.open_trade_price = self._calc_open_trade_price()
 
-    def calc_close_trade_price(self, rate: Optional[float] = None,
-                               fee: Optional[float] = None) -> float:
+    def calc_close_trade_price(
+        self, rate: Optional[float] = None, fee: Optional[float] = None
+    ) -> float:
         """
         Calculate the close_rate including fee
         :param fee: fee to use on the close rate (optional).
@@ -393,8 +414,7 @@ class Trade(_DECL_BASE):
         fees = sell_trade * Decimal(fee or self.fee_close)
         return float(sell_trade - fees)
 
-    def calc_profit(self, rate: Optional[float] = None,
-                    fee: Optional[float] = None) -> float:
+    def calc_profit(self, rate: Optional[float] = None, fee: Optional[float] = None) -> float:
         """
         Calculate the absolute profit in stake currency between Close and Open trade
         :param fee: fee to use on the close rate (optional).
@@ -404,14 +424,12 @@ class Trade(_DECL_BASE):
         :return:  profit in stake currency as float
         """
         close_trade_price = self.calc_close_trade_price(
-            rate=(rate or self.close_rate),
-            fee=(fee or self.fee_close)
+            rate=(rate or self.close_rate), fee=(fee or self.fee_close)
         )
         profit = close_trade_price - self.open_trade_price
         return float(f"{profit:.8f}")
 
-    def calc_profit_ratio(self, rate: Optional[float] = None,
-                          fee: Optional[float] = None) -> float:
+    def calc_profit_ratio(self, rate: Optional[float] = None, fee: Optional[float] = None) -> float:
         """
         Calculates the profit as ratio (including fee).
         :param rate: rate to compare with (optional).
@@ -420,8 +438,7 @@ class Trade(_DECL_BASE):
         :return: profit ratio as float
         """
         close_trade_price = self.calc_close_trade_price(
-            rate=(rate or self.close_rate),
-            fee=(fee or self.fee_close)
+            rate=(rate or self.close_rate), fee=(fee or self.fee_close)
         )
         profit_ratio = (close_trade_price / self.open_trade_price) - 1
         return float(f"{profit_ratio:.8f}")
@@ -463,9 +480,11 @@ class Trade(_DECL_BASE):
         Calculates total invested amount in open trades
         in stake currency
         """
-        total_open_stake_amount = Trade.session.query(func.sum(Trade.stake_amount))\
-            .filter(Trade.is_open.is_(True))\
+        total_open_stake_amount = (
+            Trade.session.query(func.sum(Trade.stake_amount))
+            .filter(Trade.is_open.is_(True))
             .scalar()
+        )
         return total_open_stake_amount or 0
 
     @staticmethod
@@ -473,33 +492,31 @@ class Trade(_DECL_BASE):
         """
         Returns List of dicts containing all Trades, including profit and trade count
         """
-        pair_rates = Trade.session.query(
-            Trade.pair,
-            func.sum(Trade.close_profit).label('profit_sum'),
-            func.count(Trade.pair).label('count')
-        ).filter(Trade.is_open.is_(False))\
-            .group_by(Trade.pair) \
-            .order_by(desc('profit_sum')) \
+        pair_rates = (
+            Trade.session.query(
+                Trade.pair,
+                func.sum(Trade.close_profit).label("profit_sum"),
+                func.count(Trade.pair).label("count"),
+            )
+            .filter(Trade.is_open.is_(False))
+            .group_by(Trade.pair)
+            .order_by(desc("profit_sum"))
             .all()
-        return [
-            {
-                'pair': pair,
-                'profit': rate,
-                'count': count
-            }
-            for pair, rate, count in pair_rates
-        ]
+        )
+        return [{"pair": pair, "profit": rate, "count": count} for pair, rate, count in pair_rates]
 
     @staticmethod
     def get_best_pair():
         """
         Get best pair with closed trade.
         """
-        best_pair = Trade.session.query(
-            Trade.pair, func.sum(Trade.close_profit).label('profit_sum')
-        ).filter(Trade.is_open.is_(False)) \
-            .group_by(Trade.pair) \
-            .order_by(desc('profit_sum')).first()
+        best_pair = (
+            Trade.session.query(Trade.pair, func.sum(Trade.close_profit).label("profit_sum"))
+            .filter(Trade.is_open.is_(False))
+            .group_by(Trade.pair)
+            .order_by(desc("profit_sum"))
+            .first()
+        )
         return best_pair
 
     @staticmethod
@@ -512,8 +529,10 @@ class Trade(_DECL_BASE):
 
             desired_stoploss = amounts.get(f"{trade.pair}_stoploss", amounts["stoploss"])
             # skip case if trailing-stop changed the stoploss already.
-            if (trade.stop_loss == trade.initial_stop_loss
-                and trade.initial_stop_loss_pct != desired_stoploss):
+            if (
+                trade.stop_loss == trade.initial_stop_loss
+                and trade.initial_stop_loss_pct != desired_stoploss
+            ):
                 # Stoploss value got changed
 
                 logger.info(f"Stoploss for {trade} needs adjustment...")

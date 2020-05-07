@@ -12,7 +12,6 @@ from typing import Dict, List, NamedTuple, Optional, Tuple
 
 import arrow
 from pandas import DataFrame
-from multiprocessing import Queue
 
 from freqtrade.data.dataprovider import DataProvider
 from freqtrade.exceptions import StrategyError
@@ -314,12 +313,12 @@ class IStrategy(ABC):
             logger.warning("Empty candle (OHLCV) data for pair %s", pair)
             return False, False
 
-        latest_date = dataframe['date'].max()
+        latest_date = dataframe["date"].max()
         try:
             df_len, df_close, df_date = self.preserve_df(dataframe)
-            dataframe = strategy_safe_wrapper(
-                self._analyze_ticker_internal, message=""
-                )(dataframe, {'pair': pair})
+            dataframe = strategy_safe_wrapper(self._analyze_ticker_internal, message="")(
+                dataframe, {"pair": pair}
+            )
             self.assert_df(dataframe, df_len, df_close, df_date)
         except StrategyError as error:
             logger.warning(f"Unable to analyze candle (OHLCV) data for pair {pair}: {error}")
@@ -330,7 +329,7 @@ class IStrategy(ABC):
             logger.warning("Empty dataframe for pair %s", pair)
             return False, False
 
-        latest = dataframe.loc[dataframe['date'] == latest_date].iloc[-1]
+        latest = dataframe.loc[dataframe["date"] == latest_date].iloc[-1]
 
         # Check if dataframe is out of date
         signal_date = arrow.get(latest["date"])
@@ -417,8 +416,11 @@ class IStrategy(ABC):
                 # logger.debug(f"{trade.pair} - Trade is not profitable. sell_flag=False")
                 return SellCheckTuple(sell_flag=False, sell_type=SellType.NONE)
 
-        if sell and config_ask_strategy.get("use_sell_signal", True) \
-           and config_ask_strategy.get("prefer_sell_signal", False):
+        if (
+            sell
+            and config_ask_strategy.get("use_sell_signal", True)
+            and config_ask_strategy.get("prefer_sell_signal", False)
+        ):
             logger.debug(
                 f"{trade.pair} - Sell signal received. sell_flag=True, "
                 f"sell_type=SellType.SELL_SIGNAL"
@@ -532,8 +534,10 @@ class IStrategy(ABC):
         Has positive effects on memory usage for whatever reason - also when
         using only one strategy.
         """
-        return {pair: self.advise_indicators(pair_data.copy(), {'pair': pair})
-                for pair, pair_data in data.items()}
+        return {
+            pair: self.advise_indicators(pair_data.copy(), {"pair": pair})
+            for pair, pair_data in data.items()
+        }
 
     def advise_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         """

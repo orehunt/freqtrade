@@ -13,36 +13,41 @@ from freqtrade.pairlist.IPairList import IPairList
 
 logger = logging.getLogger(__name__)
 
-SORT_VALUES = ['askVolume', 'bidVolume', 'quoteVolume']
+SORT_VALUES = ["askVolume", "bidVolume", "quoteVolume"]
 
 
 class VolumePairList(IPairList):
-
-    def __init__(self, exchange, pairlistmanager, config: Dict[str, Any], pairlistconfig: dict,
-                 pairlist_pos: int) -> None:
+    def __init__(
+        self,
+        exchange,
+        pairlistmanager,
+        config: Dict[str, Any],
+        pairlistconfig: dict,
+        pairlist_pos: int,
+    ) -> None:
         super().__init__(exchange, pairlistmanager, config, pairlistconfig, pairlist_pos)
 
-        if 'number_assets' not in self._pairlistconfig:
+        if "number_assets" not in self._pairlistconfig:
             raise OperationalException(
-                f'`number_assets` not specified. Please check your configuration '
-                'for "pairlist.config.number_assets"')
-        self._number_pairs = self._pairlistconfig['number_assets']
-        self._sort_key = self._pairlistconfig.get('sort_key', 'quoteVolume')
-        self._min_value = self._pairlistconfig.get('min_value', 0)
-        self.refresh_period = self._pairlistconfig.get('refresh_period', 1800)
+                f"`number_assets` not specified. Please check your configuration "
+                'for "pairlist.config.number_assets"'
+            )
+        self._number_pairs = self._pairlistconfig["number_assets"]
+        self._sort_key = self._pairlistconfig.get("sort_key", "quoteVolume")
+        self._min_value = self._pairlistconfig.get("min_value", 0)
+        self.refresh_period = self._pairlistconfig.get("refresh_period", 1800)
 
-        if not self._exchange.exchange_has('fetchTickers'):
+        if not self._exchange.exchange_has("fetchTickers"):
             raise OperationalException(
-                'Exchange does not support dynamic whitelist.'
-                'Please edit your config and restart the bot'
+                "Exchange does not support dynamic whitelist."
+                "Please edit your config and restart the bot"
             )
         if not self._validate_keys(self._sort_key):
-            raise OperationalException(
-                f'key {self._sort_key} not in {SORT_VALUES}')
-        if self._sort_key != 'quoteVolume':
+            raise OperationalException(f"key {self._sort_key} not in {SORT_VALUES}")
+        if self._sort_key != "quoteVolume":
             logger.warning(
                 "DEPRECATED: using any key other than quoteVolume for VolumePairList is deprecated."
-                )
+            )
 
     @property
     def needstickers(self) -> bool:
@@ -72,20 +77,22 @@ class VolumePairList(IPairList):
         """
         # Generate dynamic whitelist
         # Must always run if this pairlist is not the first in the list.
-        if (self._pairlist_pos != 0 or
-                (self._last_refresh + self.refresh_period < datetime.now().timestamp())):
+        if self._pairlist_pos != 0 or (
+            self._last_refresh + self.refresh_period < datetime.now().timestamp()
+        ):
 
             self._last_refresh = int(datetime.now().timestamp())
-            pairs = self._gen_pair_whitelist(pairlist, tickers,
-                                             self._config['stake_currency'],
-                                             self._sort_key, self._min_value)
+            pairs = self._gen_pair_whitelist(
+                pairlist, tickers, self._config["stake_currency"], self._sort_key, self._min_value
+            )
         else:
             pairs = pairlist
         self.log_on_refresh(logger.info, f"Searching {self._number_pairs} pairs: {pairs}")
         return pairs
 
-    def _gen_pair_whitelist(self, pairlist: List[str], tickers: Dict,
-                            base_currency: str, key: str, min_val: int) -> List[str]:
+    def _gen_pair_whitelist(
+        self, pairlist: List[str], tickers: Dict, base_currency: str, key: str, min_val: int
+    ) -> List[str]:
         """
         Updates the whitelist with with a dynamically generated list
         :param base_currency: base currency as str
@@ -96,9 +103,14 @@ class VolumePairList(IPairList):
         if self._pairlist_pos == 0:
             # If VolumePairList is the first in the list, use fresh pairlist
             # Check if pair quote currency equals to the stake currency.
-            filtered_tickers = [v for k, v in tickers.items()
-                                if (self._exchange.get_pair_quote_currency(k) == base_currency
-                                    and v[key] is not None)]
+            filtered_tickers = [
+                v
+                for k, v in tickers.items()
+                if (
+                    self._exchange.get_pair_quote_currency(k) == base_currency
+                    and v[key] is not None
+                )
+            ]
         else:
             # If other pairlist is in front, use the incomming pairlist.
             filtered_tickers = [v for k, v in tickers.items() if k in pairlist]
@@ -109,9 +121,9 @@ class VolumePairList(IPairList):
         sorted_tickers = sorted(filtered_tickers, reverse=True, key=lambda t: t[key])
 
         # Validate whitelist to only have active market pairs
-        pairs = self._whitelist_for_active_markets([s['symbol'] for s in sorted_tickers])
+        pairs = self._whitelist_for_active_markets([s["symbol"] for s in sorted_tickers])
         pairs = self._verify_blacklist(pairs, aswarning=False)
         # Limit to X number of pairs
-        pairs = pairs[:self._number_pairs]
+        pairs = pairs[: self._number_pairs]
 
         return pairs

@@ -2,7 +2,6 @@ import logging
 from typing import Any, Dict
 
 
-
 from freqtrade import constants
 from freqtrade.configuration import setup_utils_configuration
 from freqtrade.exceptions import DependencyException, OperationalException
@@ -21,14 +20,17 @@ def setup_optimize_configuration(args: Dict[str, Any], method: RunMode) -> Dict[
     config = setup_utils_configuration(args, method)
 
     no_unlimited_runmodes = {
-        RunMode.BACKTEST: 'backtesting',
-        RunMode.HYPEROPT: 'hyperoptimization',
+        RunMode.BACKTEST: "backtesting",
+        RunMode.HYPEROPT: "hyperoptimization",
     }
-    if (method in no_unlimited_runmodes.keys() and
-            config['stake_amount'] == constants.UNLIMITED_STAKE_AMOUNT):
+    if (
+        method in no_unlimited_runmodes.keys()
+        and config["stake_amount"] == constants.UNLIMITED_STAKE_AMOUNT
+    ):
         raise DependencyException(
             f'The value of `stake_amount` cannot be set as "{constants.UNLIMITED_STAKE_AMOUNT}" '
-            f'for {no_unlimited_runmodes[method]}')
+            f"for {no_unlimited_runmodes[method]}"
+        )
 
     return config
 
@@ -45,7 +47,7 @@ def start_backtesting(args: Dict[str, Any]) -> None:
     # Initialize configuration
     config = setup_optimize_configuration(args, RunMode.BACKTEST)
 
-    logger.info('Starting freqtrade in Backtesting mode')
+    logger.info("Starting freqtrade in Backtesting mode")
 
     # Initialize backtesting object
     backtesting = Backtesting(config)
@@ -64,11 +66,12 @@ def start_hyperopt(args: Dict[str, Any]) -> None:
         from freqtrade.optimize.hyperopt import Hyperopt
     except ImportError as e:
         raise OperationalException(
-            f"{e}. Please ensure that the hyperopt dependencies are installed.") from e
+            f"{e}. Please ensure that the hyperopt dependencies are installed."
+        ) from e
     # Initialize configuration
     config = setup_optimize_configuration(args, RunMode.HYPEROPT)
 
-    logger.info('Starting freqtrade in Hyperopt mode')
+    logger.info("Starting freqtrade in Hyperopt mode")
 
     lock = FileLock(Hyperopt.get_lock_filename(config))
 
@@ -76,8 +79,8 @@ def start_hyperopt(args: Dict[str, Any]) -> None:
         with lock.acquire(timeout=1):
 
             # Remove noisy log messages
-            logging.getLogger('hyperopt.tpe').setLevel(logging.WARNING)
-            logging.getLogger('filelock').setLevel(logging.WARNING)
+            logging.getLogger("hyperopt.tpe").setLevel(logging.WARNING)
+            logging.getLogger("filelock").setLevel(logging.WARNING)
 
             # Initialize backtesting object
             hyperopt = Hyperopt(config)
@@ -85,9 +88,11 @@ def start_hyperopt(args: Dict[str, Any]) -> None:
 
     except Timeout:
         logger.info("Another running instance of freqtrade Hyperopt detected.")
-        logger.info("Simultaneous execution of multiple Hyperopt commands is not supported. "
-                    "Hyperopt module is resource hungry. Please run your Hyperopt sequentially "
-                    "or on separate machines.")
+        logger.info(
+            "Simultaneous execution of multiple Hyperopt commands is not supported. "
+            "Hyperopt module is resource hungry. Please run your Hyperopt sequentially "
+            "or on separate machines."
+        )
         logger.info("Quitting now.")
         # TODO: return False here in order to help freqtrade to exit
         # with non-zero exit code...
@@ -101,9 +106,10 @@ def start_edge(args: Dict[str, Any]) -> None:
     :return: None
     """
     from freqtrade.optimize.edge_cli import EdgeCli
+
     # Initialize configuration
     config = setup_optimize_configuration(args, RunMode.EDGE)
-    logger.info('Starting freqtrade in Edge mode')
+    logger.info("Starting freqtrade in Edge mode")
 
     # Initialize Edge object
     edge_cli = EdgeCli(config)

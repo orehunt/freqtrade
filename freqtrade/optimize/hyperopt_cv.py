@@ -43,7 +43,7 @@ class HyperoptCV:
                 yield t, X
         else:
             # loop over jobs to schedule the last dispatch to collect unsaved epochs
-            for j in range(2*jobs):
+            for j in range(2 * jobs):
                 HyperoptOut._print_progress(j, jobs, self.trials_maxout)
                 yield j, []
 

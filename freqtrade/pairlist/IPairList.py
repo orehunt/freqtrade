@@ -17,10 +17,14 @@ logger = logging.getLogger(__name__)
 
 
 class IPairList(ABC):
-
-    def __init__(self, exchange, pairlistmanager,
-                 config: Dict[str, Any], pairlistconfig: Dict[str, Any],
-                 pairlist_pos: int) -> None:
+    def __init__(
+        self,
+        exchange,
+        pairlistmanager,
+        config: Dict[str, Any],
+        pairlistconfig: Dict[str, Any],
+        pairlist_pos: int,
+    ) -> None:
         """
         :param exchange: Exchange instance
         :param pairlistmanager: Instanciating Pairlist manager
@@ -33,7 +37,7 @@ class IPairList(ABC):
         self._config = config
         self._pairlistconfig = pairlistconfig
         self._pairlist_pos = pairlist_pos
-        self.refresh_period = self._pairlistconfig.get('refresh_period', 1800)
+        self.refresh_period = self._pairlistconfig.get("refresh_period", 1800)
         self._last_refresh = 0
         self._log_cache = TTLCache(maxsize=1024, ttl=self.refresh_period)
 
@@ -90,8 +94,7 @@ class IPairList(ABC):
         """
 
     @staticmethod
-    def verify_blacklist(pairlist: List[str], blacklist: List[str],
-                         aswarning: bool) -> List[str]:
+    def verify_blacklist(pairlist: List[str], blacklist: List[str], aswarning: bool) -> List[str]:
         """
         Verify and remove items from pairlist - returning a filtered pairlist.
         Logs a warning or info depending on `aswarning`.
@@ -119,8 +122,9 @@ class IPairList(ABC):
         :param aswarning: Log message as Warning or info.
         :return: pairlist - blacklisted pairs
         """
-        return IPairList.verify_blacklist(pairlist, self._pairlistmanager.blacklist,
-                                          aswarning=aswarning)
+        return IPairList.verify_blacklist(
+            pairlist, self._pairlistmanager.blacklist, aswarning=aswarning
+        )
 
     def _whitelist_for_active_markets(self, pairlist: List[str]) -> List[str]:
         """
@@ -135,13 +139,17 @@ class IPairList(ABC):
         for pair in pairlist:
             # pair is not in the generated dynamic market or has the wrong stake currency
             if pair not in markets:
-                logger.warning(f"Pair {pair} is not compatible with exchange "
-                               f"{self._exchange.name}. Removing it from whitelist..")
+                logger.warning(
+                    f"Pair {pair} is not compatible with exchange "
+                    f"{self._exchange.name}. Removing it from whitelist.."
+                )
                 continue
 
-            if self._exchange.get_pair_quote_currency(pair) != self._config['stake_currency']:
-                logger.warning(f"Pair {pair} is not compatible with your stake currency "
-                               f"{self._config['stake_currency']}. Removing it from whitelist..")
+            if self._exchange.get_pair_quote_currency(pair) != self._config["stake_currency"]:
+                logger.warning(
+                    f"Pair {pair} is not compatible with your stake currency "
+                    f"{self._config['stake_currency']}. Removing it from whitelist.."
+                )
                 continue
 
             # Check if market is active

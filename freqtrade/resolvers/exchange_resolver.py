@@ -14,6 +14,7 @@ class ExchangeResolver(IResolver):
     """
     This class contains all the logic to load a custom exchange class
     """
+
     object_type = Exchange
 
     @staticmethod
@@ -27,12 +28,13 @@ class ExchangeResolver(IResolver):
         exchange_name = exchange_name.title()
         exchange = None
         try:
-            exchange = ExchangeResolver._load_exchange(exchange_name,
-                                                       kwargs={'config': config,
-                                                               'validate': validate})
+            exchange = ExchangeResolver._load_exchange(
+                exchange_name, kwargs={"config": config, "validate": validate}
+            )
         except ImportError:
             logger.info(
-                f"No {exchange_name} specific subclass found. Using the generic class instead.")
+                f"No {exchange_name} specific subclass found. Using the generic class instead."
+            )
         if not exchange:
             exchange = Exchange(config, validate=validate)
         return exchange

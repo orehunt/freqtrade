@@ -22,7 +22,7 @@ exploit: int = 0
 # exit: bool = False
 # tail = []
 trials: Namespace
-trials_list: List = [] # (worker local)
+trials_list: List = []  # (worker local)
 # each worker index position of known past trials (worker local)
 trials_index = 0
 just_saved = 0
@@ -46,9 +46,11 @@ yi: List = []
 Xi_h: Dict = {}
 tested_h: List = []
 
+
 def manager_sig_handler(signal, frame, backend: None):
     backend.trials.exit = True
     return
+
 
 def manager_init(backend: Any):
     signal.signal(signal.SIGINT, partial(manager_sig_handler, backend=backend))

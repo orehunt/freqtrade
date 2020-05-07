@@ -36,7 +36,6 @@ class ArrowJSONEncoder(JSONEncoder):
 
 # Type should really be Callable[[ApiServer, Any], Any], but that will create a circular dependency
 def require_login(func: Callable[[Any, Any], Any]):
-
     def func_wrapper(obj, *args, **kwargs):
 
         auth = request.authorization
@@ -50,7 +49,6 @@ def require_login(func: Callable[[Any, Any], Any]):
 
 # Type should really be Callable[[ApiServer], Any], but that will create a circular dependency
 def rpc_catch_errors(func: Callable[[Any], Any]):
-
     def func_wrapper(obj, *args, **kwargs):
 
         try:
@@ -70,8 +68,9 @@ class ApiServer(RPC):
     """
 
     def check_auth(self, username, password):
-        return (username == self._config['api_server'].get('username') and
-                password == self._config['api_server'].get('password'))
+        return username == self._config["api_server"].get("username") and password == self._config[
+            "api_server"
+        ].get("password")
 
     def __init__(self, freqtrade) -> None:
         """
@@ -101,27 +100,31 @@ class ApiServer(RPC):
         Section to handle configuration and running of the Rest server
         also to check and warn if not bound to a loopback, warn on security risk.
         """
-        rest_ip = self._config['api_server']['listen_ip_address']
-        rest_port = self._config['api_server']['listen_port']
+        rest_ip = self._config["api_server"]["listen_ip_address"]
+        rest_port = self._config["api_server"]["listen_port"]
 
-        logger.info(f'Starting HTTP Server at {rest_ip}:{rest_port}')
+        logger.info(f"Starting HTTP Server at {rest_ip}:{rest_port}")
         if not IPv4Address(rest_ip).is_loopback:
             logger.warning("SECURITY WARNING - Local Rest Server listening to external connections")
-            logger.warning("SECURITY WARNING - This is insecure please set to your loopback,"
-                           "e.g 127.0.0.1 in config.json")
+            logger.warning(
+                "SECURITY WARNING - This is insecure please set to your loopback,"
+                "e.g 127.0.0.1 in config.json"
+            )
 
-        if not self._config['api_server'].get('password'):
-            logger.warning("SECURITY WARNING - No password for local REST Server defined. "
-                           "Please make sure that this is intentional!")
+        if not self._config["api_server"].get("password"):
+            logger.warning(
+                "SECURITY WARNING - No password for local REST Server defined. "
+                "Please make sure that this is intentional!"
+            )
 
         # Run the Server
-        logger.info('Starting Local Rest Server.')
+        logger.info("Starting Local Rest Server.")
         try:
             self.srv = make_server(rest_ip, rest_port, self.app)
             self.srv.serve_forever()
         except Exception:
             logger.exception("Api server failed to start.")
-        logger.info('Local Rest Server started.')
+        logger.info("Local Rest Server started.")
 
     def send_msg(self, msg: Dict[str, str]) -> None:
         """
@@ -148,42 +151,53 @@ class ApiServer(RPC):
         self.app.register_error_handler(404, self.page_not_found)
 
         # Actions to control the bot
-        self.app.add_url_rule(f'{BASE_URI}/start', 'start',
-                              view_func=self._start, methods=['POST'])
-        self.app.add_url_rule(f'{BASE_URI}/stop', 'stop', view_func=self._stop, methods=['POST'])
-        self.app.add_url_rule(f'{BASE_URI}/stopbuy', 'stopbuy',
-                              view_func=self._stopbuy, methods=['POST'])
-        self.app.add_url_rule(f'{BASE_URI}/reload_conf', 'reload_conf',
-                              view_func=self._reload_conf, methods=['POST'])
+        self.app.add_url_rule(f"{BASE_URI}/start", "start", view_func=self._start, methods=["POST"])
+        self.app.add_url_rule(f"{BASE_URI}/stop", "stop", view_func=self._stop, methods=["POST"])
+        self.app.add_url_rule(
+            f"{BASE_URI}/stopbuy", "stopbuy", view_func=self._stopbuy, methods=["POST"]
+        )
+        self.app.add_url_rule(
+            f"{BASE_URI}/reload_conf", "reload_conf", view_func=self._reload_conf, methods=["POST"]
+        )
         # Info commands
-        self.app.add_url_rule(f'{BASE_URI}/balance', 'balance',
-                              view_func=self._balance, methods=['GET'])
-        self.app.add_url_rule(f'{BASE_URI}/count', 'count', view_func=self._count, methods=['GET'])
-        self.app.add_url_rule(f'{BASE_URI}/daily', 'daily', view_func=self._daily, methods=['GET'])
-        self.app.add_url_rule(f'{BASE_URI}/edge', 'edge', view_func=self._edge, methods=['GET'])
-        self.app.add_url_rule(f'{BASE_URI}/profit', 'profit',
-                              view_func=self._profit, methods=['GET'])
-        self.app.add_url_rule(f'{BASE_URI}/performance', 'performance',
-                              view_func=self._performance, methods=['GET'])
-        self.app.add_url_rule(f'{BASE_URI}/status', 'status',
-                              view_func=self._status, methods=['GET'])
-        self.app.add_url_rule(f'{BASE_URI}/version', 'version',
-                              view_func=self._version, methods=['GET'])
-        self.app.add_url_rule(f'{BASE_URI}/show_config', 'show_config',
-                              view_func=self._show_config, methods=['GET'])
-        self.app.add_url_rule(f'{BASE_URI}/ping', 'ping',
-                              view_func=self._ping, methods=['GET'])
-        self.app.add_url_rule(f'{BASE_URI}/trades', 'trades',
-                              view_func=self._trades, methods=['GET'])
+        self.app.add_url_rule(
+            f"{BASE_URI}/balance", "balance", view_func=self._balance, methods=["GET"]
+        )
+        self.app.add_url_rule(f"{BASE_URI}/count", "count", view_func=self._count, methods=["GET"])
+        self.app.add_url_rule(f"{BASE_URI}/daily", "daily", view_func=self._daily, methods=["GET"])
+        self.app.add_url_rule(f"{BASE_URI}/edge", "edge", view_func=self._edge, methods=["GET"])
+        self.app.add_url_rule(
+            f"{BASE_URI}/profit", "profit", view_func=self._profit, methods=["GET"]
+        )
+        self.app.add_url_rule(
+            f"{BASE_URI}/performance", "performance", view_func=self._performance, methods=["GET"]
+        )
+        self.app.add_url_rule(
+            f"{BASE_URI}/status", "status", view_func=self._status, methods=["GET"]
+        )
+        self.app.add_url_rule(
+            f"{BASE_URI}/version", "version", view_func=self._version, methods=["GET"]
+        )
+        self.app.add_url_rule(
+            f"{BASE_URI}/show_config", "show_config", view_func=self._show_config, methods=["GET"]
+        )
+        self.app.add_url_rule(f"{BASE_URI}/ping", "ping", view_func=self._ping, methods=["GET"])
+        self.app.add_url_rule(
+            f"{BASE_URI}/trades", "trades", view_func=self._trades, methods=["GET"]
+        )
         # Combined actions and infos
-        self.app.add_url_rule(f'{BASE_URI}/blacklist', 'blacklist', view_func=self._blacklist,
-                              methods=['GET', 'POST'])
-        self.app.add_url_rule(f'{BASE_URI}/whitelist', 'whitelist', view_func=self._whitelist,
-                              methods=['GET'])
-        self.app.add_url_rule(f'{BASE_URI}/forcebuy', 'forcebuy',
-                              view_func=self._forcebuy, methods=['POST'])
-        self.app.add_url_rule(f'{BASE_URI}/forcesell', 'forcesell', view_func=self._forcesell,
-                              methods=['POST'])
+        self.app.add_url_rule(
+            f"{BASE_URI}/blacklist", "blacklist", view_func=self._blacklist, methods=["GET", "POST"]
+        )
+        self.app.add_url_rule(
+            f"{BASE_URI}/whitelist", "whitelist", view_func=self._whitelist, methods=["GET"]
+        )
+        self.app.add_url_rule(
+            f"{BASE_URI}/forcebuy", "forcebuy", view_func=self._forcebuy, methods=["POST"]
+        )
+        self.app.add_url_rule(
+            f"{BASE_URI}/forcesell", "forcesell", view_func=self._forcesell, methods=["POST"]
+        )
 
         # TODO: Implement the following
         # help (?)
@@ -193,11 +207,16 @@ class ApiServer(RPC):
         """
         Return "404 not found", 404.
         """
-        return self.rest_dump({
-            'status': 'error',
-            'reason': f"There's no API call for {request.base_url}.",
-            'code': 404
-        }), 404
+        return (
+            self.rest_dump(
+                {
+                    "status": "error",
+                    "reason": f"There's no API call for {request.base_url}.",
+                    "code": 404,
+                }
+            ),
+            404,
+        )
 
     @require_login
     @rpc_catch_errors
@@ -280,13 +299,12 @@ class ApiServer(RPC):
 
         :return: stats
         """
-        timescale = request.args.get('timescale', 7)
+        timescale = request.args.get("timescale", 7)
         timescale = int(timescale)
 
-        stats = self._rpc_daily_profit(timescale,
-                                       self._config['stake_currency'],
-                                       self._config.get('fiat_display_currency', '')
-                                       )
+        stats = self._rpc_daily_profit(
+            timescale, self._config["stake_currency"], self._config.get("fiat_display_currency", "")
+        )
 
         return self.rest_dump(stats)
 
@@ -312,9 +330,9 @@ class ApiServer(RPC):
         """
         logger.info("LocalRPC - Profit Command Called")
 
-        stats = self._rpc_trade_statistics(self._config['stake_currency'],
-                                           self._config.get('fiat_display_currency')
-                                           )
+        stats = self._rpc_trade_statistics(
+            self._config["stake_currency"], self._config.get("fiat_display_currency")
+        )
 
         return self.rest_dump(stats)
 
@@ -355,8 +373,9 @@ class ApiServer(RPC):
 
         Returns the current status of the trades in json format
         """
-        results = self._rpc_balance(self._config['stake_currency'],
-                                    self._config.get('fiat_display_currency', ''))
+        results = self._rpc_balance(
+            self._config["stake_currency"], self._config.get("fiat_display_currency", "")
+        )
         return self.rest_dump(results)
 
     @require_login
@@ -367,7 +386,7 @@ class ApiServer(RPC):
 
         Returns the X last trades in json format
         """
-        limit = int(request.args.get('limit', 0))
+        limit = int(request.args.get("limit", 0))
         results = self._rpc_trade_history(limit)
         return self.rest_dump(results)
 
@@ -386,7 +405,7 @@ class ApiServer(RPC):
         """
         Handler for /blacklist.
         """
-        add = request.json.get("blacklist", None) if request.method == 'POST' else None
+        add = request.json.get("blacklist", None) if request.method == "POST" else None
         results = self._rpc_blacklist(add)
         return self.rest_dump(results)
 

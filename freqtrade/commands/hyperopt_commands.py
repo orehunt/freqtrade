@@ -85,7 +85,10 @@ def start_hyperopt_show(args: Dict[str, Any]) -> None:
     n = config.get("hyperopt_show_index", -1)
 
     # Previous evaluations
-    trials = hd.load_trials(trials_file)
+    trials = hd.load_trials(
+        trials_file,
+        config.get("hyperopt_trials_instance", ho.get_last_instance(trials_instances_file)),
+    )
     i = 1
     for c, t in enumerate(trials):
         if t["current_epoch"] == trials[c - 1]["current_epoch"]:
@@ -96,7 +99,7 @@ def start_hyperopt_show(args: Dict[str, Any]) -> None:
     trials = hd.filter_trials(trials, config)
     trials_epochs = len(trials)
 
-    if n > filtered_epochs:
+    if n > trials_epochs:
         raise OperationalException(
             f"The index of the epoch to show should be less than {trials_epochs + 1}."
         )

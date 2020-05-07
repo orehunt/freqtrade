@@ -11,7 +11,6 @@ from colorama import Fore, Style
 from pandas import DataFrame, isna
 from multiprocessing.managers import Namespace
 import tabulate
-import sys
 import enlighten
 
 from freqtrade.misc import round_dict
@@ -295,7 +294,6 @@ class HyperoptOut(HyperoptData):
         if backend.pbar:
             backend.pbar["total"].close()
         color = "green"
-        resume = backend.trials.num_saved
         opt_format = (
             (
                 "Avg: {Style.BRIGHT}{Fore.BLUE}{backend.epochs.avg_last_occurrence} "
@@ -310,7 +308,8 @@ class HyperoptOut(HyperoptData):
         )
         trials_format = (
             "Best: "
-            "{Style.BRIGHT}{backend.epochs.current_best_epoch} [{backend.epochs.current_best_loss:.02}] "
+            "{Style.BRIGHT}{backend.epochs.current_best_epoch}"
+            "[{backend.epochs.current_best_loss:.02}] "
             "{Style.RESET_ALL}"
             f"{opt_format}"
             "Buf: {Style.BRIGHT}{Fore.YELLOW}{backend.trials.num_done} "

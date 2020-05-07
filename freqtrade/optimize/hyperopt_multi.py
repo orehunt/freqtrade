@@ -17,13 +17,10 @@ from multiprocessing.managers import Namespace, SyncManager
 from queue import Queue
 from pandas import read_hdf
 from numpy import (
-    finfo,
-    float64,
     array,
     nanvar,
     nanstd,
     nanmean,
-    nanmedian,
     nanmin,
     nanmax,
     isfinite,
@@ -190,9 +187,10 @@ class HyperoptMulti(HyperoptOut):
     @staticmethod
     def setup_worker_backend():
         """
-        Reset the global variables reference on the backend which is used by each worker process;
-        this is not needed in a normal hyperopt run, however to run different configurations,
-        within the same loky session (same pool of worker), the state has to be cleared at the start.
+        Reset the global variables reference on the backend which is
+        used by each worker process; this is not needed in a normal hyperopt run,
+        however to run different configurations, within the same loky session
+        (same pool of worker), the state has to be cleared at the start.
         """
         global backend
         backend.trials_index = 0
@@ -211,7 +209,8 @@ class HyperoptMulti(HyperoptOut):
 
     def run_multi_backtest_parallel(self, parallel: Parallel, jobs: int):
         """ Launch parallel in multi opt mode,
-        scheduling the specified number of trials, passing the needed objects handled by the manager """
+        scheduling the specified number of trials,
+        passing the needed objects handled by the manager """
         parallel(
             delayed(wrap_non_picklable_objects(self.parallel_opt_objective_sig_handler))(
                 t, jobs, backend.optimizers, backend.epochs, backend.trials
@@ -275,7 +274,6 @@ class HyperoptMulti(HyperoptOut):
         # fit a model with the known points, either from a previous run, or read
         # from database only at the start when the global points references of each worker are empty
         params_df = []
-        rs = opt.rs
         if backend.just_saved or not opt.Xi:
             locked = False
             # fetch all points not already told in shared mode
@@ -298,7 +296,9 @@ class HyperoptMulti(HyperoptOut):
                 FileNotFoundError,
                 IOError,
                 OSError,
-            ):  # only happens when df is empty and empty df is not saved on disk by pytables or is being written
+            ):
+                # only happens when df is empty and empty df is not saved
+                # on disk by pytables or is being written
                 if locked:
                     trials_state.lock.release()
                 logger.debug("Couldn't read trials from disk")
@@ -345,9 +345,10 @@ class HyperoptMulti(HyperoptOut):
         epochs: Namespace,
     ):
         """
-        Every workers saves trials to disk after `trials_timeout` seconds or `trials_maxout` number of trials;
-        Before saving trials are processed (setting initial_point, random_state, etc..);
-        Last tested points are saved in the global state (along with the optimizer instance) to be told in the next run;
+        Every workers saves trials to disk after `trials_timeout` seconds
+        or `trials_maxout` number of trials; Before saving trials are processed
+        (setting initial_point, random_state, etc..); Last tested points are saved
+        in the global state (along with the optimizer instance) to be told in the next run;
         """
         # add points of the current dispatch if any
         if len(void_filtered) > 0:
@@ -498,7 +499,7 @@ class HyperoptMulti(HyperoptOut):
                 if n_tested_Xi > n_told:
                     # if yes fit a new model with the new points
                     opt.tell(tested_Xi[n_told:], tested_yi[n_told:])
-                    told = n_tested_Xi
+                    n_told = n_tested_Xi
                 elif asked != asked_d:  # or get new points from a different random state
                     opt = HyperoptMulti.opt_rand(opt)
                     # getting a point by copy is the last try before
@@ -554,7 +555,8 @@ class HyperoptMulti(HyperoptOut):
                 loss_last = loss[-n_tail:]
                 loss_tail = loss[-backend.just_saved :]
             else:
-                # if exploitation phase was triggered before, if so, track from the beginning of the phase
+                # if exploitation phase was triggered before, if so,
+                # track from the beginning of the phase
                 # NOTE: it is an absolute index
                 if backend.exploit:
                     loss_last = loss[backend.exploit :]
@@ -610,7 +612,10 @@ class HyperoptMulti(HyperoptOut):
     #         loss = array(list(backend.Xi_h.values()))
     #         abs_role = abs(opt.role)
     #         # if half past the scheduled max, change acquisition
-    #         if trials_state.num_saved + trials_state.num_done > (epochs.max_epoch - epochs.current_best_epoch) // 2:
+    #         if (
+    #             trials_state.num_saved + trials_state.num_done
+    #             > (epochs.max_epoch - epochs.current_best_epoch) // 2
+    #         ):
     #             loss_min = loss.min()
     #             # for explorers
     #             if opt.role > 0:

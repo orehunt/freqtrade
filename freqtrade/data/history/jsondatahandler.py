@@ -27,10 +27,12 @@ class JsonDataHandler(IDataHandler):
         :return: List of Pairs
         """
 
-        _tmp = [re.search(r'^(\S+)(?=\-' + timeframe + '.json)', p.name)
-                for p in datadir.glob(f"*{timeframe}.{cls._get_file_extension()}")]
+        _tmp = [
+            re.search(r"^(\S+)(?=\-" + timeframe + ".json)", p.name)
+            for p in datadir.glob(f"*{timeframe}.{cls._get_file_extension()}")
+        ]
         # Check if regex found something and only return these results
-        return [match[0].replace('_', '/') for match in _tmp if match]
+        return [match[0].replace("_", "/") for match in _tmp if match]
 
     def ohlcv_store(self, pair: str, timeframe: str, data: DataFrame) -> None:
         """
@@ -45,16 +47,16 @@ class JsonDataHandler(IDataHandler):
         filename = self._pair_data_filename(self._datadir, pair, timeframe)
         _data = data.copy()
         # Convert date to int
-        _data['date'] = _data['date'].astype(np.int64) // 1000 // 1000
+        _data["date"] = _data["date"].astype(np.int64) // 1000 // 1000
 
         # Reset index, select only appropriate columns and save as json
         _data.reset_index(drop=True).loc[:, self._columns].to_json(
-            filename, orient="values",
-            compression='gzip' if self._use_zip else None)
+            filename, orient="values", compression="gzip" if self._use_zip else None
+        )
 
-    def _ohlcv_load(self, pair: str, timeframe: str,
-                    timerange: Optional[TimeRange] = None,
-                    ) -> DataFrame:
+    def _ohlcv_load(
+        self, pair: str, timeframe: str, timerange: Optional[TimeRange] = None,
+    ) -> DataFrame:
         """
         Internal method used to load data for one pair from disk.
         Implements the loading and conversion to a Pandas dataframe.
@@ -69,14 +71,20 @@ class JsonDataHandler(IDataHandler):
         filename = self._pair_data_filename(self._datadir, pair, timeframe)
         if not filename.exists():
             return DataFrame(columns=self._columns)
-        pairdata = read_json(filename, orient='values')
+        pairdata = read_json(filename, orient="values")
         pairdata.columns = self._columns
-        pairdata = pairdata.astype(dtype={'open': 'float', 'high': 'float',
-                                          'low': 'float', 'close': 'float', 'volume': 'float'})
-        pairdata['date'] = to_datetime(pairdata['date'],
-                                       unit='ms',
-                                       utc=True,
-                                       infer_datetime_format=True)
+        pairdata = pairdata.astype(
+            dtype={
+                "open": "float",
+                "high": "float",
+                "low": "float",
+                "close": "float",
+                "volume": "float",
+            }
+        )
+        pairdata["date"] = to_datetime(
+            pairdata["date"], unit="ms", utc=True, infer_datetime_format=True
+        )
         return pairdata
 
     def ohlcv_purge(self, pair: str, timeframe: str) -> bool:
@@ -108,10 +116,12 @@ class JsonDataHandler(IDataHandler):
         :param datadir: Directory to search for ohlcv files
         :return: List of Pairs
         """
-        _tmp = [re.search(r'^(\S+)(?=\-trades.json)', p.name)
-                for p in datadir.glob(f"*trades.{cls._get_file_extension()}")]
+        _tmp = [
+            re.search(r"^(\S+)(?=\-trades.json)", p.name)
+            for p in datadir.glob(f"*trades.{cls._get_file_extension()}")
+        ]
         # Check if regex found something and only return these results to avoid exceptions.
-        return [match[0].replace('_', '/') for match in _tmp if match]
+        return [match[0].replace("_", "/") for match in _tmp if match]
 
     def trades_store(self, pair: str, data: List[Dict]) -> None:
         """
@@ -160,7 +170,7 @@ class JsonDataHandler(IDataHandler):
     @classmethod
     def _pair_data_filename(cls, datadir: Path, pair: str, timeframe: str) -> Path:
         pair_s = misc.pair_to_filename(pair)
-        filename = datadir.joinpath(f'{pair_s}-{timeframe}.{cls._get_file_extension()}')
+        filename = datadir.joinpath(f"{pair_s}-{timeframe}.{cls._get_file_extension()}")
         return filename
 
     @classmethod
@@ -170,7 +180,7 @@ class JsonDataHandler(IDataHandler):
     @classmethod
     def _pair_trades_filename(cls, datadir: Path, pair: str) -> Path:
         pair_s = misc.pair_to_filename(pair)
-        filename = datadir.joinpath(f'{pair_s}-trades.{cls._get_file_extension()}')
+        filename = datadir.joinpath(f"{pair_s}-trades.{cls._get_file_extension()}")
         return filename
 
 

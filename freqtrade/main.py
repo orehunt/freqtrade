@@ -6,6 +6,7 @@ Read the documentation to know what cli arguments you need.
 
 from freqtrade.exceptions import FreqtradeException, OperationalException
 import sys
+
 # check min. python version
 if sys.version_info < (3, 6):
     sys.exit("Freqtrade requires Python version >= 3.6")
@@ -17,7 +18,7 @@ from typing import Any, List
 from freqtrade.commands import Arguments
 
 
-logger = logging.getLogger('freqtrade')
+logger = logging.getLogger("freqtrade")
 
 
 def main(sysargv: List[str] = None) -> None:
@@ -32,8 +33,8 @@ def main(sysargv: List[str] = None) -> None:
         args = arguments.get_parsed_arg()
 
         # Call subcommand.
-        if 'func' in args:
-            return_code = args['func'](args)
+        if "func" in args:
+            return_code = args["func"](args)
         else:
             # No subcommand was issued.
             raise OperationalException(
@@ -43,21 +44,21 @@ def main(sysargv: List[str] = None) -> None:
                 "as `freqtrade trade [options...]`.\n"
                 "To see the full list of options available, please use "
                 "`freqtrade --help` or `freqtrade <command> --help`."
-                )
+            )
 
     except SystemExit as e:
         return_code = e
     except KeyboardInterrupt:
-        logger.info('SIGINT received, aborting ...')
+        logger.info("SIGINT received, aborting ...")
         return_code = 0
     except FreqtradeException as e:
         logger.error(str(e))
         return_code = 2
     except Exception:
-        logger.exception('Fatal exception!')
+        logger.exception("Fatal exception!")
     finally:
         sys.exit(return_code)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

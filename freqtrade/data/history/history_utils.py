@@ -17,16 +17,18 @@ from freqtrade.exchange import Exchange
 logger = logging.getLogger(__name__)
 
 
-def load_pair_history(pair: str,
-                      timeframe: str,
-                      datadir: Path, *,
-                      timerange: Optional[TimeRange] = None,
-                      fill_up_missing: bool = True,
-                      drop_incomplete: bool = True,
-                      startup_candles: int = 0,
-                      data_format: str = None,
-                      data_handler: IDataHandler = None,
-                      ) -> DataFrame:
+def load_pair_history(
+    pair: str,
+    timeframe: str,
+    datadir: Path,
+    *,
+    timerange: Optional[TimeRange] = None,
+    fill_up_missing: bool = True,
+    drop_incomplete: bool = True,
+    startup_candles: int = 0,
+    data_format: str = None,
+    data_handler: IDataHandler = None,
+) -> DataFrame:
     """
     Load cached ohlcv history for the given pair.
 
@@ -44,24 +46,27 @@ def load_pair_history(pair: str,
     """
     data_handler = get_datahandler(datadir, data_format, data_handler)
 
-    return data_handler.ohlcv_load(pair=pair,
-                                   timeframe=timeframe,
-                                   timerange=timerange,
-                                   fill_missing=fill_up_missing,
-                                   drop_incomplete=drop_incomplete,
-                                   startup_candles=startup_candles,
-                                   )
+    return data_handler.ohlcv_load(
+        pair=pair,
+        timeframe=timeframe,
+        timerange=timerange,
+        fill_missing=fill_up_missing,
+        drop_incomplete=drop_incomplete,
+        startup_candles=startup_candles,
+    )
 
 
-def load_data(datadir: Path,
-              timeframe: str,
-              pairs: List[str], *,
-              timerange: Optional[TimeRange] = None,
-              fill_up_missing: bool = True,
-              startup_candles: int = 0,
-              fail_without_data: bool = False,
-              data_format: str = 'json',
-              ) -> Dict[str, DataFrame]:
+def load_data(
+    datadir: Path,
+    timeframe: str,
+    pairs: List[str],
+    *,
+    timerange: Optional[TimeRange] = None,
+    fill_up_missing: bool = True,
+    startup_candles: int = 0,
+    fail_without_data: bool = False,
+    data_format: str = "json",
+) -> Dict[str, DataFrame]:
     """
     Load ohlcv history data for a list of pairs.
 
@@ -77,16 +82,19 @@ def load_data(datadir: Path,
     """
     result: Dict[str, DataFrame] = {}
     if startup_candles > 0 and timerange:
-        logger.info(f'Using indicator startup period: {startup_candles} ...')
+        logger.info(f"Using indicator startup period: {startup_candles} ...")
 
     data_handler = get_datahandler(datadir, data_format)
     for pair in pairs:
-        hist = load_pair_history(pair=pair, timeframe=timeframe,
-                                 datadir=datadir, timerange=timerange,
-                                 fill_up_missing=fill_up_missing,
-                                 startup_candles=startup_candles,
-                                 data_handler=data_handler
-                                 )
+        hist = load_pair_history(
+            pair=pair,
+            timeframe=timeframe,
+            datadir=datadir,
+            timerange=timerange,
+            fill_up_missing=fill_up_missing,
+            startup_candles=startup_candles,
+            data_handler=data_handler,
+        )
         if not hist.empty:
             result[pair] = hist
 
@@ -95,13 +103,14 @@ def load_data(datadir: Path,
     return result
 
 
-def refresh_data(datadir: Path,
-                 timeframe: str,
-                 pairs: List[str],
-                 exchange: Exchange,
-                 data_format: str = None,
-                 timerange: Optional[TimeRange] = None,
-                 ) -> None:
+def refresh_data(
+    datadir: Path,
+    timeframe: str,
+    pairs: List[str],
+    exchange: Exchange,
+    data_format: str = None,
+    timerange: Optional[TimeRange] = None,
+) -> None:
     """
     Refresh ohlcv history data for a list of pairs.
 
@@ -113,13 +122,19 @@ def refresh_data(datadir: Path,
     """
     data_handler = get_datahandler(datadir, data_format)
     for pair in pairs:
-        _download_pair_history(pair=pair, timeframe=timeframe,
-                               datadir=datadir, timerange=timerange,
-                               exchange=exchange, data_handler=data_handler)
+        _download_pair_history(
+            pair=pair,
+            timeframe=timeframe,
+            datadir=datadir,
+            timerange=timerange,
+            exchange=exchange,
+            data_handler=data_handler,
+        )
 
 
-def _load_cached_data_for_updating(pair: str, timeframe: str, timerange: Optional[TimeRange],
-                                   data_handler: IDataHandler) -> Tuple[DataFrame, Optional[int]]:
+def _load_cached_data_for_updating(
+    pair: str, timeframe: str, timerange: Optional[TimeRange], data_handler: IDataHandler
+) -> Tuple[DataFrame, Optional[int]]:
     """
     Load cached data to download more data.
     If timerange is passed in, checks whether data from an before the stored data will be
@@ -130,31 +145,39 @@ def _load_cached_data_for_updating(pair: str, timeframe: str, timerange: Optiona
     """
     start = None
     if timerange:
-        if timerange.starttype == 'date':
+        if timerange.starttype == "date":
             # TODO: convert to date for conversion
             start = datetime.fromtimestamp(timerange.startts, tz=timezone.utc)
 
     # Intentionally don't pass timerange in - since we need to load the full dataset.
-    data = data_handler.ohlcv_load(pair, timeframe=timeframe,
-                                   timerange=None, fill_missing=False,
-                                   drop_incomplete=True, warn_no_data=False)
+    data = data_handler.ohlcv_load(
+        pair,
+        timeframe=timeframe,
+        timerange=None,
+        fill_missing=False,
+        drop_incomplete=True,
+        warn_no_data=False,
+    )
     if not data.empty:
-        if start and start < data.iloc[0]['date']:
+        if start and start < data.iloc[0]["date"]:
             # Earlier data than existing data requested, redownload all
             data = DataFrame(columns=DEFAULT_DATAFRAME_COLUMNS)
         else:
-            start = data.iloc[-1]['date']
+            start = data.iloc[-1]["date"]
 
     start_ms = int(start.timestamp() * 1000) if start else None
     return data, start_ms
 
 
-def _download_pair_history(datadir: Path,
-                           exchange: Exchange,
-                           pair: str, *,
-                           timeframe: str = '5m',
-                           timerange: Optional[TimeRange] = None,
-                           data_handler: IDataHandler = None) -> bool:
+def _download_pair_history(
+    datadir: Path,
+    exchange: Exchange,
+    pair: str,
+    *,
+    timeframe: str = "5m",
+    timerange: Optional[TimeRange] = None,
+    data_handler: IDataHandler = None,
+) -> bool:
     """
     Download latest candles from the exchange for the pair and timeframe passed in parameters
     The data is downloaded starting from the last correct data that
@@ -173,37 +196,48 @@ def _download_pair_history(datadir: Path,
     try:
         logger.info(
             f'Download history data for pair: "{pair}", timeframe: {timeframe} '
-            f'and store in {datadir}.'
+            f"and store in {datadir}."
         )
 
         # data, since_ms = _load_cached_data_for_updating_old(datadir, pair, timeframe, timerange)
-        data, since_ms = _load_cached_data_for_updating(pair, timeframe, timerange,
-                                                        data_handler=data_handler)
+        data, since_ms = _load_cached_data_for_updating(
+            pair, timeframe, timerange, data_handler=data_handler
+        )
 
-        logger.debug("Current Start: %s",
-                     f"{data.iloc[0]['date']:%Y-%m-%d %H:%M:%S}" if not data.empty else 'None')
-        logger.debug("Current End: %s",
-                     f"{data.iloc[-1]['date']:%Y-%m-%d %H:%M:%S}" if not data.empty else 'None')
+        logger.debug(
+            "Current Start: %s",
+            f"{data.iloc[0]['date']:%Y-%m-%d %H:%M:%S}" if not data.empty else "None",
+        )
+        logger.debug(
+            "Current End: %s",
+            f"{data.iloc[-1]['date']:%Y-%m-%d %H:%M:%S}" if not data.empty else "None",
+        )
 
         # Default since_ms to 30 days if nothing is given
-        new_data = exchange.get_historic_ohlcv(pair=pair,
-                                               timeframe=timeframe,
-                                               since_ms=since_ms if since_ms else
-                                               int(arrow.utcnow().shift(
-                                                   days=-30).float_timestamp) * 1000
-                                               )
+        new_data = exchange.get_historic_ohlcv(
+            pair=pair,
+            timeframe=timeframe,
+            since_ms=since_ms
+            if since_ms
+            else int(arrow.utcnow().shift(days=-30).float_timestamp) * 1000,
+        )
         # TODO: Maybe move parsing to exchange class (?)
-        new_dataframe = ohlcv_to_dataframe(new_data, timeframe, pair,
-                                           fill_missing=False, drop_incomplete=True)
+        new_dataframe = ohlcv_to_dataframe(
+            new_data, timeframe, pair, fill_missing=False, drop_incomplete=True
+        )
         if data.empty:
             data = new_dataframe
         else:
             data = data.append(new_dataframe)
 
-        logger.debug("New  Start: %s",
-                     f"{data.iloc[0]['date']:%Y-%m-%d %H:%M:%S}" if not data.empty else 'None')
-        logger.debug("New End: %s",
-                     f"{data.iloc[-1]['date']:%Y-%m-%d %H:%M:%S}" if not data.empty else 'None')
+        logger.debug(
+            "New  Start: %s",
+            f"{data.iloc[0]['date']:%Y-%m-%d %H:%M:%S}" if not data.empty else "None",
+        )
+        logger.debug(
+            "New End: %s",
+            f"{data.iloc[-1]['date']:%Y-%m-%d %H:%M:%S}" if not data.empty else "None",
+        )
 
         data_handler.ohlcv_store(pair, timeframe, data=data)
         return True
@@ -211,14 +245,20 @@ def _download_pair_history(datadir: Path,
     except Exception as e:
         logger.error(
             f'Failed to download history data for pair: "{pair}", timeframe: {timeframe}. '
-            f'Error: {e}'
+            f"Error: {e}"
         )
         return False
 
 
-def refresh_backtest_ohlcv_data(exchange: Exchange, pairs: List[str], timeframes: List[str],
-                                datadir: Path, timerange: Optional[TimeRange] = None,
-                                erase: bool = False, data_format: str = None) -> List[str]:
+def refresh_backtest_ohlcv_data(
+    exchange: Exchange,
+    pairs: List[str],
+    timeframes: List[str],
+    datadir: Path,
+    timerange: Optional[TimeRange] = None,
+    erase: bool = False,
+    data_format: str = None,
+) -> List[str]:
     """
     Refresh stored ohlcv data for backtesting and hyperopt operations.
     Used by freqtrade download-data subcommand.
@@ -235,62 +275,69 @@ def refresh_backtest_ohlcv_data(exchange: Exchange, pairs: List[str], timeframes
 
             if erase:
                 if data_handler.ohlcv_purge(pair, timeframe):
-                    logger.info(
-                        f'Deleting existing data for pair {pair}, interval {timeframe}.')
+                    logger.info(f"Deleting existing data for pair {pair}, interval {timeframe}.")
 
-            logger.info(f'Downloading pair {pair}, interval {timeframe}.')
-            _download_pair_history(datadir=datadir, exchange=exchange,
-                                   pair=pair, timeframe=str(timeframe),
-                                   timerange=timerange, data_handler=data_handler)
+            logger.info(f"Downloading pair {pair}, interval {timeframe}.")
+            _download_pair_history(
+                datadir=datadir,
+                exchange=exchange,
+                pair=pair,
+                timeframe=str(timeframe),
+                timerange=timerange,
+                data_handler=data_handler,
+            )
     return pairs_not_available
 
 
-def _download_trades_history(exchange: Exchange,
-                             pair: str, *,
-                             timerange: Optional[TimeRange] = None,
-                             data_handler: IDataHandler
-                             ) -> bool:
+def _download_trades_history(
+    exchange: Exchange,
+    pair: str,
+    *,
+    timerange: Optional[TimeRange] = None,
+    data_handler: IDataHandler,
+) -> bool:
     """
     Download trade history from the exchange.
     Appends to previously downloaded trades data.
     """
     try:
 
-        since = timerange.startts * 1000 if timerange and timerange.starttype == 'date' else None
+        since = timerange.startts * 1000 if timerange and timerange.starttype == "date" else None
 
         trades = data_handler.trades_load(pair)
 
-        from_id = trades[-1]['id'] if trades else None
+        from_id = trades[-1]["id"] if trades else None
 
-        logger.debug("Current Start: %s", trades[0]['datetime'] if trades else 'None')
-        logger.debug("Current End: %s", trades[-1]['datetime'] if trades else 'None')
+        logger.debug("Current Start: %s", trades[0]["datetime"] if trades else "None")
+        logger.debug("Current End: %s", trades[-1]["datetime"] if trades else "None")
 
         # Default since_ms to 30 days if nothing is given
-        new_trades = exchange.get_historic_trades(pair=pair,
-                                                  since=since if since else
-                                                  int(arrow.utcnow().shift(
-                                                      days=-30).float_timestamp) * 1000,
-                                                  from_id=from_id,
-                                                  )
+        new_trades = exchange.get_historic_trades(
+            pair=pair,
+            since=since if since else int(arrow.utcnow().shift(days=-30).float_timestamp) * 1000,
+            from_id=from_id,
+        )
         trades.extend(new_trades[1])
         data_handler.trades_store(pair, data=trades)
 
-        logger.debug("New Start: %s", trades[0]['datetime'])
-        logger.debug("New End: %s", trades[-1]['datetime'])
+        logger.debug("New Start: %s", trades[0]["datetime"])
+        logger.debug("New End: %s", trades[-1]["datetime"])
         logger.info(f"New Amount of trades: {len(trades)}")
         return True
 
     except Exception as e:
-        logger.error(
-            f'Failed to download historic trades for pair: "{pair}". '
-            f'Error: {e}'
-        )
+        logger.error(f'Failed to download historic trades for pair: "{pair}". ' f"Error: {e}")
         return False
 
 
-def refresh_backtest_trades_data(exchange: Exchange, pairs: List[str], datadir: Path,
-                                 timerange: TimeRange, erase: bool = False,
-                                 data_format: str = 'jsongz') -> List[str]:
+def refresh_backtest_trades_data(
+    exchange: Exchange,
+    pairs: List[str],
+    datadir: Path,
+    timerange: TimeRange,
+    erase: bool = False,
+    data_format: str = "jsongz",
+) -> List[str]:
     """
     Refresh stored trades data for backtesting and hyperopt operations.
     Used by freqtrade download-data subcommand.
@@ -306,20 +353,24 @@ def refresh_backtest_trades_data(exchange: Exchange, pairs: List[str], datadir: 
 
         if erase:
             if data_handler.trades_purge(pair):
-                logger.info(f'Deleting existing data for pair {pair}.')
+                logger.info(f"Deleting existing data for pair {pair}.")
 
-        logger.info(f'Downloading trades for pair {pair}.')
-        _download_trades_history(exchange=exchange,
-                                 pair=pair,
-                                 timerange=timerange,
-                                 data_handler=data_handler)
+        logger.info(f"Downloading trades for pair {pair}.")
+        _download_trades_history(
+            exchange=exchange, pair=pair, timerange=timerange, data_handler=data_handler
+        )
     return pairs_not_available
 
 
-def convert_trades_to_ohlcv(pairs: List[str], timeframes: List[str],
-                            datadir: Path, timerange: TimeRange, erase: bool = False,
-                            data_format_ohlcv: str = 'json',
-                            data_format_trades: str = 'jsongz') -> None:
+def convert_trades_to_ohlcv(
+    pairs: List[str],
+    timeframes: List[str],
+    datadir: Path,
+    timerange: TimeRange,
+    erase: bool = False,
+    data_format_ohlcv: str = "json",
+    data_format_trades: str = "jsongz",
+) -> None:
     """
     Convert stored trades data to ohlcv data
     """
@@ -331,7 +382,7 @@ def convert_trades_to_ohlcv(pairs: List[str], timeframes: List[str],
         for timeframe in timeframes:
             if erase:
                 if data_handler_ohlcv.ohlcv_purge(pair, timeframe):
-                    logger.info(f'Deleting existing data for pair {pair}, interval {timeframe}.')
+                    logger.info(f"Deleting existing data for pair {pair}, interval {timeframe}.")
             ohlcv = trades_to_ohlcv(trades, timeframe)
             # Store ohlcv
             data_handler_ohlcv.ohlcv_store(pair, timeframe, data=ohlcv)
@@ -345,15 +396,17 @@ def get_timerange(data: Dict[str, DataFrame]) -> Tuple[arrow.Arrow, arrow.Arrow]
     :return: tuple containing min_date, max_date
     """
     timeranges = [
-        (arrow.get(frame['date'].min()), arrow.get(frame['date'].max()))
-        for frame in data.values()
+        (arrow.get(frame["date"].min()), arrow.get(frame["date"].max())) for frame in data.values()
     ]
-    return (min(timeranges, key=operator.itemgetter(0))[0],
-            max(timeranges, key=operator.itemgetter(1))[1])
+    return (
+        min(timeranges, key=operator.itemgetter(0))[0],
+        max(timeranges, key=operator.itemgetter(1))[1],
+    )
 
 
-def validate_backtest_data(data: DataFrame, pair: str, min_date: datetime,
-                           max_date: datetime, timeframe_min: int) -> bool:
+def validate_backtest_data(
+    data: DataFrame, pair: str, min_date: datetime, max_date: datetime, timeframe_min: int
+) -> bool:
     """
     Validates preprocessed backtesting data for missing values and shows warnings about it that.
 
@@ -369,6 +422,11 @@ def validate_backtest_data(data: DataFrame, pair: str, min_date: datetime,
     dflen = len(data)
     if dflen < expected_frames:
         found_missing = True
-        logger.warning("%s has missing frames: expected %s, got %s, that's %s missing values",
-                       pair, expected_frames, dflen, expected_frames - dflen)
+        logger.warning(
+            "%s has missing frames: expected %s, got %s, that's %s missing values",
+            pair,
+            expected_frames,
+            dflen,
+            expected_frames - dflen,
+        )
     return found_missing

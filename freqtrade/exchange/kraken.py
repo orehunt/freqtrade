@@ -4,8 +4,12 @@ from typing import Dict
 
 import ccxt
 
-from freqtrade.exceptions import (DependencyException, InvalidOrderException,
-                                  OperationalException, TemporaryError)
+from freqtrade.exceptions import (
+    DependencyException,
+    InvalidOrderException,
+    OperationalException,
+    TemporaryError,
+)
 from freqtrade.exchange import Exchange
 from freqtrade.exchange.exchange import retrier
 
@@ -23,7 +27,7 @@ class Kraken(Exchange):
 
     @retrier
     def get_balances(self) -> dict:
-        if self._config['dry_run']:
+        if self._config["dry_run"]:
             return {}
 
         try:
@@ -35,19 +39,24 @@ class Kraken(Exchange):
             balances.pop("used", None)
 
             orders = self._api.fetch_open_orders()
-            order_list = [(x["symbol"].split("/")[0 if x["side"] == "sell" else 1],
-                           x["remaining"],
-                           # Don't remove the below comment, this can be important for debuggung
-                           # x["side"], x["amount"],
-                           ) for x in orders]
+            order_list = [
+                (
+                    x["symbol"].split("/")[0 if x["side"] == "sell" else 1],
+                    x["remaining"],
+                    # Don't remove the below comment, this can be important for debuggung
+                    # x["side"], x["amount"],
+                )
+                for x in orders
+            ]
             for bal in balances:
-                balances[bal]['used'] = sum(order[1] for order in order_list if order[0] == bal)
-                balances[bal]['free'] = balances[bal]['total'] - balances[bal]['used']
+                balances[bal]["used"] = sum(order[1] for order in order_list if order[0] == bal)
+                balances[bal]["free"] = balances[bal]["total"] - balances[bal]["used"]
 
             return balances
         except (ccxt.NetworkError, ccxt.ExchangeError) as e:
             raise TemporaryError(
-                f'Could not get balance due to {e.__class__.__name__}. Message: {e}') from e
+                f"Could not get balance due to {e.__class__.__name__}. Message: {e}"
+            ) from e
         except ccxt.BaseError as e:
             raise OperationalException(e) from e
 
@@ -56,7 +65,7 @@ class Kraken(Exchange):
         Verify stop_loss against stoploss-order value (limit or price)
         Returns True if adjustment is necessary.
         """
-        return order['type'] == 'stop-loss' and stop_loss > float(order['price'])
+        return order["type"] == "stop-loss" and stop_loss > float(order["price"])
 
     def stoploss(self, pair: str, amount: float, stop_price: float, order_types: Dict) -> Dict:
         """
@@ -68,9 +77,8 @@ class Kraken(Exchange):
 
         stop_price = self.price_to_precision(pair, stop_price)
 
-        if self._config['dry_run']:
-            dry_order = self.dry_run_order(
-                pair, ordertype, "sell", amount, stop_price)
+        if self._config["dry_run"]:
+            dry_order = self.dry_run_order(pair, ordertype, "sell", amount, stop_price)
             return dry_order
 
         try:
@@ -78,23 +86,31 @@ class Kraken(Exchange):
 
             amount = self.amount_to_precision(pair, amount)
 
-            order = self._api.create_order(symbol=pair, type=ordertype, side='sell',
-                                           amount=amount, price=stop_price, params=params)
-            logger.info('stoploss order added for %s. '
-                        'stop price: %s.', pair, stop_price)
+            order = self._api.create_order(
+                symbol=pair,
+                type=ordertype,
+                side="sell",
+                amount=amount,
+                price=stop_price,
+                params=params,
+            )
+            logger.info("stoploss order added for %s. " "stop price: %s.", pair, stop_price)
             return order
         except ccxt.InsufficientFunds as e:
             raise DependencyException(
-                f'Insufficient funds to create {ordertype} sell order on market {pair}.'
-                f'Tried to create stoploss with amount {amount} at stoploss {stop_price}. '
-                f'Message: {e}') from e
+                f"Insufficient funds to create {ordertype} sell order on market {pair}."
+                f"Tried to create stoploss with amount {amount} at stoploss {stop_price}. "
+                f"Message: {e}"
+            ) from e
         except ccxt.InvalidOrder as e:
             raise InvalidOrderException(
-                f'Could not create {ordertype} sell order on market {pair}. '
-                f'Tried to create stoploss with amount {amount} at stoploss {stop_price}. '
-                f'Message: {e}') from e
+                f"Could not create {ordertype} sell order on market {pair}. "
+                f"Tried to create stoploss with amount {amount} at stoploss {stop_price}. "
+                f"Message: {e}"
+            ) from e
         except (ccxt.NetworkError, ccxt.ExchangeError) as e:
             raise TemporaryError(
-                f'Could not place sell order due to {e.__class__.__name__}. Message: {e}') from e
+                f"Could not place sell order due to {e.__class__.__name__}. Message: {e}"
+            ) from e
         except ccxt.BaseError as e:
             raise OperationalException(e) from e

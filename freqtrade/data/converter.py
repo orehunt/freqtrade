@@ -13,8 +13,14 @@ from freqtrade.constants import DEFAULT_DATAFRAME_COLUMNS
 logger = logging.getLogger(__name__)
 
 
-def ohlcv_to_dataframe(ohlcv: list, timeframe: str, pair: str, *,
-                       fill_missing: bool = True, drop_incomplete: bool = True) -> DataFrame:
+def ohlcv_to_dataframe(
+    ohlcv: list,
+    timeframe: str,
+    pair: str,
+    *,
+    fill_missing: bool = True,
+    drop_incomplete: bool = True,
+) -> DataFrame:
     """
     Converts a list with candle (OHLCV) data (in format returned by ccxt.fetch_ohlcv)
     to a Dataframe
@@ -30,21 +36,33 @@ def ohlcv_to_dataframe(ohlcv: list, timeframe: str, pair: str, *,
     cols = DEFAULT_DATAFRAME_COLUMNS
     df = DataFrame(ohlcv, columns=cols)
 
-    df['date'] = to_datetime(df['date'], unit='ms', utc=True, infer_datetime_format=True)
+    df["date"] = to_datetime(df["date"], unit="ms", utc=True, infer_datetime_format=True)
 
     # Some exchanges return int values for Volume and even for OHLC.
     # Convert them since TA-LIB indicators used in the strategy assume floats
     # and fail with exception...
-    df = df.astype(dtype={'open': 'float', 'high': 'float', 'low': 'float', 'close': 'float',
-                          'volume': 'float'})
-    return clean_ohlcv_dataframe(df, timeframe, pair,
-                                 fill_missing=fill_missing,
-                                 drop_incomplete=drop_incomplete)
+    df = df.astype(
+        dtype={
+            "open": "float",
+            "high": "float",
+            "low": "float",
+            "close": "float",
+            "volume": "float",
+        }
+    )
+    return clean_ohlcv_dataframe(
+        df, timeframe, pair, fill_missing=fill_missing, drop_incomplete=drop_incomplete
+    )
 
 
-def clean_ohlcv_dataframe(data: DataFrame, timeframe: str, pair: str, *,
-                          fill_missing: bool = True,
-                          drop_incomplete: bool = True) -> DataFrame:
+def clean_ohlcv_dataframe(
+    data: DataFrame,
+    timeframe: str,
+    pair: str,
+    *,
+    fill_missing: bool = True,
+    drop_incomplete: bool = True,
+) -> DataFrame:
     """
     Clense a OHLCV dataframe by
       * Grouping it by date (removes duplicate tics)
@@ -59,17 +77,13 @@ def clean_ohlcv_dataframe(data: DataFrame, timeframe: str, pair: str, *,
     :return: DataFrame
     """
     # group by index and aggregate results to eliminate duplicate ticks
-    data = data.groupby(by='date', as_index=False, sort=True).agg({
-        'open': 'first',
-        'high': 'max',
-        'low': 'min',
-        'close': 'last',
-        'volume': 'max',
-    })
+    data = data.groupby(by="date", as_index=False, sort=True).agg(
+        {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "max",}
+    )
     # eliminate partial candle
     if drop_incomplete:
         data.drop(data.tail(1).index, inplace=True)
-        logger.debug('Dropping last candle')
+        logger.debug("Dropping last candle")
 
     if fill_missing:
         return ohlcv_fill_up_missing_data(data, timeframe, pair)
@@ -85,25 +99,17 @@ def ohlcv_fill_up_missing_data(dataframe: DataFrame, timeframe: str, pair: str) 
     """
     from freqtrade.exchange import timeframe_to_minutes
 
-    ohlcv_dict = {
-        'open': 'first',
-        'high': 'max',
-        'low': 'min',
-        'close': 'last',
-        'volume': 'sum'
-    }
+    ohlcv_dict = {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
     timeframe_minutes = timeframe_to_minutes(timeframe)
     # Resample to create "NAN" values
-    df = dataframe.resample(f'{timeframe_minutes}min', on='date').agg(ohlcv_dict)
+    df = dataframe.resample(f"{timeframe_minutes}min", on="date").agg(ohlcv_dict)
 
     # Forwardfill close for missing columns
-    df['close'] = df['close'].fillna(method='ffill')
+    df["close"] = df["close"].fillna(method="ffill")
     # Use close for "open, high, low"
-    df.loc[:, ['open', 'high', 'low']] = df[['open', 'high', 'low']].fillna(
-        value={'open': df['close'],
-               'high': df['close'],
-               'low': df['close'],
-               })
+    df.loc[:, ["open", "high", "low"]] = df[["open", "high", "low"]].fillna(
+        value={"open": df["close"], "high": df["close"], "low": df["close"],}
+    )
     df.reset_index(inplace=True)
     len_before = len(dataframe)
     len_after = len(df)
@@ -112,7 +118,7 @@ def ohlcv_fill_up_missing_data(dataframe: DataFrame, timeframe: str, pair: str) 
     return df
 
 
-def trim_dataframe(df: DataFrame, timerange, df_date_col: str = 'date') -> DataFrame:
+def trim_dataframe(df: DataFrame, timerange, df_date_col: str = "date") -> DataFrame:
     """
     Trim dataframe based on given timerange
     :param df: Dataframe to trim
@@ -120,10 +126,10 @@ def trim_dataframe(df: DataFrame, timerange, df_date_col: str = 'date') -> DataF
     :param: df_date_col: Column in the dataframe to use as Date column
     :return: trimmed dataframe
     """
-    if timerange.starttype == 'date':
+    if timerange.starttype == "date":
         start = datetime.fromtimestamp(timerange.startts, tz=timezone.utc)
         df = df.loc[df[df_date_col] >= start, :]
-    if timerange.stoptype == 'date':
+    if timerange.stoptype == "date":
         stop = datetime.fromtimestamp(timerange.stopts, tz=timezone.utc)
         df = df.loc[df[df_date_col] <= stop, :]
     return df
@@ -137,19 +143,28 @@ def order_book_to_dataframe(bids: list, asks: list) -> DataFrame:
      b_sum       b_size       bids       asks       a_size       a_sum
     -------------------------------------------------------------------
     """
-    cols = ['bids', 'b_size']
+    cols = ["bids", "b_size"]
 
     bids_frame = DataFrame(bids, columns=cols)
     # add cumulative sum column
-    bids_frame['b_sum'] = bids_frame['b_size'].cumsum()
-    cols2 = ['asks', 'a_size']
+    bids_frame["b_sum"] = bids_frame["b_size"].cumsum()
+    cols2 = ["asks", "a_size"]
     asks_frame = DataFrame(asks, columns=cols2)
     # add cumulative sum column
-    asks_frame['a_sum'] = asks_frame['a_size'].cumsum()
+    asks_frame["a_sum"] = asks_frame["a_size"].cumsum()
 
-    frame = pd.concat([bids_frame['b_sum'], bids_frame['b_size'], bids_frame['bids'],
-                       asks_frame['asks'], asks_frame['a_size'], asks_frame['a_sum']], axis=1,
-                      keys=['b_sum', 'b_size', 'bids', 'asks', 'a_size', 'a_sum'])
+    frame = pd.concat(
+        [
+            bids_frame["b_sum"],
+            bids_frame["b_size"],
+            bids_frame["bids"],
+            asks_frame["asks"],
+            asks_frame["a_size"],
+            asks_frame["a_sum"],
+        ],
+        axis=1,
+        keys=["b_sum", "b_size", "bids", "asks", "a_size", "a_sum"],
+    )
     # logger.info('order book %s', frame )
     return frame
 
@@ -163,14 +178,15 @@ def trades_to_ohlcv(trades: list, timeframe: str) -> DataFrame:
     :return: OHLCV Dataframe.
     """
     from freqtrade.exchange import timeframe_to_minutes
+
     timeframe_minutes = timeframe_to_minutes(timeframe)
     df = pd.DataFrame(trades)
-    df['datetime'] = pd.to_datetime(df['datetime'])
-    df = df.set_index('datetime')
+    df["datetime"] = pd.to_datetime(df["datetime"])
+    df = df.set_index("datetime")
 
-    df_new = df['price'].resample(f'{timeframe_minutes}min').ohlc()
-    df_new['volume'] = df['amount'].resample(f'{timeframe_minutes}min').sum()
-    df_new['date'] = df_new.index
+    df_new = df["price"].resample(f"{timeframe_minutes}min").ohlc()
+    df_new["volume"] = df["amount"].resample(f"{timeframe_minutes}min").sum()
+    df_new["date"] = df_new.index
     # Drop 0 volume rows
     df_new = df_new.dropna()
     return df_new[DEFAULT_DATAFRAME_COLUMNS]
@@ -185,14 +201,15 @@ def convert_trades_format(config: Dict[str, Any], convert_from: str, convert_to:
     :param erase: Erase souce data (does not apply if source and target format are identical)
     """
     from freqtrade.data.history.idatahandler import get_datahandler
-    src = get_datahandler(config['datadir'], convert_from)
-    trg = get_datahandler(config['datadir'], convert_to)
 
-    if 'pairs' not in config:
-        config['pairs'] = src.trades_get_pairs(config['datadir'])
+    src = get_datahandler(config["datadir"], convert_from)
+    trg = get_datahandler(config["datadir"], convert_to)
+
+    if "pairs" not in config:
+        config["pairs"] = src.trades_get_pairs(config["datadir"])
     logger.info(f"Converting trades for {config['pairs']}")
 
-    for pair in config['pairs']:
+    for pair in config["pairs"]:
         data = src.trades_load(pair=pair)
         logger.info(f"Converting {len(data)} trades for {pair}")
         trg.trades_store(pair, data)
@@ -210,26 +227,29 @@ def convert_ohlcv_format(config: Dict[str, Any], convert_from: str, convert_to: 
     :param erase: Erase souce data (does not apply if source and target format are identical)
     """
     from freqtrade.data.history.idatahandler import get_datahandler
-    src = get_datahandler(config['datadir'], convert_from)
-    trg = get_datahandler(config['datadir'], convert_to)
-    timeframes = config.get('timeframes', [config.get('ticker_interval')])
+
+    src = get_datahandler(config["datadir"], convert_from)
+    trg = get_datahandler(config["datadir"], convert_to)
+    timeframes = config.get("timeframes", [config.get("ticker_interval")])
     logger.info(f"Converting candle (OHLCV) for timeframe {timeframes}")
 
-    if 'pairs' not in config:
-        config['pairs'] = []
+    if "pairs" not in config:
+        config["pairs"] = []
         # Check timeframes or fall back to ticker_interval.
         for timeframe in timeframes:
-            config['pairs'].extend(src.ohlcv_get_pairs(config['datadir'],
-                                                       timeframe))
+            config["pairs"].extend(src.ohlcv_get_pairs(config["datadir"], timeframe))
     logger.info(f"Converting candle (OHLCV) data for {config['pairs']}")
 
     for timeframe in timeframes:
-        for pair in config['pairs']:
-            data = src.ohlcv_load(pair=pair, timeframe=timeframe,
-                                  timerange=None,
-                                  fill_missing=False,
-                                  drop_incomplete=False,
-                                  startup_candles=0)
+        for pair in config["pairs"]:
+            data = src.ohlcv_load(
+                pair=pair,
+                timeframe=timeframe,
+                timerange=None,
+                fill_missing=False,
+                drop_incomplete=False,
+                startup_candles=0,
+            )
             logger.info(f"Converting {len(data)} candles for {pair}")
             trg.ohlcv_store(pair=pair, timeframe=timeframe, data=data)
             if erase and convert_from != convert_to:

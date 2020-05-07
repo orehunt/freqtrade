@@ -19,6 +19,7 @@ class CryptoFiat:
     """
     Object to describe what is the price of Crypto-currency in a FIAT
     """
+
     # Constants
     CACHE_DURATION = 6 * 60 * 60  # 6 hours
 
@@ -66,6 +67,7 @@ class CryptoToFiatConverter:
     This object contains a list of pair Crypto, FIAT
     This object is also a Singleton
     """
+
     __instance = None
     _coingekko: CoinGeckoAPI = None
 
@@ -91,10 +93,11 @@ class CryptoToFiatConverter:
         try:
             coinlistings = self._coingekko.get_coins_list()
             # Create mapping table from synbol to coingekko_id
-            self._cryptomap = {x['symbol']: x['id'] for x in coinlistings}
+            self._cryptomap = {x["symbol"]: x["id"] for x in coinlistings}
         except (Exception) as exception:
             logger.error(
-                f"Could not load FIAT Cryptocurrency map for the following problem: {exception}")
+                f"Could not load FIAT Cryptocurrency map for the following problem: {exception}"
+            )
 
     def convert_amount(self, crypto_amount: float, crypto_symbol: str, fiat_symbol: str) -> float:
         """
@@ -121,7 +124,7 @@ class CryptoToFiatConverter:
 
         # Check if the fiat convertion you want is supported
         if not self._is_supported_fiat(fiat=fiat_symbol):
-            raise ValueError(f'The fiat {fiat_symbol} is not supported.')
+            raise ValueError(f"The fiat {fiat_symbol} is not supported.")
 
         # Get the pair that interest us and return the price in fiat
         for pair in self._pairs:
@@ -130,8 +133,7 @@ class CryptoToFiatConverter:
                 if pair.is_expired():
                     pair.set_price(
                         price=self._find_price(
-                            crypto_symbol=pair.crypto_symbol,
-                            fiat_symbol=pair.fiat_symbol
+                            crypto_symbol=pair.crypto_symbol, fiat_symbol=pair.fiat_symbol
                         )
                     )
 
@@ -142,10 +144,7 @@ class CryptoToFiatConverter:
         return self._add_pair(
             crypto_symbol=crypto_symbol,
             fiat_symbol=fiat_symbol,
-            price=self._find_price(
-                crypto_symbol=crypto_symbol,
-                fiat_symbol=fiat_symbol
-            )
+            price=self._find_price(crypto_symbol=crypto_symbol, fiat_symbol=fiat_symbol),
         )
 
     def _add_pair(self, crypto_symbol: str, fiat_symbol: str, price: float) -> float:
@@ -155,11 +154,7 @@ class CryptoToFiatConverter:
         :return: price in FIAT
         """
         self._pairs.append(
-            CryptoFiat(
-                crypto_symbol=crypto_symbol,
-                fiat_symbol=fiat_symbol,
-                price=price
-            )
+            CryptoFiat(crypto_symbol=crypto_symbol, fiat_symbol=fiat_symbol, price=price)
         )
 
         return price
@@ -182,7 +177,7 @@ class CryptoToFiatConverter:
         """
         # Check if the fiat convertion you want is supported
         if not self._is_supported_fiat(fiat=fiat_symbol):
-            raise ValueError(f'The fiat {fiat_symbol} is not supported.')
+            raise ValueError(f"The fiat {fiat_symbol} is not supported.")
 
         # No need to convert if both crypto and fiat are the same
         if crypto_symbol == fiat_symbol:
@@ -196,10 +191,9 @@ class CryptoToFiatConverter:
         try:
             _gekko_id = self._cryptomap[crypto_symbol]
             return float(
-                self._coingekko.get_price(
-                    ids=_gekko_id,
-                    vs_currencies=fiat_symbol
-                )[_gekko_id][fiat_symbol]
+                self._coingekko.get_price(ids=_gekko_id, vs_currencies=fiat_symbol)[_gekko_id][
+                    fiat_symbol
+                ]
             )
         except Exception as exception:
             logger.error("Error in _find_price: %s", exception)

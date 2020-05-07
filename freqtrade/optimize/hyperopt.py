@@ -7,18 +7,24 @@ import warnings
 import logging
 import json
 from collections import deque
-from math import factorial, log
+from math import factorial
 from typing import Any, Dict, List, Optional, Tuple, Set
 from time import time as now
 
 from colorama import init as colorama_init
-from joblib import Parallel, cpu_count, delayed, dump, load, wrap_non_picklable_objects, hash
-from joblib import parallel_backend
+from joblib import (
+    Parallel,
+    cpu_count,
+    delayed,
+    dump,
+    load,
+    wrap_non_picklable_objects,
+    hash,
+    parallel_backend,
+)
 from multiprocessing.managers import Namespace
-from pandas import DataFrame, HDFStore, json_normalize, read_hdf
+from pandas import DataFrame, HDFStore, json_normalize, read_hdf, Timedelta
 from numpy import isfinite
-from joblib import Parallel, cpu_count, delayed, dump, load, wrap_non_picklable_objects
-from pandas import DataFrame, json_normalize, Timedelta
 
 from freqtrade.data.converter import trim_dataframe
 from freqtrade.data.history import get_timerange
@@ -35,8 +41,7 @@ from freqtrade.optimize.hyperopt_constants import (
     VOID_LOSS,
     CYCLE_LIE_STRATS,
     CYCLE_ESTIMATORS,
-    CYCLE_ACQ_FUNCS,
-    columns,
+    CYCLE_ACQ_FUNCS
 )
 
 # from freqtrade.optimize.hyperopt_backend import Trial
@@ -355,7 +360,6 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         but only fit a new model every n_points, because if we fit at every result previous
         points become invalid.
         """
-        vals = []
         fit = False
         to_ask: deque = deque()
         evald: Set[Tuple] = set()
@@ -410,7 +414,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                         backend.trials.lock.release()
                     logger.debug("Couldn't read trials from disk")
                 if backend.trials.exit or self._maybe_terminate(
-                        t, jobs, backend.trials, backend.epochs
+                    t, jobs, backend.trials, backend.epochs
                 ):
                     break
 
@@ -422,7 +426,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                 if a in evald:
                     break
                 if backend.trials.exit or self._maybe_terminate(
-                        t, jobs, backend.trials, backend.epochs
+                    t, jobs, backend.trials, backend.epochs
                 ):
                     break
             evald.add(a)
@@ -551,7 +555,6 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                     if tbl in keys:
                         store.remove(tbl)
             # save a list of all the tables in the store except backups
-            s_keys = set()
             # unique keys and exclude backups
             keys = set([k.lstrip("/").rstrip("_bak") for k in keys])
             keys.add(self.trials_instance)
@@ -598,7 +601,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                         )
                     )
                 self.dimensions = [
-                    k for k in self.target_trials.filter(regex="^params_dict\.").columns
+                    k for k in self.target_trials.filter(regex="^params_dict.").columns
                 ]
         if self.cv:
             # CV trials are saved in their own table
@@ -708,7 +711,6 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         except OverflowError:
             search_space_size = VOID_LOSS
 
-        log_opt = max(2, int(log(opt_points, 2)))
         # fixed number of epochs
         n_initial_points = opt_points
         if total_epochs > 0:

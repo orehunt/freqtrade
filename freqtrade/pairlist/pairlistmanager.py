@@ -16,26 +16,26 @@ from freqtrade.resolvers import PairListResolver
 logger = logging.getLogger(__name__)
 
 
-class PairListManager():
-
+class PairListManager:
     def __init__(self, exchange, config: dict) -> None:
         self._exchange = exchange
         self._config = config
-        self._whitelist = self._config['exchange'].get('pair_whitelist')
-        self._blacklist = self._config['exchange'].get('pair_blacklist', [])
+        self._whitelist = self._config["exchange"].get("pair_whitelist")
+        self._blacklist = self._config["exchange"].get("pair_blacklist", [])
         self._pairlists: List[IPairList] = []
         self._tickers_needed = False
-        for pl in self._config.get('pairlists', None):
-            if 'method' not in pl:
+        for pl in self._config.get("pairlists", None):
+            if "method" not in pl:
                 logger.warning(f"No method in {pl}")
                 continue
-            pairl = PairListResolver.load_pairlist(pl.get('method'),
-                                                   exchange=exchange,
-                                                   pairlistmanager=self,
-                                                   config=config,
-                                                   pairlistconfig=pl,
-                                                   pairlist_pos=len(self._pairlists)
-                                                   )
+            pairl = PairListResolver.load_pairlist(
+                pl.get("method"),
+                exchange=exchange,
+                pairlistmanager=self,
+                config=config,
+                pairlistconfig=pl,
+                pairlist_pos=len(self._pairlists),
+            )
             self._tickers_needed = pairl.needstickers or self._tickers_needed
             self._pairlists.append(pairl)
 

@@ -49,6 +49,7 @@ class SampleHyperOpt(IHyperOpt):
         """
         Define the buy strategy parameters to be used by Hyperopt.
         """
+
         def populate_buy_trend(dataframe: DataFrame, metadata: dict) -> DataFrame:
             """
             Buy strategy Hyperopt will build and use.
@@ -56,35 +57,31 @@ class SampleHyperOpt(IHyperOpt):
             conditions = []
 
             # GUARDS AND TRENDS
-            if 'mfi-enabled' in params and params['mfi-enabled']:
-                conditions.append(dataframe['mfi'] < params['mfi-value'])
-            if 'fastd-enabled' in params and params['fastd-enabled']:
-                conditions.append(dataframe['fastd'] < params['fastd-value'])
-            if 'adx-enabled' in params and params['adx-enabled']:
-                conditions.append(dataframe['adx'] > params['adx-value'])
-            if 'rsi-enabled' in params and params['rsi-enabled']:
-                conditions.append(dataframe['rsi'] < params['rsi-value'])
+            if "mfi-enabled" in params and params["mfi-enabled"]:
+                conditions.append(dataframe["mfi"] < params["mfi-value"])
+            if "fastd-enabled" in params and params["fastd-enabled"]:
+                conditions.append(dataframe["fastd"] < params["fastd-value"])
+            if "adx-enabled" in params and params["adx-enabled"]:
+                conditions.append(dataframe["adx"] > params["adx-value"])
+            if "rsi-enabled" in params and params["rsi-enabled"]:
+                conditions.append(dataframe["rsi"] < params["rsi-value"])
 
             # TRIGGERS
-            if 'trigger' in params:
-                if params['trigger'] == 'bb_lower':
-                    conditions.append(dataframe['close'] < dataframe['bb_lowerband'])
-                if params['trigger'] == 'macd_cross_signal':
-                    conditions.append(qtpylib.crossed_above(
-                        dataframe['macd'], dataframe['macdsignal']
-                    ))
-                if params['trigger'] == 'sar_reversal':
-                    conditions.append(qtpylib.crossed_above(
-                        dataframe['close'], dataframe['sar']
-                    ))
+            if "trigger" in params:
+                if params["trigger"] == "bb_lower":
+                    conditions.append(dataframe["close"] < dataframe["bb_lowerband"])
+                if params["trigger"] == "macd_cross_signal":
+                    conditions.append(
+                        qtpylib.crossed_above(dataframe["macd"], dataframe["macdsignal"])
+                    )
+                if params["trigger"] == "sar_reversal":
+                    conditions.append(qtpylib.crossed_above(dataframe["close"], dataframe["sar"]))
 
             # Check that volume is not 0
-            conditions.append(dataframe['volume'] > 0)
+            conditions.append(dataframe["volume"] > 0)
 
             if conditions:
-                dataframe.loc[
-                    reduce(lambda x, y: x & y, conditions),
-                    'buy'] = 1
+                dataframe.loc[reduce(lambda x, y: x & y, conditions), "buy"] = 1
 
             return dataframe
 
@@ -96,15 +93,15 @@ class SampleHyperOpt(IHyperOpt):
         Define your Hyperopt space for searching buy strategy parameters.
         """
         return [
-            Integer(10, 25, name='mfi-value'),
-            Integer(15, 45, name='fastd-value'),
-            Integer(20, 50, name='adx-value'),
-            Integer(20, 40, name='rsi-value'),
-            Categorical([True, False], name='mfi-enabled'),
-            Categorical([True, False], name='fastd-enabled'),
-            Categorical([True, False], name='adx-enabled'),
-            Categorical([True, False], name='rsi-enabled'),
-            Categorical(['bb_lower', 'macd_cross_signal', 'sar_reversal'], name='trigger')
+            Integer(10, 25, name="mfi-value"),
+            Integer(15, 45, name="fastd-value"),
+            Integer(20, 50, name="adx-value"),
+            Integer(20, 40, name="rsi-value"),
+            Categorical([True, False], name="mfi-enabled"),
+            Categorical([True, False], name="fastd-enabled"),
+            Categorical([True, False], name="adx-enabled"),
+            Categorical([True, False], name="rsi-enabled"),
+            Categorical(["bb_lower", "macd_cross_signal", "sar_reversal"], name="trigger"),
         ]
 
     @staticmethod
@@ -112,6 +109,7 @@ class SampleHyperOpt(IHyperOpt):
         """
         Define the sell strategy parameters to be used by Hyperopt.
         """
+
         def populate_sell_trend(dataframe: DataFrame, metadata: dict) -> DataFrame:
             """
             Sell strategy Hyperopt will build and use.
@@ -119,35 +117,31 @@ class SampleHyperOpt(IHyperOpt):
             conditions = []
 
             # GUARDS AND TRENDS
-            if 'sell-mfi-enabled' in params and params['sell-mfi-enabled']:
-                conditions.append(dataframe['mfi'] > params['sell-mfi-value'])
-            if 'sell-fastd-enabled' in params and params['sell-fastd-enabled']:
-                conditions.append(dataframe['fastd'] > params['sell-fastd-value'])
-            if 'sell-adx-enabled' in params and params['sell-adx-enabled']:
-                conditions.append(dataframe['adx'] < params['sell-adx-value'])
-            if 'sell-rsi-enabled' in params and params['sell-rsi-enabled']:
-                conditions.append(dataframe['rsi'] > params['sell-rsi-value'])
+            if "sell-mfi-enabled" in params and params["sell-mfi-enabled"]:
+                conditions.append(dataframe["mfi"] > params["sell-mfi-value"])
+            if "sell-fastd-enabled" in params and params["sell-fastd-enabled"]:
+                conditions.append(dataframe["fastd"] > params["sell-fastd-value"])
+            if "sell-adx-enabled" in params and params["sell-adx-enabled"]:
+                conditions.append(dataframe["adx"] < params["sell-adx-value"])
+            if "sell-rsi-enabled" in params and params["sell-rsi-enabled"]:
+                conditions.append(dataframe["rsi"] > params["sell-rsi-value"])
 
             # TRIGGERS
-            if 'sell-trigger' in params:
-                if params['sell-trigger'] == 'sell-bb_upper':
-                    conditions.append(dataframe['close'] > dataframe['bb_upperband'])
-                if params['sell-trigger'] == 'sell-macd_cross_signal':
-                    conditions.append(qtpylib.crossed_above(
-                        dataframe['macdsignal'], dataframe['macd']
-                    ))
-                if params['sell-trigger'] == 'sell-sar_reversal':
-                    conditions.append(qtpylib.crossed_above(
-                        dataframe['sar'], dataframe['close']
-                    ))
+            if "sell-trigger" in params:
+                if params["sell-trigger"] == "sell-bb_upper":
+                    conditions.append(dataframe["close"] > dataframe["bb_upperband"])
+                if params["sell-trigger"] == "sell-macd_cross_signal":
+                    conditions.append(
+                        qtpylib.crossed_above(dataframe["macdsignal"], dataframe["macd"])
+                    )
+                if params["sell-trigger"] == "sell-sar_reversal":
+                    conditions.append(qtpylib.crossed_above(dataframe["sar"], dataframe["close"]))
 
             # Check that volume is not 0
-            conditions.append(dataframe['volume'] > 0)
+            conditions.append(dataframe["volume"] > 0)
 
             if conditions:
-                dataframe.loc[
-                    reduce(lambda x, y: x & y, conditions),
-                    'sell'] = 1
+                dataframe.loc[reduce(lambda x, y: x & y, conditions), "sell"] = 1
 
             return dataframe
 
@@ -159,17 +153,18 @@ class SampleHyperOpt(IHyperOpt):
         Define your Hyperopt space for searching sell strategy parameters.
         """
         return [
-            Integer(75, 100, name='sell-mfi-value'),
-            Integer(50, 100, name='sell-fastd-value'),
-            Integer(50, 100, name='sell-adx-value'),
-            Integer(60, 100, name='sell-rsi-value'),
-            Categorical([True, False], name='sell-mfi-enabled'),
-            Categorical([True, False], name='sell-fastd-enabled'),
-            Categorical([True, False], name='sell-adx-enabled'),
-            Categorical([True, False], name='sell-rsi-enabled'),
-            Categorical(['sell-bb_upper',
-                         'sell-macd_cross_signal',
-                         'sell-sar_reversal'], name='sell-trigger')
+            Integer(75, 100, name="sell-mfi-value"),
+            Integer(50, 100, name="sell-fastd-value"),
+            Integer(50, 100, name="sell-adx-value"),
+            Integer(60, 100, name="sell-rsi-value"),
+            Categorical([True, False], name="sell-mfi-enabled"),
+            Categorical([True, False], name="sell-fastd-enabled"),
+            Categorical([True, False], name="sell-adx-enabled"),
+            Categorical([True, False], name="sell-rsi-enabled"),
+            Categorical(
+                ["sell-bb_upper", "sell-macd_cross_signal", "sell-sar_reversal"],
+                name="sell-trigger",
+            ),
         ]
 
     def populate_buy_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
@@ -180,12 +175,13 @@ class SampleHyperOpt(IHyperOpt):
         """
         dataframe.loc[
             (
-                (dataframe['close'] < dataframe['bb_lowerband']) &
-                (dataframe['mfi'] < 16) &
-                (dataframe['adx'] > 25) &
-                (dataframe['rsi'] < 21)
+                (dataframe["close"] < dataframe["bb_lowerband"])
+                & (dataframe["mfi"] < 16)
+                & (dataframe["adx"] > 25)
+                & (dataframe["rsi"] < 21)
             ),
-            'buy'] = 1
+            "buy",
+        ] = 1
 
         return dataframe
 
@@ -197,11 +193,10 @@ class SampleHyperOpt(IHyperOpt):
         """
         dataframe.loc[
             (
-                (qtpylib.crossed_above(
-                    dataframe['macdsignal'], dataframe['macd']
-                )) &
-                (dataframe['fastd'] > 54)
+                (qtpylib.crossed_above(dataframe["macdsignal"], dataframe["macd"]))
+                & (dataframe["fastd"] > 54)
             ),
-            'sell'] = 1
+            "sell",
+        ] = 1
 
         return dataframe

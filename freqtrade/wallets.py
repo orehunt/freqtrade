@@ -21,12 +21,11 @@ class Wallet(NamedTuple):
 
 
 class Wallets:
-
     def __init__(self, config: dict, exchange: Exchange) -> None:
         self._config = config
         self._exchange = exchange
         self._wallets: Dict[str, Wallet] = {}
-        self.start_cap = config['dry_run_wallet']
+        self.start_cap = config["dry_run_wallet"]
         self._last_wallet_refresh = 0
         self.update()
 
@@ -66,21 +65,13 @@ class Wallets:
         tot_in_trades = sum([trade.stake_amount for trade in open_trades])
 
         current_stake = self.start_cap + tot_profit - tot_in_trades
-        _wallets[self._config['stake_currency']] = Wallet(
-            self._config['stake_currency'],
-            current_stake,
-            0,
-            current_stake
+        _wallets[self._config["stake_currency"]] = Wallet(
+            self._config["stake_currency"], current_stake, 0, current_stake
         )
 
         for trade in open_trades:
             curr = self._exchange.get_pair_base_currency(trade.pair)
-            _wallets[curr] = Wallet(
-                curr,
-                trade.amount,
-                0,
-                trade.amount
-            )
+            _wallets[curr] = Wallet(curr, trade.amount, 0, trade.amount)
         self._wallets = _wallets
 
     def _update_live(self) -> None:
@@ -89,9 +80,9 @@ class Wallets:
         for currency in balances:
             self._wallets[currency] = Wallet(
                 currency,
-                balances[currency].get('free', None),
-                balances[currency].get('used', None),
-                balances[currency].get('total', None)
+                balances[currency].get("free", None),
+                balances[currency].get("used", None),
+                balances[currency].get("total", None),
             )
 
     def update(self, require_update: bool = True) -> None:
@@ -102,12 +93,12 @@ class Wallets:
         for trading operations, the latest balance is needed.
         :param require_update: Allow skipping an update if balances were recently refreshed
         """
-        if (require_update or (self._last_wallet_refresh + 3600 < arrow.utcnow().timestamp)):
-            if self._config['dry_run']:
+        if require_update or (self._last_wallet_refresh + 3600 < arrow.utcnow().timestamp):
+            if self._config["dry_run"]:
                 self._update_dry()
             else:
                 self._update_live()
-            logger.info('Wallets synced.')
+            logger.info("Wallets synced.")
             self._last_wallet_refresh = arrow.utcnow().timestamp
 
     def get_all_balances(self) -> Dict[str, Any]:

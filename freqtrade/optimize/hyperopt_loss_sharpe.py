@@ -20,9 +20,14 @@ class SharpeHyperOptLoss(IHyperOptLoss):
     """
 
     @staticmethod
-    def hyperopt_loss_function(results: DataFrame, trade_count: int,
-                               min_date: datetime, max_date: datetime,
-                               *args, **kwargs) -> float:
+    def hyperopt_loss_function(
+        results: DataFrame,
+        trade_count: int,
+        min_date: datetime,
+        max_date: datetime,
+        *args,
+        **kwargs
+    ) -> float:
         """
         Objective function, returns smaller number for more optimal results.
 
@@ -40,7 +45,7 @@ class SharpeHyperOptLoss(IHyperOptLoss):
             sharp_ratio = expected_returns_mean / up_stdev * np.sqrt(365)
         else:
             # Define high (negative) sharpe ratio to be clear that this is NOT optimal.
-            sharp_ratio = -20.
+            sharp_ratio = -20.0
 
         # print(expected_returns_mean, up_stdev, sharp_ratio)
         return -sharp_ratio

@@ -261,11 +261,14 @@ class HyperoptData:
         except (
             KeyError,
             AttributeError,
-        ) as e:  # trials instance is not in the database or corrupted
+        ):  # trials instance is not in the database or corrupted
             # if corrupted
             if backup or not start:
                 try:
-                    logger.warn(f"Instance table {trials_instance} either empty or corrupted, trying backup...")
+                    logger.warn(
+                        f"Instance table {trials_instance} either"
+                        "empty or corrupted, trying backup..."
+                    )
                     trials = read_hdf(trials_file, key=f"{trials_instance}_bak", where=where)
                 except KeyError:
                     logger.warn(f"Backup not found...")
@@ -390,6 +393,8 @@ class HyperoptData:
             "best": config.get("hyperopt_list_best", []),
             "pct_best": config.get("hyperopt_list_pct_best", 0.1),
             "cutoff_best": config.get("hyperopt_list_cutoff_best", 0.99),
+            "trail": config.get("hyperopt_list_trail_bounds", True),
+            "no_trades": config.get("hyperopt_list_keep_no_trades", False),
             "min_trades": config.get("hyperopt_list_min_trades", None),
             "max_trades": config.get("hyperopt_list_max_trades", None),
             "min_avg_time": config.get("hyperopt_list_min_avg_time", None),
@@ -422,30 +427,27 @@ class HyperoptData:
 
         if not filters["enabled"] or len(trials) < 1:
             return hd.list_or_df(trials, return_list)
-        if filters["min_trades"] is not None:
-            trials = trials.loc[trials["trade_count"] > filters["min_trades"]]
-        if filters["max_trades"] is not None:
-            trials = trials.loc[trials["trade_count"] < filters["max_trades"]]
+        if filters["no_trades"]:
+            no_trades = trials.loc[trials["trade_count"] < 1]
+        else:
+            no_trades = DataFrame()
 
-        with_trades = trials.loc[trials["trade_count"] > 0]
-        with_trades_len = len(with_trades)
-        if filters["min_avg_time"]:
-            with_trades = with_trades.loc[with_trades["duration"] > filters["min_avg_time"]]
-        if filters["max_avg_time"]:
-            with_trades = with_trades.loc[with_trades["duration"] < filters["max_avg_time"]]
-        if filters["min_avg_profit"] is not None:
-            with_trades = with_trades.loc[with_trades["avg_profit"] > filters["min_avg_profit"]]
-        if filters["max_avg_profit"] is not None:
-            with_trades = with_trades.loc[with_trades["avg_profit"] < filters["max_avg_profit"]]
-        if filters["min_total_profit"] is not None:
-            with_trades = with_trades.loc[with_trades["profit"] > filters["min_total_profit"]]
-        if filters["max_total_profit"] is not None:
-            with_trades = with_trades.loc[with_trades["profit"] < filters["max_total_profit"]]
-        if len(with_trades) != with_trades_len:
-            trials = with_trades
+        trials = trials.loc[trials["trade_count"] > 0]
+        filters_col = {
+            "trades": "trade_count",
+            "avg_time": "duration",
+            "avg_profit": "avg_profit",
+            "total_profit": "profit",
+        }
+        for bound in ("min", "max"):
+            for f, c in filters_col.items():
+                if filters[f"{bound}_{f}"] is not None:
+                    trials = HyperoptData.trim_bounds(
+                        trials, filters["trail"], c, bound, filters[f"{bound}_{f}"],
+                    )
 
         if len(trials) > 0:
-            flt_trials = []
+            flt_trials = [no_trades]
             if filters["dedup"]:
                 flt_trials.append(hd.dedup_trials(trials))
             if filters["best"]:
@@ -455,7 +457,32 @@ class HyperoptData:
                 concat(flt_trials).drop_duplicates(subset="current_epoch"), return_list
             )
         else:
-            return hd.list_or_df(trials, return_list)
+            return hd.list_or_df(concat([no_trades, trials]), return_list)
+
+    @staticmethod
+    def trim_bounds(
+        trials: DataFrame, trail_enabled: Any, col: str, bound: str, val: Any
+    ) -> DataFrame:
+        if bound not in ("min", "max"):
+            raise OperationalException("Wrong min max choice")
+        if len(trials) < 1:
+            return trials
+        if bound == "min":
+            trail = lambda x, y: x - y  # noqa: E731
+            flt = lambda x, y: x.loc[x[col] > y]  # noqa: E731
+        else:
+            trail = lambda x, y: x + y  # noqa: E731
+            flt = lambda x, y: x.loc[x[col] < y]  # noqa: E731
+        if trail_enabled:
+            # use std to increase and decrease bounds
+            val_step = trials[col].values.std() or val or 1
+            flt_trials = flt(trials, val)
+            while len(flt_trials) < 1:
+                val = trail(val, val_step)
+                flt_trials = flt(trials, val)
+            return flt_trials
+        else:
+            return flt(trials, val)
 
     @staticmethod
     def norm_best(trials: Any, filters: dict) -> List:
@@ -470,7 +497,7 @@ class HyperoptData:
             m_col = trials[m].values
             m_min = m_col.min()
             m_max = m_col.max()
-            trials[f"norm_{m}"] = (m_col - m_min) / (m_max - m_min)
+            trials[f"norm_{m}"] = (m_col - m_min) / ((m_max - m_min) or 1)
         # re-invert
         trials["loss"] = trials["loss"].mul(-1)
         trials["duration"] = trials["duration"].mul(-1)
@@ -478,11 +505,11 @@ class HyperoptData:
         # Calc cutoff percentage based on normalization
         types_best = filters["best"]
         if filters["cutoff_best"] == "std":
-            min_ratio = lambda m: 1 - trials[m].values.std()
+            min_ratio = lambda m: 1 - trials[m].values.std()  # noqa: E731
         elif filters["cutoff_best"] == "mean":
-            min_ratio = lambda m: 1 - trials[m].values.mean()
+            min_ratio = lambda m: 1 - trials[m].values.mean()  # noqa: E731
         else:
-            min_ratio = lambda m: filters["cutoff_best"]
+            min_ratio = lambda m: filters["cutoff_best"]  # noqa: E731
 
         # calc the norm ratio between metrics:
         # compare each normalized metric against the set minimum ratio;
