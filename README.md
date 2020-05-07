@@ -10,6 +10,8 @@
 - pair wise amounts configuration (roi, stoploss, trailing) as a per strategy config (not implemented in hyperopt, edge, rpc/telegram)
 - more persistent trials storage with pandas hdf support...hyperopt class + strategy class is mapped to an hdf file, every lossfunc+params is mapped to a key (table)
 - ability to `prefer_sell_signal` which prioritizes a sell when both buy and sell signals are set
+- colored progressbar with statistics, colored log legel
+- option to abort hyperopt if there isn't a minimum ratio for all the pairs/timerange
 
 ## Files that use amounts config 
 ```

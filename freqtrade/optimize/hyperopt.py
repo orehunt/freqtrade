@@ -799,9 +799,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         if not done:
             trials_state.empty_strikes += 1
         if (
-            not done
-            and self.search_space_size < total + self.epochs_limit()
-            and not self.cv
+            not done and self.search_space_size < total + self.epochs_limit() and not self.cv
         ) or trials_state.empty_strikes > self.trials_maxout:
             logger.error("Terminating Hyperopt because trials were empty.")
             trials_state.exit = True
