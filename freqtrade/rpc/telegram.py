@@ -226,12 +226,17 @@ class Telegram(RPC):
                     if r["stop_loss"] != r["initial_stop_loss"]
                     else "",
                     # Adding stoploss and stoploss percentage only if it is not None
-                    "*Stoploss:* `{stop_loss:.8f}` "
-                    + ("`({stop_loss_pct:.2f}%)`" if r["stop_loss_pct"] else ""),
-                    "*Open Order:* `{open_order}`" if r["open_order"] else "",
+                    "*Stoploss:* `{stop_loss:.8f}` " +
+                    ("`({stop_loss_pct:.2f}%)`" if r['stop_loss_pct'] else ""),
                 ]
+                if r['open_order']:
+                    if r['sell_order_status']:
+                        lines.append("*Open Order:* `{open_order}` - `{sell_order_status}`")
+                    else:
+                        lines.append("*Open Order:* `{open_order}`")
+
                 # Filter empty lines using list-comprehension
-                messages.append("\n".join([l for l in lines if l]).format(**r))
+                messages.append("\n".join([line for line in lines if line]).format(**r))
 
             for msg in messages:
                 self._send_msg(msg)
@@ -279,7 +284,19 @@ class Telegram(RPC):
                 headers=["Day", f"Profit {stake_cur}", f"Profit {fiat_disp_cur}", f"Trades"],
                 tablefmt="simple",
             )
-            message = f"<b>Daily Profit over the last {timescale} days</b>:\n<pre>{stats_tab}</pre>"
+            stats_tab = tabulate(
+                [[day['date'],
+                  f"{day['abs_profit']} {stats['stake_currency']}",
+                  f"{day['fiat_value']} {stats['fiat_display_currency']}",
+                  f"{day['trade_count']} trades"] for day in stats['data']],
+                headers=[
+                    'Day',
+                    f'Profit {stake_cur}',
+                    f'Profit {fiat_disp_cur}',
+                    'Trades',
+                ],
+                tablefmt='simple')
+            message = f'<b>Daily Profit over the last {timescale} days</b>:\n<pre>{stats_tab}</pre>'
             self._send_msg(message, parse_mode=ParseMode.HTML)
         except RPCException as e:
             self._send_msg(str(e))
@@ -558,36 +575,32 @@ class Telegram(RPC):
         :param update: message update
         :return: None
         """
-        forcebuy_text = (
-            "*/forcebuy <pair> [<rate>]:* `Instantly buys the given pair. "
-            "Optionally takes a rate at which to buy.` \n"
-        )
-        message = (
-            "*/start:* `Starts the trader`\n"
-            "*/stop:* `Stops the trader`\n"
-            "*/status [table]:* `Lists all open trades`\n"
-            "         *table :* `will display trades in a table`\n"
-            "                `pending buy orders are marked with an asterisk (*)`\n"
-            "                `pending sell orders are marked with a double asterisk (**)`\n"
-            "*/profit:* `Lists cumulative profit from all finished trades`\n"
-            "*/forcesell <trade_id>|all:* `Instantly sells the given trade or all trades, "
-            "regardless of profit`\n"
-            f"{forcebuy_text if self._config.get('forcebuy_enable', False) else '' }"
-            "*/performance:* `Show performance of each finished trade grouped by pair`\n"
-            "*/daily <n>:* `Shows profit or loss per day, over the last n days`\n"
-            "*/count:* `Show number of trades running compared to allowed number of trades`"
-            "\n"
-            "*/balance:* `Show account balance per currency`\n"
-            "*/stopbuy:* `Stops buying, but handles open trades gracefully` \n"
-            "*/reload_conf:* `Reload configuration file` \n"
-            "*/show_config:* `Show running configuration` \n"
-            "*/whitelist:* `Show current whitelist` \n"
-            "*/blacklist [pair]:* `Show current blacklist, or adds one or more pairs "
-            "to the blacklist.` \n"
-            "*/edge:* `Shows validated pairs by Edge if it is enabeld` \n"
-            "*/help:* `This help message`\n"
-            "*/version:* `Show version`"
-        )
+        forcebuy_text = "*/forcebuy <pair> [<rate>]:* `Instantly buys the given pair. " \
+                        "Optionally takes a rate at which to buy.` \n"
+        message = "*/start:* `Starts the trader`\n" \
+                  "*/stop:* `Stops the trader`\n" \
+                  "*/status [table]:* `Lists all open trades`\n" \
+                  "         *table :* `will display trades in a table`\n" \
+                  "                `pending buy orders are marked with an asterisk (*)`\n" \
+                  "                `pending sell orders are marked with a double asterisk (**)`\n" \
+                  "*/profit:* `Lists cumulative profit from all finished trades`\n" \
+                  "*/forcesell <trade_id>|all:* `Instantly sells the given trade or all trades, " \
+                  "regardless of profit`\n" \
+                  f"{forcebuy_text if self._config.get('forcebuy_enable', False) else '' }" \
+                  "*/performance:* `Show performance of each finished trade grouped by pair`\n" \
+                  "*/daily <n>:* `Shows profit or loss per day, over the last n days`\n" \
+                  "*/count:* `Show number of trades running compared to allowed number of trades`" \
+                  "\n" \
+                  "*/balance:* `Show account balance per currency`\n" \
+                  "*/stopbuy:* `Stops buying, but handles open trades gracefully` \n" \
+                  "*/reload_conf:* `Reload configuration file` \n" \
+                  "*/show_config:* `Show running configuration` \n" \
+                  "*/whitelist:* `Show current whitelist` \n" \
+                  "*/blacklist [pair]:* `Show current blacklist, or adds one or more pairs " \
+                  "to the blacklist.` \n" \
+                  "*/edge:* `Shows validated pairs by Edge if it is enabled` \n" \
+                  "*/help:* `This help message`\n" \
+                  "*/version:* `Show version`"
 
         self._send_msg(message)
 

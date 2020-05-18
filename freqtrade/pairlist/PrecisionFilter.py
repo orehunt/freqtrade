@@ -1,13 +1,26 @@
+"""
+Precision pair list filter
+"""
 import logging
 from copy import deepcopy
-from typing import Dict, List
+from typing import Any, Dict, List
 
 from freqtrade.pairlist.IPairList import IPairList
+
 
 logger = logging.getLogger(__name__)
 
 
 class PrecisionFilter(IPairList):
+
+    def __init__(self, exchange, pairlistmanager,
+                 config: Dict[str, Any], pairlistconfig: Dict[str, Any],
+                 pairlist_pos: int) -> None:
+        super().__init__(exchange, pairlistmanager, config, pairlistconfig, pairlist_pos)
+
+        # Precalculate sanitized stoploss value to avoid recalculation for every pair
+        self._stoploss = 1 - abs(self._config['stoploss'])
+
     @property
     def needstickers(self) -> bool:
         """
@@ -30,13 +43,16 @@ class PrecisionFilter(IPairList):
         :param ticker: ticker dict as returned from ccxt.load_markets()
         :param stoploss: stoploss value as set in the configuration
                         (already cleaned to be 1 - stoploss)
-        :return: True if the pair can stay, false if it should be removed
+        :return: True if the pair can stay, False if it should be removed
         """
-        stop_price = ticker["ask"] * stoploss
+        stop_price = ticker['ask'] * stoploss
+
         # Adjust stop-prices to precision
         sp = self._exchange.price_to_precision(ticker["symbol"], stop_price)
+
         stop_gap_price = self._exchange.price_to_precision(ticker["symbol"], stop_price * 0.99)
         logger.debug(f"{ticker['symbol']} - {sp} : {stop_gap_price}")
+
         if sp <= stop_gap_price:
             self.log_on_refresh(
                 logger.info,
@@ -44,6 +60,7 @@ class PrecisionFilter(IPairList):
                 f"because stop price {sp} would be <= stop limit {stop_gap_price}",
             )
             return False
+
         return True
 
     def filter_pairlist(self, pairlist: List[str], tickers: Dict) -> List[str]:
@@ -61,6 +78,5 @@ class PrecisionFilter(IPairList):
                     stoploss and not self._validate_precision_filter(ticker, stoploss)
                 ):
                     pairlist.remove(p)
-                    continue
 
         return pairlist

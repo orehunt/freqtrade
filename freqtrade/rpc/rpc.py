@@ -90,20 +90,21 @@ class RPC:
         """
         config = self._freqtrade.config
         val = {
-            "dry_run": config["dry_run"],
-            "stake_currency": config["stake_currency"],
-            "stake_amount": config["stake_amount"],
-            "max_open_trades": config["max_open_trades"],
-            "minimal_roi": config["minimal_roi"].copy(),
-            "stoploss": config["stoploss"],
-            "trailing_stop": config["trailing_stop"],
-            "trailing_stop_positive": config.get("trailing_stop_positive"),
-            "trailing_stop_positive_offset": config.get("trailing_stop_positive_offset"),
-            "trailing_only_offset_is_reached": config.get("trailing_only_offset_is_reached"),
-            "ticker_interval": config["ticker_interval"],
-            "exchange": config["exchange"]["name"],
-            "strategy": config["strategy"],
-            "state": str(self._freqtrade.state),
+            'dry_run': config['dry_run'],
+            'stake_currency': config['stake_currency'],
+            'stake_amount': config['stake_amount'],
+            'max_open_trades': config['max_open_trades'],
+            'minimal_roi': config['minimal_roi'].copy(),
+            'stoploss': config['stoploss'],
+            'trailing_stop': config['trailing_stop'],
+            'trailing_stop_positive': config.get('trailing_stop_positive'),
+            'trailing_stop_positive_offset': config.get('trailing_stop_positive_offset'),
+            'trailing_only_offset_is_reached': config.get('trailing_only_offset_is_reached'),
+            'ticker_interval': config['ticker_interval'],
+            'exchange': config['exchange']['name'],
+            'strategy': config['strategy'],
+            'forcebuy_enabled': config.get('forcebuy_enable', False),
+            'state': str(self._freqtrade.state)
         }
         return val
 
@@ -196,8 +197,8 @@ class RPC:
             return trades_list, columns
 
     def _rpc_daily_profit(
-        self, timescale: int, stake_currency: str, fiat_display_currency: str
-    ) -> List[List[Any]]:
+            self, timescale: int,
+            stake_currency: str, fiat_display_currency: str) -> Dict[str, Any]:
         today = datetime.utcnow().date()
         profit_days: Dict[date, Dict] = {}
 
@@ -220,24 +221,26 @@ class RPC:
             curdayprofit = sum(trade.close_profit_abs for trade in trades)
             profit_days[profitday] = {"amount": f"{curdayprofit:.8f}", "trades": len(trades)}
 
-        return [
-            [
-                key,
-                "{value:.8f} {symbol}".format(value=float(value["amount"]), symbol=stake_currency),
-                "{value:.3f} {symbol}".format(
+        data = [
+            {
+                'date': key,
+                'abs_profit': f'{float(value["amount"]):.8f}',
+                'fiat_value': '{value:.3f}'.format(
                     value=self._fiat_converter.convert_amount(
-                        value["amount"], stake_currency, fiat_display_currency
-                    )
-                    if self._fiat_converter
-                    else 0,
-                    symbol=fiat_display_currency,
+                        value['amount'],
+                        stake_currency,
+                        fiat_display_currency
+                    ) if self._fiat_converter else 0,
                 ),
-                "{value} trade{s}".format(
-                    value=value["trades"], s="" if value["trades"] < 2 else "s"
-                ),
-            ]
+                'trade_count': f'{value["trades"]}',
+            }
             for key, value in profit_days.items()
         ]
+        return {
+            'stake_currency': stake_currency,
+            'fiat_display_currency': fiat_display_currency,
+            'data': data
+        }
 
     def _rpc_trade_history(self, limit: int) -> Dict:
         """ Returns the X last trades """
@@ -576,5 +579,5 @@ class RPC:
     def _rpc_edge(self) -> List[Dict[str, Any]]:
         """ Returns information related to Edge """
         if not self._freqtrade.edge:
-            raise RPCException(f"Edge is not enabled.")
+            raise RPCException('Edge is not enabled.')
         return self._freqtrade.edge.accepted_pairs()

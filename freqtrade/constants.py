@@ -41,6 +41,9 @@ AVAILABLE_DATAHANDLERS = ["json", "jsongz"]
 DRY_RUN_WALLET = 1000
 MATH_CLOSE_PREC = 1e-14  # Precision used for float comparisons
 DEFAULT_DATAFRAME_COLUMNS = ["date", "open", "high", "low", "close", "volume"]
+# Don't modify sequence of DEFAULT_TRADES_COLUMNS
+# it has wide consequences for stored trades files
+DEFAULT_TRADES_COLUMNS = ["timestamp", "id", "type", "side", "price", "amount", "cost"]
 
 USERPATH_HYPEROPTS = "hyperopts"
 USERPATH_STRATEGIES = "strategies"
@@ -136,19 +139,12 @@ CONF_SCHEMA = {
             "patternProperties": {"^[0-9.]+$": {"type": "number"}},
             "minProperties": 1,
         },
-        "amount_reserve_percent": {"type": "number", "minimum": 0.0, "maximum": 0.5},
-        "stoploss": {"type": "number", "maximum": 0, "exclusiveMaximum": True},
-        "trailing_stop": {"type": "boolean"},
-        "trailing_stop_positive": {"type": "number", "minimum": 0, "maximum": 1},
-        "trailing_stop_positive_offset": {"type": "number", "minimum": 0, "maximum": 1},
-        "trailing_only_offset_is_reached": {"type": "boolean"},
-        "unfilledtimeout": {
-            "type": "object",
-            "properties": {
-                "buy": {"type": "number", "minimum": 1},
-                "sell": {"type": "number", "minimum": 1},
-            },
-        },
+        "fiat_display_currency": {"type": "string", "enum": SUPPORTED_FIAT},
+        "dry_run": {"type": "boolean"},
+        "dry_run_wallet": {"type": "number", "default": DRY_RUN_WALLET},
+        "cancel_open_orders_on_exit": {"type": "boolean", "default": False},
+        "process_only_new_candles": {"type": "boolean"},
+        "minimal_roi": {"type": "object", "patternProperties": {"^[0-9.]+$": {"type": "number"}},},
         "bid_strategy": {
             "type": "object",
             "properties": {
@@ -349,3 +345,10 @@ SCHEMA_MINIMAL_REQUIRED = [
     "dataformat_ohlcv",
     "dataformat_trades",
 ]
+
+CANCEL_REASON = {
+    "TIMEOUT": "cancelled due to timeout",
+    "PARTIALLY_FILLED": "partially filled - keeping order open",
+    "ALL_CANCELLED": "cancelled (all unfilled and partially filled open orders cancelled)",
+    "CANCELLED_ON_EXCHANGE": "cancelled on exchange",
+}

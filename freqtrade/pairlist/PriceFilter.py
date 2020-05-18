@@ -1,8 +1,12 @@
+"""
+Price pair list filter
+"""
 import logging
 from copy import deepcopy
 from typing import Any, Dict, List
 
 from freqtrade.pairlist.IPairList import IPairList
+
 
 logger = logging.getLogger(__name__)
 
@@ -41,18 +45,13 @@ class PriceFilter(IPairList):
         :param ticker: ticker dict as returned from ccxt.load_markets()
         :return: True if the pair can stay, false if it should be removed
         """
-        if ticker["last"] is None:
-
-            self.log_on_refresh(
-                logger.info,
-                f"Removed {ticker['symbol']} from whitelist, because "
-                "ticker['last'] is empty (Usually no trade in the last 24h).",
-            )
+        if ticker['last'] is None:
+            self.log_on_refresh(logger.info,
+                                f"Removed {ticker['symbol']} from whitelist, because "
+                                "ticker['last'] is empty (Usually no trade in the last 24h).")
             return False
-        compare = ticker["last"] + self._exchange.price_get_one_pip(
-            ticker["symbol"], ticker["last"]
-        )
-        changeperc = (compare - ticker["last"]) / ticker["last"]
+        compare = self._exchange.price_get_one_pip(ticker['symbol'], ticker['last'])
+        changeperc = compare / ticker['last']
         if changeperc > self._low_price_ratio:
             self.log_on_refresh(
                 logger.info,
@@ -70,14 +69,11 @@ class PriceFilter(IPairList):
         :param tickers: Tickers (from exchange.get_tickers()). May be cached.
         :return: new whitelist
         """
-        # Copy list since we're modifying this list
-        for p in deepcopy(pairlist):
-            ticker = tickers.get(p)
-            if not ticker:
-                pairlist.remove(p)
-
-            # Filter out assets which would not allow setting a stoploss
-            if self._low_price_ratio and not self._validate_ticker_lowprice(ticker):
-                pairlist.remove(p)
+        if self._low_price_ratio:
+            # Copy list since we're modifying this list
+            for p in deepcopy(pairlist):
+                # Filter out assets which would not allow setting a stoploss
+                if not self._validate_ticker_lowprice(tickers[p]):
+                    pairlist.remove(p)
 
         return pairlist

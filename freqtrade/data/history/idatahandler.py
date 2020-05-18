@@ -8,15 +8,19 @@ from abc import ABC, abstractclassmethod, abstractmethod
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Type
+from typing import List, Optional, Type
 
 from pandas import DataFrame
 
 from freqtrade.configuration import TimeRange
-from freqtrade.data.converter import clean_ohlcv_dataframe, trim_dataframe
+from freqtrade.data.converter import (clean_ohlcv_dataframe,
+                                      trades_remove_duplicates, trim_dataframe)
 from freqtrade.exchange import timeframe_to_seconds
 
 logger = logging.getLogger(__name__)
+
+# Type for trades list
+TradeList = List[List]
 
 
 class IDataHandler(ABC):
@@ -88,23 +92,25 @@ class IDataHandler(ABC):
         """
 
     @abstractmethod
-    def trades_store(self, pair: str, data: List[Dict]) -> None:
+    def trades_store(self, pair: str, data: TradeList) -> None:
         """
         Store trades data (list of Dicts) to file
         :param pair: Pair - used for filename
-        :param data: List of Dicts containing trade data
+        :param data: List of Lists containing trade data,
+                     column sequence as in DEFAULT_TRADES_COLUMNS
         """
 
     @abstractmethod
-    def trades_append(self, pair: str, data: List[Dict]):
+    def trades_append(self, pair: str, data: TradeList):
         """
         Append data to existing files
         :param pair: Pair - used for filename
-        :param data: List of Dicts containing trade data
+        :param data: List of Lists containing trade data,
+                     column sequence as in DEFAULT_TRADES_COLUMNS
         """
 
     @abstractmethod
-    def trades_load(self, pair: str, timerange: Optional[TimeRange] = None) -> List[Dict]:
+    def _trades_load(self, pair: str, timerange: Optional[TimeRange] = None) -> TradeList:
         """
         Load a pair from file, either .json.gz or .json
         :param pair: Load trades for this pair
@@ -120,16 +126,23 @@ class IDataHandler(ABC):
         :return: True when deleted, false if file did not exist.
         """
 
-    def ohlcv_load(
-        self,
-        pair,
-        timeframe: str,
-        timerange: Optional[TimeRange] = None,
-        fill_missing: bool = True,
-        drop_incomplete: bool = True,
-        startup_candles: int = 0,
-        warn_no_data: bool = True,
-    ) -> DataFrame:
+    def trades_load(self, pair: str, timerange: Optional[TimeRange] = None) -> TradeList:
+        """
+        Load a pair from file, either .json.gz or .json
+        Removes duplicates in the process.
+        :param pair: Load trades for this pair
+        :param timerange: Timerange to load trades for - currently not implemented
+        :return: List of trades
+        """
+        return trades_remove_duplicates(self._trades_load(pair, timerange=timerange))
+
+    def ohlcv_load(self, pair, timeframe: str,
+                   timerange: Optional[TimeRange] = None,
+                   fill_missing: bool = True,
+                   drop_incomplete: bool = True,
+                   startup_candles: int = 0,
+                   warn_no_data: bool = True
+                   ) -> DataFrame:
         """
         Load cached candle (OHLCV) data for the given pair.
 
