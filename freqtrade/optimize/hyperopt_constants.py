@@ -10,7 +10,7 @@ LIE_STRATS_N = len(LIE_STRATS)
 CYCLE_LIE_STRATS = cycle(LIE_STRATS)
 
 # supported estimators
-ESTIMATORS = ["GBRT", "ET", "RF", "GP"]
+ESTIMATORS = ["GBRT", "ET", "RF"] # "GP" uses too much memory with because of matrix mul...
 ESTIMATORS_N = len(ESTIMATORS)
 CYCLE_ESTIMATORS = cycle(ESTIMATORS)
 

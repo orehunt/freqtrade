@@ -241,7 +241,7 @@ class HyperoptData:
         Read hyperopt trials file
         """
         # Only log at the beginning
-        if hasattr(backend, "trials") and not backend.trials.exit:
+        if hasattr(backend.trials, "exit") and not backend.trials.exit:
             logger.info("Reading Trials from '%s'", trials_file)
         trials = DataFrame()
         try:
@@ -476,11 +476,15 @@ class HyperoptData:
             flt = lambda x, y: x.loc[x[col] < y]  # noqa: E731
         if trail_enabled:
             # use std to increase and decrease bounds
-            val_step = trials[col].values.std() or val or 1
+            val_step = trials[col].values.std() or val
             flt_trials = flt(trials, val)
+            iters = 0
             while len(flt_trials) < 1:
-                val = trail(val, val_step)
+                # use an exponential step in case val_step is 0
+                # since we don't know the span of the metric
+                val = trail(val, val_step or 2 ** iters)
                 flt_trials = flt(trials, val)
+                iters += 1
             return flt_trials
         else:
             return flt(trials, val)

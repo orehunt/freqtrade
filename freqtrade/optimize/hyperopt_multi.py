@@ -127,7 +127,7 @@ class HyperoptMulti(HyperoptOut):
         # keep models queue to 1
         self.n_models = 1
         if self.multi:
-            self.opt_acq_optimizer = "sampling"
+            self.opt_acq_optimizer = "auto"
             if self.shared:
                 self.opt_base_estimator = lambda: "GBRT"
                 self.opt_acq_func = self.acq_funcs
@@ -463,7 +463,7 @@ class HyperoptMulti(HyperoptOut):
         # every once in a while the optimizer global state is gced, so reload points
         opt = self.opt_startup_points(opt, trials_state, is_shared)
 
-        untested_Xi = self.opt_ask_points(opt, epochs, trials_state)
+        untested_Xi = self.opt_fetch_points(opt, epochs, trials_state)
 
         # return early if there is nothing to test
         if len(untested_Xi) < 1:
@@ -481,9 +481,10 @@ class HyperoptMulti(HyperoptOut):
 
         self.opt_log_trials(opt, void_filtered, t, jobs, is_shared, trials_state, epochs)
         # disable gc at the end to prevent disposal of global vars
+
         gc.disable()
 
-    def opt_ask_points(self, opt: Optimizer, epochs: Epochs, trials_state: TrialsState) -> List:
+    def opt_fetch_points(self, opt: Optimizer, epochs: Epochs, trials_state: TrialsState) -> List:
         asked: Dict[str, List] = {}
         asked_d: Dict[str, List] = {}
         n_told = 0  # told while looping
@@ -588,7 +589,13 @@ class HyperoptMulti(HyperoptOut):
                 # decrement for exploitation if was previous exploring
                 if not backend.exploit:
                     epochs.explo -= 1
-                    # set the index of the beginning of exploitation
+                    if is_shared:
+                        # update the index of the exploitation session
+                        backend.exploit = len(loss) - n_tail
+                # in non shared mode update the index at every iteration
+                # since only the worker can influence the score which means
+                # that only the very last epochs are of interest for the acq
+                if not is_shared:
                     backend.exploit = len(loss) - n_tail
                 # default xi is 0.01, we want some 10e even lower values
                 if opt.acq_func in ("PI", "gp_hedge"):
@@ -607,8 +614,8 @@ class HyperoptMulti(HyperoptOut):
                 # increment for exploration if was previous exploiting
                 if backend.exploit:
                     epochs.explo += 1
-                    # reset exploitation
-                    backend.exploit = 0
+                # reset exploitation index
+                backend.exploit = 0
                 # adjust to tail position as we are in general more exploitative
                 # at the beginning and more explorative towards the end
                 tail_position = (epochs.current_best_epoch + last_period) / epochs.max_epoch
