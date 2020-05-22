@@ -236,6 +236,10 @@ def get_datahandlerclass(datatype: str) -> Type[IDataHandler]:
         from .jsondatahandler import JsonGzDataHandler
 
         return JsonGzDataHandler
+    elif datatype == "parquet":
+        from .parquetdatahandler import ParquetDataHandler
+
+        return ParquetDataHandler
     else:
         raise ValueError(f"No datahandler for datatype {datatype} available.")
 

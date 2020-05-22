@@ -9,7 +9,6 @@ from freqtrade.state import RunMode
 
 logger = logging.getLogger(__name__)
 
-
 def start_hyperopt_list(args: Dict[str, Any]) -> None:
     """
     List hyperopt epochs previously evaluated
@@ -39,9 +38,10 @@ def start_hyperopt_list(args: Dict[str, Any]) -> None:
         config.get("hyperopt_trials_instance", ho.get_last_instance(trials_instances_file)),
     )
     total_epochs = len(trials)
-
+    logger.info(f"Loaded {total_epochs} trials...")
     trials = ho.filter_trials(trials, config).copy()
     n_trials = len(trials)
+    logger.info(f"Filtered trials down to {n_trials}...")
 
     if print_colorized:
         colorama_init(autoreset=True)

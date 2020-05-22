@@ -416,6 +416,7 @@ class HyperoptOut(HyperoptData):
             counter_format=counter_format,
             color=color,
             additional_fields={"Style": Style, "Fore": Fore, "backend": backend},
+            min_delta=0.5
         )
 
     @staticmethod

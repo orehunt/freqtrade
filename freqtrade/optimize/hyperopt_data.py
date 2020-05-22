@@ -135,14 +135,13 @@ class HyperoptData:
     def cast_trials_types(trials: DataFrame) -> DataFrame:
         """ Force types for ambiguous metrics """
         sep = "."
-        for col in (
-            "total_profit",
-            "loss",
-            f"results_metrics{sep}total_profit",
-            f"results_metrics{sep}avg_profit",
-            f"results_metrics{sep}duration",
-        ):
-            trials[col] = trials[col].astype(float64, copy=False).fillna(0)
+        trials = trials.astype(dtype={
+            "total_profit": float64,
+            "loss": float64,
+            f"results_metrics{sep}total_profit": float64,
+            f"results_metrics{sep}avg_profit": float64,
+            f"results_metrics{sep}duration": float64
+        }, copy=False).fillna(0)
         return trials
 
     @staticmethod
@@ -191,7 +190,7 @@ class HyperoptData:
                         trials_file,
                         key=instance_name,
                         mode="a",
-                        complib="blosc:zstd",
+                        complib="bzip2",
                         append=append,
                         format="table",
                         # NOTE: make sure to only index the columns really used for indexing

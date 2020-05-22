@@ -15,12 +15,11 @@ if [ -n "$instance" ]; then
         instance=$(jq -r '.[-1]' < ${userdir}/hyperopt_data/trials_instances.json)
     elif [ $instance == "last:cv" ]; then
         instance=$(jq -r '.[-1]' < ${userdir}/hyperopt_data/trials_instances.json)_cv
-    instance_json='{"hyperopt_trials_instance": "'"$instance"'"}'
     fi
+    instance_json='{"hyperopt_trials_instance": "'"$instance"'"}'
 else
     instance_json="{}"
 fi
-
 freqtrade hyperopt-list \
           -c $exchange \
           -c $hyperopt \

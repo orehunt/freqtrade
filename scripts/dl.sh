@@ -11,6 +11,7 @@ pairsfile=${pairsfile:-"--pairs-file ${pairs_dir}/${exchange_name}_${quote}${spr
 pairs=${pairs:-$pairsfile}
 
 freqtrade download-data \
+          --data-format-ohlcv parquet \
           -c $exchange \
           -c $amounts \
           --exchange $exchange_name \
