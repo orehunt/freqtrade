@@ -10,6 +10,7 @@ from cachetools import TTLCache, cached
 from freqtrade.exceptions import OperationalException
 from freqtrade.pairlist.IPairList import IPairList
 from freqtrade.resolvers import PairListResolver
+from freqtrade.typing import ListPairsWithTimeframes
 
 
 logger = logging.getLogger(__name__)
@@ -19,27 +20,27 @@ class PairListManager:
     def __init__(self, exchange, config: dict) -> None:
         self._exchange = exchange
         self._config = config
-        self._whitelist = self._config["exchange"].get("pair_whitelist")
-        self._blacklist = self._config["exchange"].get("pair_blacklist", [])
-        self._pairlists: List[IPairList] = []
+        self._whitelist = self._config['exchange'].get('pair_whitelist')
+        self._blacklist = self._config['exchange'].get('pair_blacklist', [])
+        self._pairlist_handlers: List[IPairList] = []
         self._tickers_needed = False
-        for pl in self._config.get("pairlists", None):
-            if "method" not in pl:
-                logger.warning(f"No method in {pl}")
+        for pairlist_handler_config in self._config.get('pairlists', None):
+            if 'method' not in pairlist_handler_config:
+                logger.warning(f"No method found in {pairlist_handler_config}, ignoring.")
                 continue
-            pairl = PairListResolver.load_pairlist(
-                pl.get("method"),
-                exchange=exchange,
-                pairlistmanager=self,
-                config=config,
-                pairlistconfig=pl,
-                pairlist_pos=len(self._pairlists),
-            )
-            self._tickers_needed = pairl.needstickers or self._tickers_needed
-            self._pairlists.append(pairl)
+            pairlist_handler = PairListResolver.load_pairlist(
+                    pairlist_handler_config['method'],
+                    exchange=exchange,
+                    pairlistmanager=self,
+                    config=config,
+                    pairlistconfig=pairlist_handler_config,
+                    pairlist_pos=len(self._pairlist_handlers)
+                    )
+            self._tickers_needed |= pairlist_handler.needstickers
+            self._pairlist_handlers.append(pairlist_handler)
 
-        if not self._pairlists:
-            raise OperationalException("No Pairlist defined!")
+        if not self._pairlist_handlers:
+            raise OperationalException("No Pairlist Handlers defined")
 
     @property
     def whitelist(self) -> List[str]:
@@ -59,15 +60,15 @@ class PairListManager:
     @property
     def name_list(self) -> List[str]:
         """
-        Get list of loaded pairlists names
+        Get list of loaded Pairlist Handler names
         """
-        return [p.name for p in self._pairlists]
+        return [p.name for p in self._pairlist_handlers]
 
     def short_desc(self) -> List[Dict]:
         """
-        List of short_desc for each pairlist
+        List of short_desc for each Pairlist Handler
         """
-        return [{p.name: p.short_desc()} for p in self._pairlists]
+        return [{p.name: p.short_desc()} for p in self._pairlist_handlers]
 
     @cached(TTLCache(maxsize=1, ttl=1800))
     def _get_cached_tickers(self):
@@ -75,7 +76,7 @@ class PairListManager:
 
     def refresh_pairlist(self) -> None:
         """
-        Run pairlist through all configured pairlists.
+        Run pairlist through all configured Pairlist Handlers.
         """
         # Tickers should be cached to avoid calling the exchange on each call.
         tickers: Dict = {}
@@ -85,19 +86,19 @@ class PairListManager:
         # Adjust whitelist if filters are using tickers
         pairlist = self._prepare_whitelist(self._whitelist.copy(), tickers)
 
-        # Process all pairlists in chain
-        for pl in self._pairlists:
-            pairlist = pl.filter_pairlist(pairlist, tickers)
+        # Process all Pairlist Handlers in the chain
+        for pairlist_handler in self._pairlist_handlers:
+            pairlist = pairlist_handler.filter_pairlist(pairlist, tickers)
 
-        # Validation against blacklist happens after the pairlists to ensure
-        # blacklist is respected.
-        pairlist = IPairList.verify_blacklist(pairlist, self.blacklist, True)
+        # Validation against blacklist happens after the chain of Pairlist Handlers
+        # to ensure blacklist is respected.
+        pairlist = self.verify_blacklist(pairlist, logger.warning)
 
         self._whitelist = pairlist
 
     def _prepare_whitelist(self, pairlist: List[str], tickers) -> List[str]:
         """
-        Prepare sanitized pairlist for Pairlist Filters that use tickers data - remove
+        Prepare sanitized pairlist for Pairlist Handlers that use tickers data - remove
         pairs that do not have ticker available
         """
         if self._tickers_needed:
@@ -107,3 +108,25 @@ class PairListManager:
                     pairlist.remove(p)
 
         return pairlist
+
+    def verify_blacklist(self, pairlist: List[str], logmethod) -> List[str]:
+        """
+        Verify and remove items from pairlist - returning a filtered pairlist.
+        Logs a warning or info depending on `aswarning`.
+        Pairlist Handlers explicitly using this method shall use
+        `logmethod=logger.info` to avoid spamming with warning messages
+        :param pairlist: Pairlist to validate
+        :param logmethod: Function that'll be called, `logger.info` or `logger.warning`.
+        :return: pairlist - blacklisted pairs
+        """
+        for pair in deepcopy(pairlist):
+            if pair in self._blacklist:
+                logmethod(f"Pair {pair} in your blacklist. Removing it from whitelist...")
+                pairlist.remove(pair)
+        return pairlist
+
+    def create_pair_list(self, pairs: List[str], timeframe: str = None) -> ListPairsWithTimeframes:
+        """
+        Create list of pair tuples with (pair, ticker_interval)
+        """
+        return [(pair, timeframe or self._config['ticker_interval']) for pair in pairs]

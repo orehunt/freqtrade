@@ -18,14 +18,10 @@ SORT_VALUES = ['askVolume', 'bidVolume', 'quoteVolume']
 
 
 class VolumePairList(IPairList):
-    def __init__(
-        self,
-        exchange,
-        pairlistmanager,
-        config: Dict[str, Any],
-        pairlistconfig: dict,
-        pairlist_pos: int,
-    ) -> None:
+
+    def __init__(self, exchange, pairlistmanager,
+                 config: Dict[str, Any], pairlistconfig: Dict[str, Any],
+                 pairlist_pos: int) -> None:
         super().__init__(exchange, pairlistmanager, config, pairlistconfig, pairlist_pos)
 
         if "number_assets" not in self._pairlistconfig:
@@ -41,8 +37,8 @@ class VolumePairList(IPairList):
 
         if not self._exchange.exchange_has('fetchTickers'):
             raise OperationalException(
-                "Exchange does not support dynamic whitelist."
-                "Please edit your config and restart the bot"
+                'Exchange does not support dynamic whitelist. '
+                'Please edit your config and restart the bot.'
             )
 
         if not self._validate_keys(self._sort_key):
@@ -120,8 +116,8 @@ class VolumePairList(IPairList):
         sorted_tickers = sorted(filtered_tickers, reverse=True, key=lambda t: t[self._sort_key])
 
         # Validate whitelist to only have active market pairs
-        pairs = self._whitelist_for_active_markets([s["symbol"] for s in sorted_tickers])
-        pairs = self._verify_blacklist(pairs, aswarning=False)
+        pairs = self._whitelist_for_active_markets([s['symbol'] for s in sorted_tickers])
+        pairs = self.verify_blacklist(pairs, logger.info)
         # Limit pairlist to the requested number of pairs
         pairs = pairs[:self._number_pairs]
 

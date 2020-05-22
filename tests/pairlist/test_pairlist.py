@@ -10,8 +10,6 @@ from freqtrade.pairlist.pairlistmanager import PairListManager
 from freqtrade.resolvers import PairListResolver
 from tests.conftest import get_patched_freqtradebot, log_has, log_has_re
 
-# whitelist, blacklist
-
 
 @pytest.fixture(scope="function")
 def whitelist_conf(default_conf):
@@ -37,6 +35,28 @@ def whitelist_conf(default_conf):
 
 
 @pytest.fixture(scope="function")
+def whitelist_conf_2(default_conf):
+    default_conf['stake_currency'] = 'BTC'
+    default_conf['exchange']['pair_whitelist'] = [
+        'ETH/BTC', 'TKN/BTC', 'BLK/BTC', 'LTC/BTC',
+        'BTT/BTC', 'HOT/BTC', 'FUEL/BTC', 'XRP/BTC'
+    ]
+    default_conf['exchange']['pair_blacklist'] = [
+        'BLK/BTC'
+    ]
+    default_conf['pairlists'] = [
+        # {   "method": "StaticPairList"},
+        {
+            "method": "VolumePairList",
+            "number_assets": 5,
+            "sort_key": "quoteVolume",
+            "refresh_period": 0,
+        },
+    ]
+    return default_conf
+
+
+@pytest.fixture(scope="function")
 def static_pl_conf(whitelist_conf):
     whitelist_conf['pairlists'] = [
         {
@@ -55,7 +75,7 @@ def test_log_on_refresh(mocker, static_pl_conf, markets, tickers):
     freqtrade = get_patched_freqtradebot(mocker, static_pl_conf)
     logmock = MagicMock()
     # Assign starting whitelist
-    pl = freqtrade.pairlists._pairlists[0]
+    pl = freqtrade.pairlists._pairlist_handlers[0]
     pl.log_on_refresh(logmock, 'Hello world')
     assert logmock.call_count == 1
     pl.log_on_refresh(logmock, 'Hello world')
@@ -121,22 +141,47 @@ def test_refresh_pairlist_dynamic(mocker, shitcoinmarkets, tickers, whitelist_co
     mocker.patch.multiple(
         'freqtrade.exchange.Exchange',
         markets=PropertyMock(return_value=shitcoinmarkets),
-     )
+    )
     # argument: use the whitelist dynamically by exchange-volume
     whitelist = ['ETH/BTC', 'TKN/BTC', 'LTC/BTC', 'XRP/BTC', 'HOT/BTC']
     freqtrade.pairlists.refresh_pairlist()
-
     assert whitelist == freqtrade.pairlists.whitelist
 
-    whitelist_conf['pairlists'] = [{'method': 'VolumePairList',
-                                    'config': {}
-                                    }
-                                   ]
-
+    whitelist_conf['pairlists'] = [{'method': 'VolumePairList'}]
     with pytest.raises(OperationalException,
                        match=r'`number_assets` not specified. Please check your configuration '
                              r'for "pairlist.config.number_assets"'):
         PairListManager(freqtrade.exchange, whitelist_conf)
+
+
+def test_refresh_pairlist_dynamic_2(mocker, shitcoinmarkets, tickers, whitelist_conf_2):
+
+    tickers_dict = tickers()
+
+    mocker.patch.multiple(
+        'freqtrade.exchange.Exchange',
+        exchange_has=MagicMock(return_value=True),
+    )
+    # Remove caching of ticker data to emulate changing volume by the time of second call
+    mocker.patch.multiple(
+        'freqtrade.pairlist.pairlistmanager.PairListManager',
+        _get_cached_tickers=MagicMock(return_value=tickers_dict),
+    )
+    freqtrade = get_patched_freqtradebot(mocker, whitelist_conf_2)
+    # Remock markets with shitcoinmarkets since get_patched_freqtradebot uses the markets fixture
+    mocker.patch.multiple(
+        'freqtrade.exchange.Exchange',
+        markets=PropertyMock(return_value=shitcoinmarkets),
+    )
+
+    whitelist = ['ETH/BTC', 'TKN/BTC', 'LTC/BTC', 'XRP/BTC', 'HOT/BTC']
+    freqtrade.pairlists.refresh_pairlist()
+    assert whitelist == freqtrade.pairlists.whitelist
+
+    whitelist = ['FUEL/BTC', 'ETH/BTC', 'TKN/BTC', 'LTC/BTC', 'XRP/BTC']
+    tickers_dict['FUEL/BTC']['quoteVolume'] = 10000.0
+    freqtrade.pairlists.refresh_pairlist()
+    assert whitelist == freqtrade.pairlists.whitelist
 
 
 def test_VolumePairList_refresh_empty(mocker, markets_empty, whitelist_conf):
@@ -157,15 +202,27 @@ def test_VolumePairList_refresh_empty(mocker, markets_empty, whitelist_conf):
 
 
 @pytest.mark.parametrize("pairlists,base_currency,whitelist_result", [
+    # VolumePairList only
     ([{"method": "VolumePairList", "number_assets": 5, "sort_key": "quoteVolume"}],
-        "BTC", ['ETH/BTC', 'TKN/BTC', 'LTC/BTC', 'XRP/BTC', 'HOT/BTC']),
+     "BTC", ['ETH/BTC', 'TKN/BTC', 'LTC/BTC', 'XRP/BTC', 'HOT/BTC']),
     # Different sorting depending on quote or bid volume
     ([{"method": "VolumePairList", "number_assets": 5, "sort_key": "bidVolume"}],
-        "BTC",  ['HOT/BTC', 'FUEL/BTC', 'XRP/BTC', 'LTC/BTC', 'TKN/BTC']),
+     "BTC",  ['HOT/BTC', 'FUEL/BTC', 'XRP/BTC', 'LTC/BTC', 'TKN/BTC']),
     ([{"method": "VolumePairList", "number_assets": 5, "sort_key": "quoteVolume"}],
-        "USDT", ['ETH/USDT', 'NANO/USDT', 'ADAHALF/USDT']),
-    # No pair for ETH ...
+     "USDT", ['ETH/USDT', 'NANO/USDT', 'ADAHALF/USDT']),
+    # No pair for ETH, VolumePairList
     ([{"method": "VolumePairList", "number_assets": 5, "sort_key": "quoteVolume"}],
+     "ETH", []),
+    # No pair for ETH, StaticPairList
+    ([{"method": "StaticPairList"}],
+     "ETH", []),
+    # No pair for ETH, all handlers
+    ([{"method": "StaticPairList"},
+      {"method": "VolumePairList", "number_assets": 5, "sort_key": "quoteVolume"},
+      {"method": "PrecisionFilter"},
+      {"method": "PriceFilter", "low_price_ratio": 0.03},
+      {"method": "SpreadFilter", "max_spread_ratio": 0.005},
+      {"method": "ShuffleFilter"}],
      "ETH", []),
     # Precisionfilter and quote volume
     ([{"method": "VolumePairList", "number_assets": 5, "sort_key": "quoteVolume"},
@@ -176,31 +233,43 @@ def test_VolumePairList_refresh_empty(mocker, markets_empty, whitelist_conf):
     # PriceFilter and VolumePairList
     ([{"method": "VolumePairList", "number_assets": 5, "sort_key": "quoteVolume"},
       {"method": "PriceFilter", "low_price_ratio": 0.03}],
-        "BTC", ['ETH/BTC', 'TKN/BTC', 'LTC/BTC', 'XRP/BTC']),
+     "BTC", ['ETH/BTC', 'TKN/BTC', 'LTC/BTC', 'XRP/BTC']),
     # PriceFilter and VolumePairList
     ([{"method": "VolumePairList", "number_assets": 5, "sort_key": "quoteVolume"},
       {"method": "PriceFilter", "low_price_ratio": 0.03}],
-        "USDT", ['ETH/USDT', 'NANO/USDT']),
+     "USDT", ['ETH/USDT', 'NANO/USDT']),
     # Hot is removed by precision_filter, Fuel by low_price_filter.
     ([{"method": "VolumePairList", "number_assets": 6, "sort_key": "quoteVolume"},
       {"method": "PrecisionFilter"},
-      {"method": "PriceFilter", "low_price_ratio": 0.02}
-      ], "BTC", ['ETH/BTC', 'TKN/BTC', 'LTC/BTC', 'XRP/BTC']),
+      {"method": "PriceFilter", "low_price_ratio": 0.02}],
+     "BTC", ['ETH/BTC', 'TKN/BTC', 'LTC/BTC', 'XRP/BTC']),
     # HOT and XRP are removed because below 1250 quoteVolume
     ([{"method": "VolumePairList", "number_assets": 5,
        "sort_key": "quoteVolume", "min_value": 1250}],
-        "BTC", ['ETH/BTC', 'TKN/BTC', 'LTC/BTC']),
-    # StaticPairlist Only
-    ([{"method": "StaticPairList"},
-      ], "BTC", ['ETH/BTC', 'TKN/BTC']),
+     "BTC", ['ETH/BTC', 'TKN/BTC', 'LTC/BTC']),
+    # StaticPairlist only
+    ([{"method": "StaticPairList"}],
+     "BTC", ['ETH/BTC', 'TKN/BTC']),
     # Static Pairlist before VolumePairList - sorting changes
     ([{"method": "StaticPairList"},
-      {"method": "VolumePairList", "number_assets": 5, "sort_key": "bidVolume"},
-      ], "BTC", ['TKN/BTC', 'ETH/BTC']),
+      {"method": "VolumePairList", "number_assets": 5, "sort_key": "bidVolume"}],
+     "BTC", ['TKN/BTC', 'ETH/BTC']),
     # SpreadFilter
     ([{"method": "VolumePairList", "number_assets": 5, "sort_key": "quoteVolume"},
-      {"method": "SpreadFilter", "max_spread": 0.005}
-      ], "USDT", ['ETH/USDT']),
+      {"method": "SpreadFilter", "max_spread_ratio": 0.005}],
+     "USDT", ['ETH/USDT']),
+    # ShuffleFilter
+    ([{"method": "VolumePairList", "number_assets": 5, "sort_key": "quoteVolume"},
+      {"method": "ShuffleFilter", "seed": 77}],
+     "USDT", ['ETH/USDT', 'ADAHALF/USDT', 'NANO/USDT']),
+    # ShuffleFilter, other seed
+    ([{"method": "VolumePairList", "number_assets": 5, "sort_key": "quoteVolume"},
+      {"method": "ShuffleFilter", "seed": 42}],
+     "USDT", ['NANO/USDT', 'ETH/USDT', 'ADAHALF/USDT']),
+    # ShuffleFilter, no seed
+    ([{"method": "VolumePairList", "number_assets": 5, "sort_key": "quoteVolume"},
+      {"method": "ShuffleFilter"}],
+     "USDT", 3),
 ])
 def test_VolumePairList_whitelist_gen(mocker, whitelist_conf, shitcoinmarkets, tickers,
                                       pairlists, base_currency, whitelist_result,
@@ -219,12 +288,19 @@ def test_VolumePairList_whitelist_gen(mocker, whitelist_conf, shitcoinmarkets, t
     freqtrade.pairlists.refresh_pairlist()
     whitelist = freqtrade.pairlists.whitelist
 
-    assert whitelist == whitelist_result
+    assert isinstance(whitelist, list)
+
+    # Verify length of pairlist matches (used for ShuffleFilter without seed)
+    if type(whitelist_result) is list:
+        assert whitelist == whitelist_result
+    else:
+        len(whitelist) == whitelist_result
+
     for pairlist in pairlists:
-        if pairlist['method'] == 'PrecisionFilter':
+        if pairlist['method'] == 'PrecisionFilter' and whitelist_result:
             assert log_has_re(r'^Removed .* from whitelist, because stop price .* '
                               r'would be <= stop limit.*', caplog)
-        if pairlist['method'] == 'PriceFilter':
+        if pairlist['method'] == 'PriceFilter' and whitelist_result:
             assert (log_has_re(r'^Removed .* from whitelist, because 1 unit is .*%$', caplog) or
                     log_has_re(r"^Removed .* from whitelist, because ticker\['last'\] is empty.*",
                                caplog))
@@ -238,16 +314,15 @@ def test_VolumePairList_whitelist_gen(mocker, whitelist_conf, shitcoinmarkets, t
 
 
 def test_gen_pair_whitelist_not_supported(mocker, default_conf, tickers) -> None:
-    default_conf['pairlists'] = [{'method': 'VolumePairList',
-                                  'config': {'number_assets': 10}
-                                  }]
+    default_conf['pairlists'] = [{'method': 'VolumePairList', 'number_assets': 10}]
 
     mocker.patch.multiple('freqtrade.exchange.Exchange',
                           get_tickers=tickers,
                           exchange_has=MagicMock(return_value=False),
                           )
 
-    with pytest.raises(OperationalException):
+    with pytest.raises(OperationalException,
+                       match=r'Exchange does not support dynamic whitelist.*'):
         get_patched_freqtradebot(mocker, default_conf)
 
 
@@ -290,7 +365,8 @@ def test__whitelist_for_active_markets(mocker, whitelist_conf, markets, pairlist
     caplog.clear()
 
     # Assign starting whitelist
-    new_whitelist = freqtrade.pairlists._pairlists[0]._whitelist_for_active_markets(whitelist)
+    pairlist_handler = freqtrade.pairlists._pairlist_handlers[0]
+    new_whitelist = pairlist_handler._whitelist_for_active_markets(whitelist)
 
     assert set(new_whitelist) == set(['ETH/BTC', 'TKN/BTC'])
     assert log_message in caplog.text
@@ -313,17 +389,17 @@ def test_volumepairlist_caching(mocker, markets, whitelist_conf, tickers):
                           get_tickers=tickers
                           )
     freqtrade = get_patched_freqtradebot(mocker, whitelist_conf)
-    assert freqtrade.pairlists._pairlists[0]._last_refresh == 0
+    assert freqtrade.pairlists._pairlist_handlers[0]._last_refresh == 0
     assert tickers.call_count == 0
     freqtrade.pairlists.refresh_pairlist()
     assert tickers.call_count == 1
 
-    assert freqtrade.pairlists._pairlists[0]._last_refresh != 0
-    lrf = freqtrade.pairlists._pairlists[0]._last_refresh
+    assert freqtrade.pairlists._pairlist_handlers[0]._last_refresh != 0
+    lrf = freqtrade.pairlists._pairlist_handlers[0]._last_refresh
     freqtrade.pairlists.refresh_pairlist()
     assert tickers.call_count == 1
     # Time should not be updated.
-    assert freqtrade.pairlists._pairlists[0]._last_refresh == lrf
+    assert freqtrade.pairlists._pairlist_handlers[0]._last_refresh == lrf
 
 
 def test_pairlistmanager_no_pairlist(mocker, markets, whitelist_conf, caplog):
@@ -332,5 +408,5 @@ def test_pairlistmanager_no_pairlist(mocker, markets, whitelist_conf, caplog):
     whitelist_conf['pairlists'] = []
 
     with pytest.raises(OperationalException,
-                       match=r"No Pairlist defined!"):
+                       match=r"No Pairlist Handlers defined"):
         get_patched_freqtradebot(mocker, whitelist_conf)
