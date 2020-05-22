@@ -4,19 +4,7 @@ result.toml
 *params*.json*
 jupyter.json
 pyproject.toml
-spaces.json
-evals*.json
-best*.json
-test.py
-ho.py
-bt.sh
-backup.sh
-tags
-tmp/
-cfg
-plot_data/
-tests/user_data/
-dev/
+
 
 config*.json
 *.sqlite
@@ -115,3 +103,16 @@ target/
 !*.gitkeep
 /run.json
 /weights.json
+/spaces.json
+/evals*.json
+/best*.json
+/test.py
+/ho.py
+/bt.sh
+/backup.sh
+tags
+/tmp/
+/cfg
+/plot_data/
+/tests/user_data/
+/dev/

@@ -5,11 +5,12 @@ from threading import Lock
 import signal
 from functools import partial
 
+from pandas import DataFrame
 from skopt import Optimizer
 
 hyperopt: Any = None
+data: Dict[str, DataFrame] = {}
 manager: SyncManager
-# pbar: tqdm = None
 pbar: dict = {}
 
 # Each worker stores the optimizer in the global state
@@ -22,14 +23,6 @@ trials_list: List = []  # (worker local)
 trials_index = 0
 just_saved = 0
 
-# trials counting, variables stored in the epochs namespace, accessed by lock
-# lock = Lock()
-# current_best_loss = VOID_LOSS
-# current_best_epoch = 0
-# epochs_since_last_best: List = [0, 0]
-# avg_last_occurrence: int
-# max_epoch: int
-
 # timer, keep track how hyperopt runtime, use it to decide when to save on storage (worker local)
 timer: float = 0
 
@@ -40,7 +33,7 @@ yi: List = []
 Xi_h: Dict = {}
 tested_h: List = []
 
-# Manage trials state
+# manage trials state
 class TrialsState(Namespace):
     exit: bool
     lock: Lock
@@ -52,8 +45,10 @@ class TrialsState(Namespace):
     void_loss: float
     table_header: int
 
+
 trials = TrialsState()
 
+# trials counting, accessed by lock
 class Epochs(Namespace):
     lock: Lock
     convergence: int
@@ -64,7 +59,9 @@ class Epochs(Namespace):
     max_epoch: int
     avg_last_occurrence: int
 
+
 epochs: Epochs
+
 
 def manager_sig_handler(signal, frame, trials_state: TrialsState):
     trials_state.exit = True

@@ -15,7 +15,7 @@ from joblib import Parallel, delayed, wrap_non_picklable_objects, hash
 from multiprocessing.managers import Namespace, SyncManager
 
 from queue import Queue
-from pandas import read_hdf, DataFrame
+from pandas import read_hdf, DataFrame, HDFStore
 from numpy import (
     array,
     nanvar,
@@ -186,6 +186,7 @@ class HyperoptMulti(HyperoptOut):
         backend.trials.testing = backend.manager.dict()
         # at the end one last batch is dispatched to save the remaining trials
         backend.trials.exit = False
+
         return backend
 
     @staticmethod
@@ -197,10 +198,13 @@ class HyperoptMulti(HyperoptOut):
         (same pool of worker), the state has to be cleared at the start.
         """
         global backend
+        backend.data = {}
         backend.trials_index = 0
+        just_saved = 0
         backend.trials_list = []
         backend.timer = 0
         backend.opt = None
+        backend.exploit = 0
         backend.Xi = []
         backend.yi = []
         backend.Xi_h = {}

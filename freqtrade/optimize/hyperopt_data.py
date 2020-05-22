@@ -171,10 +171,15 @@ class HyperoptData:
         interval = 0.5
         saved = num_trials < 1
         locked = False
-        # strings need to be padded when using append mode
+        # this is needed because it is a string that can exceed
+        # the size preset by pd, and in append mode it can't be changed
         min_itemsize = {"results_explanation": 110}
         if "roi" in trials.columns:  # roi stored as json
             min_itemsize["roi"] = 190
+        # NOTE: make sure to only index the columns really used for indexing
+        # since each parameter is stored in a different col, the col number can
+        # be very high
+        data_columns = ["Xi_h", "random_state", "loss"]
 
         while not saved:
             try:
@@ -190,15 +195,11 @@ class HyperoptData:
                         trials_file,
                         key=instance_name,
                         mode="a",
-                        complib="bzip2",
+                        complib="blosc:snappy",
+                        complevel=9,
                         append=append,
                         format="table",
-                        # NOTE: make sure to only index the columns really used for indexing
-                        # since each parameter is stored in a different col, the col number can
-                        # be very high
-                        data_columns=["Xi_h", "random_state", "loss"],
-                        # this is needed because it is a string that can exceed
-                        # the size preset by pd, and in append mode it can't be changed
+                        data_columns=data_columns,
                         min_itemsize=min_itemsize,
                     )
                 if not backup:
@@ -266,7 +267,7 @@ class HyperoptData:
             if backup or not start:
                 try:
                     logger.warn(
-                        f"Instance table {trials_instance} either"
+                        f"Instance table {trials_instance} either "
                         "empty or corrupted, trying backup..."
                     )
                     trials = read_hdf(trials_file, key=f"{trials_instance}_bak", where=where)
@@ -664,13 +665,11 @@ class HyperoptData:
             )
             # clear the table by replacing it with an empty df
             if clear:
-                try:
-                    store = HDFStore(trials_file)
-                    store.remove("/{}".format(trials_instance))
-                except KeyError:
-                    pass
-                finally:
-                    store.close()
+                with HDFStore(trials_file) as store:
+                    try:
+                        store.remove("/{}".format(trials_instance))
+                    except KeyError:
+                        pass
         return trials
 
     @staticmethod
@@ -692,15 +691,13 @@ class HyperoptData:
     @staticmethod
     def clear_instance(trials_file: Path, instance_name: str) -> bool:
         success = False
-        try:
-            store = HDFStore(trials_file)
-            store.remove("/{}".format(instance_name))
-            success = True
-        except KeyError:
-            pass
-        finally:
-            store.close()
-            return success
+        with HDFStore(trials_file) as store:
+            try:
+                store.remove("/{}".format(instance_name))
+                success = True
+            except KeyError:
+                pass
+        return success
 
     @staticmethod
     def get_trials_file(config: dict, trials_dir: Path) -> Path:
