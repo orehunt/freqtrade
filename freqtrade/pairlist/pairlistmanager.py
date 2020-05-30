@@ -10,7 +10,7 @@ from cachetools import TTLCache, cached
 from freqtrade.exceptions import OperationalException
 from freqtrade.pairlist.IPairList import IPairList
 from freqtrade.resolvers import PairListResolver
-from freqtrade.typing import ListPairsWithTimeframes
+from freqtrade.constants import ListPairsWithTimeframes
 
 
 logger = logging.getLogger(__name__)
@@ -85,6 +85,9 @@ class PairListManager:
 
         # Adjust whitelist if filters are using tickers
         pairlist = self._prepare_whitelist(self._whitelist.copy(), tickers)
+
+        # Generate the pairlist with first Pairlist Handler in the chain
+        pairlist = self._pairlist_handlers[0].gen_pairlist(self._whitelist, tickers)
 
         # Process all Pairlist Handlers in the chain
         for pairlist_handler in self._pairlist_handlers:

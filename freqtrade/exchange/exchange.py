@@ -28,7 +28,7 @@ from freqtrade.exceptions import (DependencyException, InvalidOrderException,
                                   OperationalException, TemporaryError)
 from freqtrade.exchange.common import BAD_EXCHANGES, retrier, retrier_async
 from freqtrade.misc import deep_merge_dicts, safe_value_fallback
-from freqtrade.typing import ListPairsWithTimeframes
+from freqtrade.constants import ListPairsWithTimeframes
 
 CcxtModuleType = Any
 
@@ -1061,7 +1061,7 @@ class Exchange:
             raise OperationalException(e) from e
 
     @retrier
-    def get_order_book(self, pair: str, limit: int = 100) -> dict:
+    def fetch_l2_order_book(self, pair: str, limit: int = 100) -> dict:
         """
         get order book level 2 from exchange
 

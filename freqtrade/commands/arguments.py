@@ -273,27 +273,6 @@ class Arguments:
         trade_cmd.set_defaults(func=start_trading)
         self._build_args(optionlist=ARGS_TRADE, parser=trade_cmd)
 
-        # Add backtesting subcommand
-        backtesting_cmd = subparsers.add_parser(
-            "backtesting", help="Backtesting module.", parents=[_common_parser, _strategy_parser]
-        )
-        backtesting_cmd.set_defaults(func=start_backtesting)
-        self._build_args(optionlist=ARGS_BACKTEST, parser=backtesting_cmd)
-
-        # Add edge subcommand
-        edge_cmd = subparsers.add_parser(
-            "edge", help="Edge module.", parents=[_common_parser, _strategy_parser]
-        )
-        edge_cmd.set_defaults(func=start_edge)
-        self._build_args(optionlist=ARGS_EDGE, parser=edge_cmd)
-
-        # Add hyperopt subcommand
-        hyperopt_cmd = subparsers.add_parser(
-            "hyperopt", help="Hyperopt module.", parents=[_common_parser, _strategy_parser],
-        )
-        hyperopt_cmd.set_defaults(func=start_hyperopt)
-        self._build_args(optionlist=ARGS_HYPEROPT, parser=hyperopt_cmd)
-
         # add create-userdir subcommand
         create_userdir_cmd = subparsers.add_parser(
             "create-userdir", help="Create user-data directory.",
@@ -306,29 +285,80 @@ class Arguments:
         build_config_cmd.set_defaults(func=start_new_config)
         self._build_args(optionlist=ARGS_BUILD_CONFIG, parser=build_config_cmd)
 
+        # add new-hyperopt subcommand
+        build_hyperopt_cmd = subparsers.add_parser('new-hyperopt',
+                                                   help="Create new hyperopt")
+        build_hyperopt_cmd.set_defaults(func=start_new_hyperopt)
+        self._build_args(optionlist=ARGS_BUILD_HYPEROPT, parser=build_hyperopt_cmd)
+
         # add new-strategy subcommand
         build_strategy_cmd = subparsers.add_parser("new-strategy", help="Create new strategy")
         build_strategy_cmd.set_defaults(func=start_new_strategy)
         self._build_args(optionlist=ARGS_BUILD_STRATEGY, parser=build_strategy_cmd)
 
-        # add new-hyperopt subcommand
-        build_hyperopt_cmd = subparsers.add_parser("new-hyperopt", help="Create new hyperopt")
-        build_hyperopt_cmd.set_defaults(func=start_new_hyperopt)
-        self._build_args(optionlist=ARGS_BUILD_HYPEROPT, parser=build_hyperopt_cmd)
-
-        # Add list-strategies subcommand
-        list_strategies_cmd = subparsers.add_parser(
-            "list-strategies", help="Print available strategies.", parents=[_common_parser],
+        # Add download-data subcommand
+        download_data_cmd = subparsers.add_parser(
+            'download-data',
+            help='Download backtesting data.',
+            parents=[_common_parser],
         )
-        list_strategies_cmd.set_defaults(func=start_list_strategies)
-        self._build_args(optionlist=ARGS_LIST_STRATEGIES, parser=list_strategies_cmd)
+        download_data_cmd.set_defaults(func=start_download_data)
+        self._build_args(optionlist=ARGS_DOWNLOAD_DATA, parser=download_data_cmd)
 
-        # Add list-hyperopts subcommand
-        list_hyperopts_cmd = subparsers.add_parser(
-            "list-hyperopts", help="Print available hyperopt classes.", parents=[_common_parser],
+        # Add convert-data subcommand
+        convert_data_cmd = subparsers.add_parser(
+            'convert-data',
+            help='Convert candle (OHLCV) data from one format to another.',
+            parents=[_common_parser],
         )
-        list_hyperopts_cmd.set_defaults(func=start_list_hyperopts)
-        self._build_args(optionlist=ARGS_LIST_HYPEROPTS, parser=list_hyperopts_cmd)
+        convert_data_cmd.set_defaults(func=partial(start_convert_data, ohlcv=True))
+        self._build_args(optionlist=ARGS_CONVERT_DATA_OHLCV, parser=convert_data_cmd)
+
+        # Add convert-trade-data subcommand
+        convert_trade_data_cmd = subparsers.add_parser(
+            'convert-trade-data',
+            help='Convert trade data from one format to another.',
+            parents=[_common_parser],
+        )
+        convert_trade_data_cmd.set_defaults(func=partial(start_convert_data, ohlcv=False))
+        self._build_args(optionlist=ARGS_CONVERT_DATA, parser=convert_trade_data_cmd)
+
+        # Add backtesting subcommand
+        backtesting_cmd = subparsers.add_parser('backtesting', help='Backtesting module.',
+                                                parents=[_common_parser, _strategy_parser])
+        backtesting_cmd.set_defaults(func=start_backtesting)
+        self._build_args(optionlist=ARGS_BACKTEST, parser=backtesting_cmd)
+
+        # Add edge subcommand
+        edge_cmd = subparsers.add_parser('edge', help='Edge module.',
+                                         parents=[_common_parser, _strategy_parser])
+        edge_cmd.set_defaults(func=start_edge)
+        self._build_args(optionlist=ARGS_EDGE, parser=edge_cmd)
+
+        # Add hyperopt subcommand
+        hyperopt_cmd = subparsers.add_parser('hyperopt', help='Hyperopt module.',
+                                             parents=[_common_parser, _strategy_parser],
+                                             )
+        hyperopt_cmd.set_defaults(func=start_hyperopt)
+        self._build_args(optionlist=ARGS_HYPEROPT, parser=hyperopt_cmd)
+
+        # Add hyperopt-list subcommand
+        hyperopt_list_cmd = subparsers.add_parser(
+            'hyperopt-list',
+            help='List Hyperopt results',
+            parents=[_common_parser],
+        )
+        hyperopt_list_cmd.set_defaults(func=start_hyperopt_list)
+        self._build_args(optionlist=ARGS_HYPEROPT_LIST, parser=hyperopt_list_cmd)
+
+        # Add hyperopt-show subcommand
+        hyperopt_show_cmd = subparsers.add_parser(
+            'hyperopt-show',
+            help='Show details of Hyperopt results',
+            parents=[_common_parser],
+        )
+        hyperopt_show_cmd.set_defaults(func=start_hyperopt_show)
+        self._build_args(optionlist=ARGS_HYPEROPT_SHOW, parser=hyperopt_show_cmd)
 
         # Add list-exchanges subcommand
         list_exchanges_cmd = subparsers.add_parser(
@@ -337,14 +367,14 @@ class Arguments:
         list_exchanges_cmd.set_defaults(func=start_list_exchanges)
         self._build_args(optionlist=ARGS_LIST_EXCHANGES, parser=list_exchanges_cmd)
 
-        # Add list-timeframes subcommand
-        list_timeframes_cmd = subparsers.add_parser(
-            "list-timeframes",
-            help="Print available ticker intervals (timeframes) for the exchange.",
+        # Add list-hyperopts subcommand
+        list_hyperopts_cmd = subparsers.add_parser(
+            'list-hyperopts',
+            help='Print available hyperopt classes.',
             parents=[_common_parser],
         )
-        list_timeframes_cmd.set_defaults(func=start_list_timeframes)
-        self._build_args(optionlist=ARGS_LIST_TIMEFRAMES, parser=list_timeframes_cmd)
+        list_hyperopts_cmd.set_defaults(func=start_list_hyperopts)
+        self._build_args(optionlist=ARGS_LIST_HYPEROPTS, parser=list_hyperopts_cmd)
 
         # Add list-markets subcommand
         list_markets_cmd = subparsers.add_parser(
@@ -360,37 +390,40 @@ class Arguments:
         list_pairs_cmd.set_defaults(func=partial(start_list_markets, pairs_only=True))
         self._build_args(optionlist=ARGS_LIST_PAIRS, parser=list_pairs_cmd)
 
+        # Add list-strategies subcommand
+        list_strategies_cmd = subparsers.add_parser(
+            'list-strategies',
+            help='Print available strategies.',
+            parents=[_common_parser],
+        )
+        list_strategies_cmd.set_defaults(func=start_list_strategies)
+        self._build_args(optionlist=ARGS_LIST_STRATEGIES, parser=list_strategies_cmd)
+
+        # Add list-timeframes subcommand
+        list_timeframes_cmd = subparsers.add_parser(
+            'list-timeframes',
+            help='Print available ticker intervals (timeframes) for the exchange.',
+            parents=[_common_parser],
+        )
+        list_timeframes_cmd.set_defaults(func=start_list_timeframes)
+        self._build_args(optionlist=ARGS_LIST_TIMEFRAMES, parser=list_timeframes_cmd)
+
+        # Add show-trades subcommand
+        show_trades = subparsers.add_parser(
+            'show-trades',
+            help='Show trades.',
+            parents=[_common_parser],
+        )
+        show_trades.set_defaults(func=start_show_trades)
+        self._build_args(optionlist=ARGS_SHOW_TRADES, parser=show_trades)
+
         # Add test-pairlist subcommand
         test_pairlist_cmd = subparsers.add_parser(
-            "test-pairlist", help="Test your pairlist configuration.",
+            'test-pairlist',
+            help='Test your pairlist configuration.',
         )
         test_pairlist_cmd.set_defaults(func=start_test_pairlist)
         self._build_args(optionlist=ARGS_TEST_PAIRLIST, parser=test_pairlist_cmd)
-
-        # Add download-data subcommand
-        download_data_cmd = subparsers.add_parser(
-            "download-data", help="Download backtesting data.", parents=[_common_parser],
-        )
-        download_data_cmd.set_defaults(func=start_download_data)
-        self._build_args(optionlist=ARGS_DOWNLOAD_DATA, parser=download_data_cmd)
-
-        # Add convert-data subcommand
-        convert_data_cmd = subparsers.add_parser(
-            "convert-data",
-            help="Convert candle (OHLCV) data from one format to another.",
-            parents=[_common_parser],
-        )
-        convert_data_cmd.set_defaults(func=partial(start_convert_data, ohlcv=True))
-        self._build_args(optionlist=ARGS_CONVERT_DATA_OHLCV, parser=convert_data_cmd)
-
-        # Add convert-trade-data subcommand
-        convert_trade_data_cmd = subparsers.add_parser(
-            "convert-trade-data",
-            help="Convert trade data from one format to another.",
-            parents=[_common_parser],
-        )
-        convert_trade_data_cmd.set_defaults(func=partial(start_convert_data, ohlcv=False))
-        self._build_args(optionlist=ARGS_CONVERT_DATA, parser=convert_trade_data_cmd)
 
         # Add Plotting subcommand
         plot_dataframe_cmd = subparsers.add_parser(
@@ -407,24 +440,3 @@ class Arguments:
         )
         plot_profit_cmd.set_defaults(func=start_plot_profit)
         self._build_args(optionlist=ARGS_PLOT_PROFIT, parser=plot_profit_cmd)
-
-        # Add show-trades subcommand
-        show_trades = subparsers.add_parser(
-            "show-trades", help="Show trades.", parents=[_common_parser],
-        )
-        show_trades.set_defaults(func=start_show_trades)
-        self._build_args(optionlist=ARGS_SHOW_TRADES, parser=show_trades)
-
-        # Add hyperopt-list subcommand
-        hyperopt_list_cmd = subparsers.add_parser(
-            "hyperopt-list", help="List Hyperopt results", parents=[_common_parser],
-        )
-        hyperopt_list_cmd.set_defaults(func=start_hyperopt_list)
-        self._build_args(optionlist=ARGS_HYPEROPT_LIST, parser=hyperopt_list_cmd)
-
-        # Add hyperopt-show subcommand
-        hyperopt_show_cmd = subparsers.add_parser(
-            "hyperopt-show", help="Show details of Hyperopt results", parents=[_common_parser],
-        )
-        hyperopt_show_cmd.set_defaults(func=start_hyperopt_show)
-        self._build_args(optionlist=ARGS_HYPEROPT_SHOW, parser=hyperopt_show_cmd)
