@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 
 OPTS="$(realpath $(dirname $_))"
 . ${OPTS}/opts.sh

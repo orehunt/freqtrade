@@ -82,6 +82,10 @@ class HyperoptData:
     trials_dir: Path
 
     opt: Optimizer
+    # path where the hyperopt state loaded by workers is dumped
+    cls_file: Path
+    # path used by CV to store parameters values loaded by workers
+    Xi_file: Path
 
     metrics = ("profit", "avg_profit", "duration", "trade_count", "loss")
 
@@ -103,6 +107,8 @@ class HyperoptData:
         self.data_pickle_file = (
             self.config["user_data_dir"] / self.hyperopt_dir / "hyperopt_tickerdata.pkl"
         )
+        self.Xi_file = self.config["user_data_dir"] / self.hyperopt_dir / "Xi.pkl"
+        self.cls_file = self.config["user_data_dir"] / self.hyperopt_dir / "cls.pkl"
 
     def clear_hyperopt(self) -> None:
         """
@@ -195,8 +201,8 @@ class HyperoptData:
                         trials_file,
                         key=instance_name,
                         mode="a",
-                        complib="blosc:snappy",
-                        complevel=9,
+                        complib="blosc:zstd",
+                        complevel=2,
                         append=append,
                         format="table",
                         data_columns=data_columns,

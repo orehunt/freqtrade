@@ -1,8 +1,7 @@
 import warnings
-from typing import List
 from abc import abstractmethod
 
-from joblib import Parallel, delayed, wrap_non_picklable_objects
+from joblib import Parallel, delayed, dump
 from pandas import DataFrame
 
 # Import IHyperOpt and IHyperOptLoss to allow unpickling classes from these modules
@@ -31,6 +30,7 @@ class HyperoptCV:
     trials_maxout: int
     trials_timeout: float
 
+
     @abstractmethod
     def parallel_objective(self, t: int, params, epochs: Epochs, trials_state: TrialsState):
         """ objective run in single opt mode, run the backtest and log the results """
@@ -47,10 +47,17 @@ class HyperoptCV:
             self.target_trials, params_cols = HyperoptData.alias_cols(
                 self.target_trials, "params_dict"
             )
-            Xi = self.target_trials.loc[:, params_cols].to_dict("records")
+            # dump the parameters values to FS
+            params = self.target_trials.loc[:, params_cols].to_dict("records")
+            epochs = len(params)
+            Xi = [list(p.values()) for p in params]
+            n_dims = len(self.dimensions)
+            dump(Xi, self.Xi_file)
+
+            # params_Xi = np.memmap(Xi_file, dtype='float64', mode='r', shape=(epochs,n_dims))
             for t, X in enumerate(Xi[offset:]):
                 HyperoptOut._print_progress(t, jobs, self.trials_maxout)
-                yield t, X
+                yield t, []
         else:
             # loop over jobs to schedule the last dispatch to collect unsaved epochs
             for j in range(2 * jobs):
@@ -60,8 +67,8 @@ class HyperoptCV:
     def run_cv_backtest_parallel(self, parallel: Parallel, jobs: int):
         """ evaluate a list of given parameters in parallel """
         parallel(
-            delayed(wrap_non_picklable_objects(self.parallel_objective_sig_handler))(
-                t, params, backend.epochs, backend.trials
+            delayed(self.parallel_objective_sig_handler)(
+                t, params, backend.epochs, backend.trials, self.cls_file
             )
             for t, params in self.trials_params(0, jobs)
         )

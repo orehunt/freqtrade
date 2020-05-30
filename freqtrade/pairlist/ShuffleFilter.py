@@ -19,6 +19,7 @@ class ShuffleFilter(IPairList):
         super().__init__(exchange, pairlistmanager, config, pairlistconfig, pairlist_pos)
 
         self._seed = pairlistconfig.get('seed')
+        self._length = pairlistconfig.get('length', -1)
         self._random = random.Random(self._seed)
 
     @property
@@ -48,4 +49,4 @@ class ShuffleFilter(IPairList):
         # Shuffle is done inplace
         self._random.shuffle(pairlist)
 
-        return pairlist
+        return pairlist[:self._length]

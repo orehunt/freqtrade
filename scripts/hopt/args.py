@@ -28,6 +28,7 @@ def parse_hopt_args() -> dict:
     )
     parser.add_argument("-mp", help="max positions", action="store_true")
     parser.add_argument("-mt", help="min trades")
+    parser.add_argument("-mavp", help="minimum average profit", default=0)
     parser.add_argument(
         "-mx", help="max number of trials per worker before logging", type=int, default=None
     )

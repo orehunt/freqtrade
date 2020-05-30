@@ -357,7 +357,8 @@ def generate_candlestick_graph(
 
 
 def generate_profit_graph(
-    pairs: str, data: Dict[str, pd.DataFrame], trades: pd.DataFrame, timeframe: str
+        pairs: str, data: Dict[str, pd.DataFrame], trades: pd.DataFrame, timeframe: str,
+        plot_pairs_profit: bool
 ) -> go.Figure:
     # Combine close-values for all pairs, rename columns to "pair"
     df_comb = combine_dataframes_with_mean(data, "close")
@@ -371,13 +372,17 @@ def generate_profit_graph(
     # Plot the pairs average close prices, and total profit growth
     avgclose = go.Scatter(x=df_comb.index, y=df_comb["mean"], name="Avg close price",)
 
+    titles = ["AVG Close Price", "Combined Profit"]
+    if plot_pairs_profit:
+        titles.append("Profit per pair")
+
     fig = make_subplots(
         rows=3,
         cols=1,
         shared_xaxes=True,
         row_width=[1, 1, 1],
         vertical_spacing=0.05,
-        subplot_titles=["AVG Close Price", "Combined Profit", "Profit per pair"],
+        subplot_titles=titles,
     )
     fig["layout"].update(title="Freqtrade Profit plot")
     fig["layout"]["yaxis1"].update(title="Price")
@@ -389,11 +394,16 @@ def generate_profit_graph(
     fig = add_profit(fig, 2, df_comb, "cum_profit", "Profit")
     fig = add_max_drawdown(fig, 2, trades, df_comb, timeframe)
 
-    for pair in pairs:
-        profit_col = f"cum_profit_{pair}"
-        df_comb = create_cum_profit(df_comb, trades[trades["pair"] == pair], profit_col, timeframe)
+    if plot_pairs_profit:
+        for pair in pairs:
+            profit_col = f"cum_profit_{pair}"
+            pair_trades = trades[trades["pair"] == pair]
+            if len(pair_trades) > 0:
+                df_comb = create_cum_profit(df_comb, pair_trades, profit_col, timeframe)
+            else:
+                df_comb[profit_col] = 0
 
-        fig = add_profit(fig, 3, df_comb, profit_col, f"Profit {pair}")
+            fig = add_profit(fig, 3, df_comb, profit_col, f"Profit {pair}")
 
     return fig
 
@@ -490,7 +500,8 @@ def plot_profit(config: Dict[str, Any]) -> None:
     # Create an average close price of all the pairs that were involved.
     # this could be useful to gauge the overall market trend
     fig = generate_profit_graph(
-        plot_elements["pairs"], plot_elements["ohlcv"], trades, config.get("ticker_interval", "5m")
+        plot_elements["pairs"], plot_elements["ohlcv"], trades, config.get("ticker_interval", "5m"),
+        config.get("plot_pairs_profit", True)
     )
     store_plot_file(
         fig,

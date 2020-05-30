@@ -423,7 +423,10 @@ class IStrategy(ABC):
         if (
             sell
             and config_ask_strategy.get("use_sell_signal", True)
-            and config_ask_strategy.get("prefer_sell_signal", False)
+            and (
+                config_ask_strategy.get("prefer_sell_signal", False)
+                or not buy
+            )
         ):
             logger.debug(
                 f"{trade.pair} - Sell signal received. sell_flag=True, "

@@ -47,10 +47,10 @@ class ParquetDataHandler(IDataHandler):
         :return: None
         """
         filename = self._pair_data_filename(self._datadir, pair, timeframe)
-        kwargs = {
-            "schema": ["year", "month"]
-        }
-        data.to_parquet(filename, compression="brotli", partition_cols=["date"], **kwargs)
+        if len(data) > 0:
+            data["month"] = data["date"].dt.year.astype(str) + data["date"].dt.month.astype(str)
+            kwargs = {}
+            data.to_parquet(filename, compression=self._compression, partition_cols=["month"], **kwargs)
 
     def _ohlcv_load(
         self, pair: str, timeframe: str, timerange: Optional[TimeRange] = None,
@@ -69,8 +69,8 @@ class ParquetDataHandler(IDataHandler):
         filename = self._pair_data_filename(self._datadir, pair, timeframe)
         if not filename.exists():
             return DataFrame(columns=self._columns)
-        pairdata = read_parquet(filename)
-        pairdata.columns = self._columns
+        pairdata = read_parquet(filename, columns=self._columns)
+        pairdata.drop(columns="month", inplace=True)
         pairdata = pairdata.astype(
             dtype={
                 "open": "float",
@@ -125,8 +125,14 @@ class ParquetDataHandler(IDataHandler):
         :param data: List of Lists containing trade data,
                      column sequence as in DEFAULT_TRADES_COLUMNS
         """
+        from datetime import datetime
+        import pandas as pd
         filename = self._pair_trades_filename(self._datadir, pair)
-        DataFrame(data).to_parquet(filename, compression=self._compression)
+        df = DataFrame(data)
+        df.columns = df.columns.astype(str)
+        dt = pd.to_datetime(df['0'], unit='ms').dt
+        df["day"] = dt.year.astype(str) + dt.month.astype(str) + dt.day.astype(str)
+        df.to_parquet(filename, compression=self._compression, partition_cols=["day"])
 
     def trades_append(self, pair: str, data: TradeList):
         """
@@ -146,11 +152,7 @@ class ParquetDataHandler(IDataHandler):
         :return: List of trades
         """
         filename = self._pair_trades_filename(self._datadir, pair)
-        tradesdata = read_parquet(filename)
-
-        if not tradesdata:
-            return []
-
+        tradesdata = read_parquet(filename).drop(columns=["day"]).values.tolist() if filename.exists() else []
         return tradesdata
 
     def trades_purge(self, pair: str) -> bool:
@@ -161,7 +163,8 @@ class ParquetDataHandler(IDataHandler):
         """
         filename = self._pair_trades_filename(self._datadir, pair)
         if filename.exists():
-            filename.unlink()
+            # filename.unlink()
+            rmtree(filename)
             return True
         return False
 
@@ -178,5 +181,5 @@ class ParquetDataHandler(IDataHandler):
     @classmethod
     def _pair_trades_filename(cls, datadir: Path, pair: str) -> Path:
         pair_s = misc.pair_to_filename(pair)
-        filename = datadir.joinpath("trades/{pair_s}/")
+        filename = datadir.joinpath(f"trades/{pair_s}/")
         return filename

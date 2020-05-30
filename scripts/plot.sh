@@ -42,6 +42,7 @@ export FREQTRADE_NOSS=
 export FREQTRADE_USERDIR=$userdir
 freqtrade $plot_type \
           -c $strategy \
+          -c $hyperopt \
           -c $live \
           -c $exchange \
           -c $amounts \

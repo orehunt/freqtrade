@@ -12,6 +12,9 @@
 - ability to `prefer_sell_signal` which prioritizes a sell when both buy and sell signals are set
 - colored progressbar with statistics, colored log legel
 - option to abort hyperopt if there isn't a minimum ratio for all the pairs/timerange
+-------------------------------------------------------------------------------
+- datahandler with parquet as backing store
+- config option to avoid plotting pairs profit
 
 ## Files that use amounts config 
 ```

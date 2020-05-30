@@ -10,6 +10,7 @@ from collections import deque
 from math import factorial
 from typing import Any, Dict, List, Optional, Tuple, Set, Callable
 from time import time as now
+from pathlib import Path
 
 from colorama import init as colorama_init
 from joblib import (
@@ -72,6 +73,9 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
     hyperopt = Hyperopt(config)
     hyperopt.start()
     """
+
+    # True if the search space is made only of Real dimensions
+    all_real = False
 
     def __init__(self, config: Dict[str, Any]) -> None:
         super().__init__(config)
@@ -355,14 +359,17 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         # https://github.com/scikit-learn/scikit-learn/issues/14265
         # lbfgs uses joblib threading backend so n_jobs has to be reduced
         # to avoid oversubscription
-        if self.opt_acq_optimizer == "lbfgs":
-            n_jobs = 1
-        else:
-            n_jobs = self.n_jobs
+        base_estimator = self.opt_base_estimator()
+        acq_optimizer = (
+            ("lbfgs" if self.all_real else "sampling")
+            if base_estimator == "GP"
+            else self.opt_acq_optimizer
+        )
+        n_jobs = 1 if self.opt_acq_optimizer == "lbfgs" else self.n_jobs
         return Optimizer(
             self.dimensions,
-            base_estimator=self.opt_base_estimator(),
-            acq_optimizer=self.opt_acq_optimizer,
+            base_estimator=base_estimator,
+            acq_optimizer=acq_optimizer,
             acq_func=self.opt_acq_func(),
             n_initial_points=self.opt_n_initial_points,
             acq_optimizer_kwargs={
@@ -378,8 +385,8 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
     def run_backtest_parallel(self, parallel: Parallel, jobs: int):
         """ launch parallel in single opt mode, return the evaluated epochs """
         parallel(
-            delayed(wrap_non_picklable_objects(self.parallel_objective))(
-                t, asked, backend.epochs, backend.trials
+            delayed(self.parallel_objective)(
+                t, asked, backend.epochs, backend.trials, self.cls_file
             )
             for t, asked in self.ask_and_tell(jobs)
         )
@@ -469,24 +476,30 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             t += 1
             yield t, a
 
+    @staticmethod
     def parallel_objective_sig_handler(
-        self, t: int, params: list, epochs: Epochs, trials_state: TrialsState
+            t: int, params: list, epochs: Epochs, trials_state: TrialsState, cls_file: Path
     ):
         """
         To handle Ctrl-C the worker main function has to be wrapped into a try/catch;
         NOTE: The Manager process also needs to be configured to handle SIGINT (in the backend)
         """
         try:
-            return self.parallel_objective(t, params, epochs, trials_state)
+            return Hyperopt.parallel_objective(t, params, epochs, trials_state, cls_file)
         except KeyboardInterrupt:
             trials_state.exit = True
-            return self.parallel_objective(t, params, epochs, trials_state)
+            return Hyperopt.parallel_objective(t, params, epochs, trials_state, cls_file)
 
+    @staticmethod
     def parallel_objective(
-        self, t: int, params, epochs: Epochs, trials_state: TrialsState
+            t: int, params, epochs: Epochs, trials_state: TrialsState, cls_file: Path
     ):
         """ Run one single test and eventually save trials """
         # flush trials if terminating
+        if not backend.cls:
+            backend.cls = load(cls_file)
+        cls = backend.cls
+
         if trials_state.exit:
             trials_state.tail.extend(backend.trials_list)
             del backend.trials_list[:]
@@ -494,20 +507,24 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         if not backend.timer:
             backend.timer = now()
 
-        if self.cv:
-            v = self.backtest_params(params_dict=params)
+        if cls.cv:
+            if not backend.params_Xi:
+                backend.params_Xi = load(cls.Xi_file)
+            X = backend.params_Xi[t]
+            params = {cls.dimensions[n]: p for n, p in enumerate(X)}
+            v = cls.backtest_params(params_dict=params)
         else:
-            v = self.backtest_params(raw_params=params)
+            v = cls.backtest_params(raw_params=params)
 
         # set flag and params for indexing
         if v:
-            v["is_initial_point"] = t < self.opt_n_initial_points
-            v["random_state"] = self.random_state  # this is 0 in CV
+            v["is_initial_point"] = t < cls.opt_n_initial_points
+            v["random_state"] = cls.random_state  # this is 0 in CV
             v["Xi_h"] = hash(HyperoptMulti.opt_params_Xi(v))
             backend.trials_list.append(v)
             trials_state.num_done += 1
 
-        self.maybe_log_trials(trials_state, epochs)
+        cls.maybe_log_trials(trials_state, epochs)
 
     def log_trials(self, trials_state: TrialsState, epochs: Epochs) -> int:
         """
@@ -596,7 +613,6 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         self.dimensions: List[Any]
         self.dimensions = self.hyperopt_space()
         self.trials_file = self.get_trials_file(self.config, self.trials_dir)
-        self.trials_tmp = f"{self.trials_file}.tmp"
         self.trials_instance = "{}.{}.{}.{}".format(
             self.config["hyperopt_loss"],
             len(self.dimensions),
@@ -644,7 +660,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                         )
                     )
                 self.dimensions = [
-                    k for k in self.target_trials.filter(regex="^params_dict.").columns
+                    k.replace("params_dict.", "") for k in self.target_trials.filter(regex="^params_dict.").columns
                 ]
             elif len(self.trials) > 0 and not self.multi:
                 if self.random_state != self.trials.iloc[-1]["random_state"]:
@@ -725,8 +741,25 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         return d
 
     @staticmethod
+    def _analyze_dimensions(dimensions: List[Dimension]) -> Tuple[int, bool]:
+        n_parameters = 0
+        all_real = True
+        # sum all the dimensions discretely, granting minimum values
+        for d in dimensions:
+            if type(d).__name__ == "Integer":
+                n_parameters += max(1, d.high - d.low)
+                all_real = False
+            elif type(d).__name__ == "Real":
+                n_parameters += max(10, int(d.high - d.low))
+            else:
+                n_parameters += len(d.bounds)
+                all_real = False
+        return n_parameters, all_real
+
+    @staticmethod
     def calc_epochs(
-        dimensions: List[Dimension],
+        n_parameters: int,
+        n_dimensions: int,
         n_jobs: int,
         effort: float,
         start_epochs: int,
@@ -735,17 +768,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
     ):
         """ Compute a reasonable number of initial points and
         a minimum number of epochs to evaluate """
-        n_dimensions = len(dimensions)
-        n_parameters = 0
         opt_points = n_jobs * ask_points
-        # sum all the dimensions discretely, granting minimum values
-        for d in dimensions:
-            if type(d).__name__ == "Integer":
-                n_parameters += max(1, d.high - d.low)
-            elif type(d).__name__ == "Real":
-                n_parameters += max(10, int(d.high - d.low))
-            else:
-                n_parameters += len(d.bounds)
         # in case bounds between parameters are too far, fall back to use dimensions
         n_parameters = min(n_dimensions * 100, n_parameters)
         # guess the size of the search space as the count of the
@@ -821,12 +844,14 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             self.min_epochs = self.total_epochs
             self.n_initial_points = self.min_epochs
         else:
+            n_parameters, self.all_real = self._analyze_dimensions(self.dimensions)
             (
                 self.n_initial_points,
                 self.min_epochs,
                 self.search_space_size,
             ) = self.calc_epochs(
-                self.dimensions,
+                n_parameters,
+                len(self.dimensions),
                 self.n_jobs,
                 self.effort,
                 len(self.trials),
@@ -881,6 +906,9 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
 
     def main_loop(self, jobs_scheduler):
         """ main parallel loop """
+        # dump the object state which will be loaded by every worker
+        # instead of pickling functions around
+        dump(wrap_non_picklable_objects(self), self.cls_file)
         with parallel_backend("loky", inner_max_num_threads=2):
             with Parallel(n_jobs=self.n_jobs, verbose=0, backend="loky") as parallel:
                 try:

@@ -6,7 +6,6 @@ import pickle
 import re
 import os
 import subprocess
-import joblib
 import logging
 from colorama import Fore, Style
 from pathlib import Path
@@ -19,15 +18,17 @@ from statistics import mean
 from hashlib import sha1
 from multiprocessing import Lock
 from joblib.externals.loky import get_reusable_executor
-from itertools import cycle
 
 from user_data.modules import testsequences as ts
 
 from freqtrade.configuration.configuration import Configuration, RunMode
 from freqtrade.optimize.hyperopt import Hyperopt
 from freqtrade.loggers import setup_logging
+from freqtrade.data.btanalysis import load_trades
+
 from scripts.hopt.args import parse_hopt_args
 from scripts.hopt.env import set_environment
+from scripts.hopt.time import OPT_TR, CV_TR
 
 logger = logging.getLogger(__name__)
 
@@ -52,33 +53,6 @@ paths["evals"] = f"{paths['data']}/evals.json"
 paths["pos"] = f"{paths['pickle']}/pos.json"
 paths["score"] = f"{paths['user']}/indicators/score.json"
 
-OPT_TR = "20170801-20200101"
-# btc
-# CV_TR = [
-#     "20171215-20181215",
-#     "20181215-20190801",
-#     "20200101-20200501",
-#     "20170801-20171215",
-# ]
-# multipairs
-# OPT_TR = "20200201-20200301"
-CV_TR = [
-    "20200310-20200514",
-    "20200110-20200310",
-    "20191028-20200101",
-    "20190801-20190901",
-    "20181001-20181101",
-]
-# CV_TR = [
-#     "20180201-20180701",
-#     "20180701-20190101",
-#     "20190801-20200101",
-#     "20190101-20200801",
-#     "20200101-20200501",
-#     "20170801-20180201",
-# ]
-# TRS = ["20170801-20200101", "20200101-20200301", "20200301-20200501"]
-# TRS = ["20170801-20180801", "20180801-20190801", "20190801-20200801"]
 
 ho: Hyperopt
 
@@ -122,7 +96,9 @@ class Main:
     config["hyperopt_jobs"] = args.j
     config["hyperopt_trials_maxout"] = args.mx or int(args.j)
     config["hyperopt_trials_timeout"] = args.tm or 60
-    config["hyperopt_trials_instance"] = args.inst or ("cv" if (args.cv and not args.kn) else None)
+    config["hyperopt_trials_instance"] = args.inst or (
+        "cv" if (args.cv and not args.kn) else None
+    )
     config["epochs"] = args.e
     config["mode"] = args.mode
     config["lie_strat"] = args.lie
@@ -155,11 +131,18 @@ class Main:
     def calc_trades(self):
         self.calc_days()
         mintrades = (
-            int(int((self.n_tickers * self.days) / 14) if not self.args.mt else self.args.mt) or 3
+            int(
+                int((self.n_tickers * self.days) / 14)
+                if not self.args.mt
+                else self.args.mt
+            )
+            or 3
         )
         self.config["hyperopt_min_trades"] = mintrades
         if self.n_tickers > 1 and self.timerange == OPT_TR:
-            logger.warn(f"Using mintrades {mintrades} with many pairs on older timerange.")
+            logger.warn(
+                f"Using mintrades {mintrades} with many pairs on older timerange."
+            )
         self.maxtrades = int(self.days * 2)
 
     def calc_days(self):
@@ -171,7 +154,9 @@ class Main:
             stop = datetime.now().timetuple()
             start = datetime.strptime(start, "%Y%m%d").timetuple()
         else:
-            start, stop = (datetime.strptime(t, "%Y%m%d").timetuple() for t in (start, stop))
+            start, stop = (
+                datetime.strptime(t, "%Y%m%d").timetuple() for t in (start, stop)
+            )
         start, stop = (mktime(t) for t in (start, stop))
         self.days = int((stop - start) // (60 * 60 * 24))
         self.config["days"] = self.days
@@ -180,7 +165,9 @@ class Main:
         if self.args.kn:
             self.timerange = OPT_TR
         elif self.args.d:
-            self.timerange = (datetime.now() - Timedelta(f"{self.days}d")).strftime("%Y%m%d-")
+            self.timerange = (datetime.now() - Timedelta(f"{self.days}d")).strftime(
+                "%Y%m%d-"
+            )
         elif self.args.g:
             try:
                 trs, n = self.args.g.split(":")
@@ -247,6 +234,27 @@ class Main:
                 return [pairs]
             elif tp == "l":
                 return pairs.split(",")
+            # keep n profitable pairs or discard n profitable pairs
+            elif tp in ("b", "bk", "bd"):
+                exportfilename = f"{self.config['user_data_dir']}/backtest_results/{self.timeframe}.json"
+                trades = load_trades(
+                    "file",
+                    db_url=self.config.get("db_url"),
+                    exportfilename=exportfilename,
+                )
+                pairs_count = int(pairs)
+                pairs = trades["pair"].drop_duplicates().values.tolist()
+                pairs_profit = {pair: 0 for pair in pairs}
+                for pair in pairs:
+                    pairs_profit[pair] = trades[trades.pair == pair].profitperc.sum()
+                sorted_by_profit = sorted(pairs_profit, key=lambda k: pairs_profit[k])
+                if tp == "bk":
+                    return sorted_by_profit[-abs(pairs_count) :]
+                else: # b, bd
+                    return sorted_by_profit[: -abs(pairs_count)]
+            elif tp == "e":
+                exc = self.read_json_file(self.config_dir + pairs + ".json")
+                return exc["exchange"]["pair_whitelist"]
             else:
                 return self.read_json_file(pa)
         else:
@@ -273,7 +281,7 @@ class Main:
             self.write_json_file(data, self.exchange_config)
         else:
             data["exchange"]["pair_whitelist"] = self.parse_pairs(pa)
-            self.write_json_file(data, self.exchange_config)
+            self.write_json_file(data, self.exchange_config, update=False)
         print("wrote the pairslist to:", self.exchange_config)
         return prev_pairs
 
@@ -345,7 +353,12 @@ class Main:
             return
         else:
             self.update_config(space_type)
-        print(Fore.GREEN + Style.BRIGHT + "\n*** STARTING HYPEROPT ***\n" + Style.RESET_ALL)
+        print(
+            Fore.GREEN
+            + Style.BRIGHT
+            + "\n*** STARTING HYPEROPT ***\n"
+            + Style.RESET_ALL
+        )
         # when profiling run freqtrade directly
         if self.args.prf != "":
             # normalize variables
@@ -444,7 +457,9 @@ class Main:
         last_params = last["params_dict"]
         null_params = dict.fromkeys(last_params, None)
         best = null_params if "loss" not in best else best
-        if "params_dict" not in best or not self.match_condition_at_index(c, last_params):
+        if "params_dict" not in best or not self.match_condition_at_index(
+            c, last_params
+        ):
             params = null_params
         else:
             params = best["params_dict"]
@@ -452,7 +467,9 @@ class Main:
         len_preds = len(preds)
         skipor = False
         if (len(prev_params) > c and len(prev_params[c]) < len(preds[0])) or w >= 0:
-            close_len_preds = len_preds - 1  # sub 1 to make sure i+1 is an existing index
+            close_len_preds = (
+                len_preds - 1
+            )  # sub 1 to make sure i+1 is an existing index
             pred = preds[0]
             skipor = False
             parmatch = False
@@ -464,21 +481,30 @@ class Main:
             if prev_params[c][-1].keys() == last_params.keys():
                 predmatch = True
             if parmatch and (
-                (i > 0 and params == last_params) or (predmatch and params != last_params)
+                (i > 0 and params == last_params)
+                or (predmatch and params != last_params)
             ):
                 # null if the same
                 prev_params[c].append(null_params)
                 # print(1)
             else:
                 # the last best is not the absolute best
-                if best != null_params and best["loss"] <= self.cond_best and last_params == params:
+                if (
+                    best != null_params
+                    and best["loss"] <= self.cond_best
+                    and last_params == params
+                ):
                     prev_params[c].append(params)
                     # print(3, 1)
                 else:
                     prev_params[c].append(null_params)
                     # print(3, 2)
             # null and skip next one if still the same
-            if i < close_len_preds and pred[i] == pred[i + 1] and prev_params[c][-1] == null_params:
+            if (
+                i < close_len_preds
+                and pred[i] == pred[i + 1]
+                and prev_params[c][-1] == null_params
+            ):
                 skipor = True
                 prev_params[c].append(null_params)
                 # increase the or counter (o) because with skip the next eval
@@ -637,7 +663,9 @@ class Main:
             print(f"no src given, defaulting to {src}")
         with open(src, "r") as fp:
             prev_params = json.load(fp)
-            evals = ts.sequencer({}, prev_params=prev_params, sgn=self.args.sgn.split(","))[4]
+            evals = ts.sequencer(
+                {}, prev_params=prev_params, sgn=self.args.sgn.split(",")
+            )[4]
         for e in evals:  # delete empty conditions
             for i in e:
                 for n in range(1, len(i)):
@@ -764,7 +792,9 @@ class Main:
     def update_new_best(self, candidate: float):
         run_best = self.read_json_file(paths["best"], "run_best")
         if not run_best:
-            raise RuntimeError(f"Run best at {paths['best']} is null, update with proper value.")
+            raise RuntimeError(
+                f"Run best at {paths['best']} is null, update with proper value."
+            )
         if candidate < run_best:
             self.write_json_file({"run_best": candidate}, paths["best"])
             return True
@@ -782,11 +812,15 @@ class Main:
         for c in range(max(0, w), len(ts.tconds)):
             ln_cp = len(prev_params)
             ln_tc = len(ts.tconds)
-            ln_lcp = len(prev_params[-1]) if (ln_cp > 0 and prev_params[-1] != None) else 0
+            ln_lcp = (
+                len(prev_params[-1]) if (ln_cp > 0 and prev_params[-1] != None) else 0
+            )
             ln_lcs = len(ts.tconds[-1][1][0])
             self.wrap = ln_cp == ln_tc and ln_lcp == ln_lcs
             # store the previous full condition best value for comparison
-            if c < ln_cp and c < w and w < 0:  # if wrap is >0 it is set and we always loop
+            if (
+                c < ln_cp and c < w and w < 0
+            ):  # if wrap is >0 it is set and we always loop
                 print(f"{c} continue..")
                 self.cond_best = inf  # reset cond best since switching condition
                 continue
@@ -817,7 +851,9 @@ class Main:
                 self.next_cond = False
                 ln_cpc = len(prev_params[c]) if c < ln_cp else 0
             for i in range(0, ln_ors):
-                if i < ln_cpc or skipor:  # skipor means a new null iteration was already appended
+                if (
+                    i < ln_cpc or skipor
+                ):  # skipor means a new null iteration was already appended
                     skipor = 0
                     skipand = 1  # skipand is used to bypass process last condition
                     continue
@@ -828,14 +864,17 @@ class Main:
                 # write parameters to spaces.json to correctly generate
                 # the search space according to the current condition
                 dimensions = {
-                    dim: [pfxs, inds, [fname[i][0] for fname in preds]] for dim in self.spaces
+                    dim: [pfxs, inds, [fname[i][0] for fname in preds]]
+                    for dim in self.spaces
                 }
                 self.write_json_file(dimensions, paths["spaces"])
                 # write current evaling position to disk
                 with open(paths["pos"], "w") as fp:
                     json.dump({"n": c, "o": i}, fp)
                 self.run_hyperopt()
-                prev_params, skipor = self.save_results(c=c, i=i, w=w, prev_params=prev_params)
+                prev_params, skipor = self.save_results(
+                    c=c, i=i, w=w, prev_params=prev_params
+                )
             # after a full loop we decide if the condition evaluation is worth keeping
             prev_params = self.process_last_condition(c, prev_params, skipand)
         return prev_params
@@ -850,7 +889,9 @@ class Main:
             self.run_hyperopt()
             return
         else:
-            if spaces == -1:  # this does a first run with all the limit, then loop one by one
+            if (
+                spaces == -1
+            ):  # this does a first run with all the limit, then loop one by one
                 self.run_hyperopt()
                 spaces = len_spa
             space_type = spaces % len_spa
@@ -877,7 +918,9 @@ class Main:
             self.opt_amounts(-1)
             # copy the config to the pair amounts folder
             amounts = self.read_json_file(self.amounts_tuned_config)
-            self.write_json_file(amounts, f"{self.config_dir}/amounts/pairs/all.json", update=False)
+            self.write_json_file(
+                amounts, f"{self.config_dir}/amounts/pairs/all.json", update=False
+            )
             # remove previous pair amounts (here so to not delete amounts from resume)
             for p in pairs:
                 p_name = p.replace("/", "-")
@@ -934,7 +977,9 @@ class Main:
         if params:
             print(f"updating amounts at {amounts_path}")
             self.write_json_file(params, amounts_path)
-            self.write_json_file({"run_best": best["loss"]}, paths["best"], update=False)
+            self.write_json_file(
+                {"run_best": best["loss"]}, paths["best"], update=False
+            )
         if self.args.q:
             exit(0)
         return
@@ -950,7 +995,9 @@ class Main:
         path = path.split(":")
         idx = int(path[1]) if len(path) > 1 else None
         path = path[0]
-        trial = self.ho.trials_to_dict(results.loc[results["current_epoch"] == epoch])[0]
+        trial = self.ho.trials_to_dict(results.loc[results["current_epoch"] == epoch])[
+            0
+        ]
         params = trial["params_dict"]
         data = self.read_json_file(path)
         if idx is not None:
@@ -1023,7 +1070,7 @@ class Main:
                 "hyperopt_list_filter": True,
                 "hyperopt_list_dedup": False,
                 "hyperopt_list_min_total_profit": None,
-                "hyperopt_list_min_avg_profit": -0.25
+                "hyperopt_list_min_avg_profit": self.args.mavp
                 if not re.match("_cv$|^cv$", self.args.inst)
                 else 0,
                 "hyperopt_list_min_trades": self.config["hyperopt_min_trades"],
@@ -1076,15 +1123,15 @@ class Main:
         self.config_spaces(clear=True)
         copy(paths["params"] + ".1", paths["params"] + ".2")  # backup params config
         if not self.args.r:
-            self.write_json_file([], paths["params"], update=False)  # reset params config
+            self.write_json_file(
+                [], paths["params"], update=False
+            )  # reset params config
             self.write_json_file({}, paths["best"], update=False)  # reset best
         prev_params = self.read_json_file(paths["params"])
         self.update_evals(prev_params)
         while True and os.path.exists(paths["params"]):  # wrap indefinitely
             prev_params = self.opt_conditions(prev_params, self.args.w)
-            self.args.w = (
-                0  # after the first run we reset wrap because we are **surely** starting from 0
-            )
+            self.args.w = 0  # after the first run we reset wrap because we are **surely** starting from 0
             sleep(1)
 
     def start(self):

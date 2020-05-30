@@ -2,6 +2,7 @@ from typing import Any, Dict, List
 from queue import Queue
 from multiprocessing.managers import SyncManager, Namespace
 from threading import Lock
+from pathlib import Path
 import signal
 from functools import partial
 
@@ -9,6 +10,7 @@ from pandas import DataFrame
 from skopt import Optimizer
 
 hyperopt: Any = None
+cls: Path = None
 data: Dict[str, DataFrame] = {}
 manager: SyncManager
 pbar: dict = {}
@@ -32,6 +34,8 @@ yi: List = []
 # keep track of the points in the worker optimizer
 Xi_h: Dict = {}
 tested_h: List = []
+# used by CV
+params_Xi = []
 
 # manage trials state
 class TrialsState(Namespace):

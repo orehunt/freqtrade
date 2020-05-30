@@ -1,9 +1,10 @@
 #!/bin/bash
+# example: tr.sh -c -e binance -v dry -y strategyName -n amounts.cfg
 
 [ -n "$BASH_SOURCE" ] && src=$BASH_SOURCE || src=$_
 OPTS="$(realpath $(dirname $src))"
 . ${OPTS}/opts.sh
-
+# -v live/dry
 if [ "$runmode" = live ]; then
     tg_bot=${tg_bot:-live}
     dburl=${dburl:-"sqlite:///live.sqlite"}
@@ -15,7 +16,7 @@ else
 fi
 
 telegram=$dir/tg/${exchange_name}_${tg_bot}_telegram.json
-exchange=$dir/binance.json
+exchange=$dir/${exchange_name}.json
 amounts=$dir/amounts.json
 
 if [ "$open_trades" = "-1" ]; then

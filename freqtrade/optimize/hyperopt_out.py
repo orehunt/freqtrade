@@ -410,6 +410,7 @@ class HyperoptOut(HyperoptData):
         )
         backend.pbar["manager"] = enlighten.Manager()
         backend.pbar["total"] = backend.pbar["manager"].counter(
+            count=backend.trials.num_saved,
             total=total_epochs,
             unit="epochs",
             bar_format=bar_format,

@@ -2,6 +2,7 @@ import warnings
 import logging
 import gc
 from psutil import virtual_memory
+from pathlib import Path
 from typing import Any, Dict, List, Tuple, Optional
 from abc import abstractmethod
 from time import time as now
@@ -11,7 +12,7 @@ from functools import partial
 
 # profiler = Profiler()
 
-from joblib import Parallel, delayed, wrap_non_picklable_objects, hash
+from joblib import Parallel, delayed, wrap_non_picklable_objects, hash, load
 from multiprocessing.managers import Namespace, SyncManager
 
 from queue import Queue
@@ -60,7 +61,10 @@ class HyperoptMulti(HyperoptOut):
 
     @abstractmethod
     def backtest_params(
-        self, raw_params: List[Any] = None, iteration=None, params_dict: Dict[str, Any] = None
+        self,
+        raw_params: List[Any] = None,
+        iteration=None,
+        params_dict: Dict[str, Any] = None,
     ):
         """
         Used Optimize function. Called once per epoch to optimize whatever is configured.
@@ -68,7 +72,9 @@ class HyperoptMulti(HyperoptOut):
         """
 
     @abstractmethod
-    def _maybe_terminate(self, t: int, jobs: int, trials_state: TrialsState, epochs: Epochs):
+    def _maybe_terminate(
+        self, t: int, jobs: int, trials_state: TrialsState, epochs: Epochs
+    ):
         """ Decide if the iterator should stop execution based on trials or epochs counts """
 
     def epochs_iterator(self, jobs: int):
@@ -115,11 +121,9 @@ class HyperoptMulti(HyperoptOut):
                 # self.opt_base_estimator = lambda: BayesianRidge(n_iter=100, normalize=True)
                 self.opt_base_estimator = lambda: "GP"
                 self.opt_acq_func = lambda: "gp_hedge"
-                self.opt_acq_optimizer = "auto"
+                self.opt_acq_optimizer = "lbfgs"
                 # The GaussianProcessRegressor is heavy, which makes it not a good default
                 # however longer backtests might make it a better tradeoff
-                # self.opt_base_estimator = lambda: 'GP'
-                # self.opt_acq_optimizer = 'lbfgs'
         mode = self.mode
         self.cv = mode == "cv"
         self.multi = mode in ("multi", "shared")
@@ -145,10 +149,9 @@ class HyperoptMulti(HyperoptOut):
         # var used in epochs and batches calculation
         self.opt_points = self.n_jobs * (self.ask_points or 1)
         # lie strategy
-        lie_strat = self.config.get("lie_strat", "default")
-        if lie_strat == "default":
-            self.lie_strat = lambda: "cl_min"
-        elif lie_strat == "random":
+        def_lie_strat = "random" if self.shared else "cl_min"
+        lie_strat = self.config.get("lie_strat", def_lie_strat)
+        if lie_strat == "random":
             self.lie_strat = self.lie_strategy
         else:
             self.lie_strat = lambda: lie_strat
@@ -198,6 +201,7 @@ class HyperoptMulti(HyperoptOut):
         (same pool of worker), the state has to be cleared at the start.
         """
         global backend
+        backend.cls = None
         backend.data = {}
         backend.trials_index = 0
         just_saved = 0
@@ -220,9 +224,9 @@ class HyperoptMulti(HyperoptOut):
         scheduling the specified number of trials,
         passing the needed objects handled by the manager """
         parallel(
-            delayed(wrap_non_picklable_objects(self.parallel_opt_objective_sig_handler))(
-                t, jobs, backend.optimizers, backend.epochs, backend.trials
-            )
+            delayed(
+                self.parallel_opt_objective_sig_handler
+            )(t, jobs, backend.optimizers, backend.epochs, backend.trials, self.cls_file)
             for t in self.epochs_iterator(jobs)
         )
 
@@ -237,7 +241,9 @@ class HyperoptMulti(HyperoptOut):
         return asked
 
     @staticmethod
-    def opt_state(optimizers: Optional[Queue] = None, s_opt: Optimizer = None) -> Optimizer:
+    def opt_state(
+        optimizers: Optional[Queue] = None, s_opt: Optimizer = None
+    ) -> Optimizer:
         """ Return an optimizer in multi opt mode """
         # get an optimizer instance
         if s_opt:
@@ -290,7 +296,11 @@ class HyperoptMulti(HyperoptOut):
                 # Only wait if the optimizer has no points at all (startup)
                 locked = trials_state.lock.acquire(len(opt.Xi) < 1)
                 if locked:
-                    where = [f"Xi_h != {list(backend.Xi_h.keys())}"] if backend.Xi_h else None
+                    where = (
+                        [f"Xi_h != {list(backend.Xi_h.keys())}"]
+                        if backend.Xi_h
+                        else None
+                    )
                     params_df = read_hdf(
                         self.trials_file,
                         key=self.trials_instance,
@@ -332,7 +342,9 @@ class HyperoptMulti(HyperoptOut):
                 backend.yi.extend(yi)
             # add only the hashes of the query, because the hashes of the points
             # stored in the backend have been already added after the local evaluation
-            backend.Xi_h.update(dict(zip(params_df["Xi_h"].values, params_df["loss"].values)))
+            backend.Xi_h.update(
+                dict(zip(params_df["Xi_h"].values, params_df["loss"].values))
+            )
         if backend.Xi:  # or just tell prev points
             opt.tell(backend.Xi, backend.yi)
         else:
@@ -428,34 +440,54 @@ class HyperoptMulti(HyperoptOut):
         else:
             backend.just_saved = 0
 
+    @staticmethod
     def parallel_opt_objective_sig_handler(
-        self, t: int, jobs: int, optimizers: Queue, epochs: Epochs, trials_state: TrialsState
+        t: int,
+        jobs: int,
+        optimizers: Queue,
+        epochs: Epochs,
+        trials_state: TrialsState,
+        cls_file: Path,
     ):
         """
         To handle Ctrl-C the worker main function has to be wrapped into a try/catch;
         NOTE: The Manager process also needs to be configured to handle SIGINT (in the backend)
         """
         try:
-            return self.parallel_opt_objective(t, jobs, optimizers, epochs, trials_state)
+            return HyperoptMulti.parallel_opt_objective(
+                t, jobs, optimizers, epochs, trials_state, cls_file
+            )
         except KeyboardInterrupt:
             trials_state.exit = True
-            return self.parallel_opt_objective(t, jobs, optimizers, epochs, trials_state)
+            return HyperoptMulti.parallel_opt_objective(
+                t, jobs, optimizers, epochs, trials_state, cls_file
+            )
 
+    @staticmethod
     def parallel_opt_objective(
-        self, t: int, jobs: int, optimizers: Queue, epochs: Epochs, trials_state: TrialsState
+        t: int,
+        jobs: int,
+        optimizers: Queue,
+        epochs: Epochs,
+        trials_state: TrialsState,
+        cls_file: Path
     ):
         """
         An objective run in multi opt mode;
         Shared: optimizers share the results as soon as they are completed;
         Multi: optimizers share results but only following the points asked by the model
         """
+        if not backend.cls:
+            backend.cls = load(cls_file)
+        cls = backend.cls
+
         if not backend.timer:
             backend.timer = now()
         opt = HyperoptMulti.opt_state(optimizers)
         # enable gc after referencing optimizer
         gc.enable()
 
-        is_shared = self.shared
+        is_shared = cls.shared
         # check early if this is the last run
         if trials_state.exit:
             trials_state.tail.extend(backend.trials_list)
@@ -465,30 +497,36 @@ class HyperoptMulti(HyperoptOut):
         # at startup always fetch previous points from storage,
         # in shared mode periodically check for new points computed by other workers,
         # every once in a while the optimizer global state is gced, so reload points
-        opt = self.opt_startup_points(opt, trials_state, is_shared)
+        opt = cls.opt_startup_points(opt, trials_state, is_shared)
 
-        untested_Xi = self.opt_fetch_points(opt, epochs, trials_state)
+        untested_Xi = cls.opt_fetch_points(opt, epochs, trials_state)
 
         # return early if there is nothing to test
         if len(untested_Xi) < 1:
             opt.void = -1
-            self.opt_state(s_opt=opt)
+            cls.opt_state(s_opt=opt)
             # Terminate after enough workers didn't receive a point to test
             trials_state.empty_strikes += 1
-            if trials_state.empty_strikes >= self.trials_maxout:
+            if trials_state.empty_strikes >= cls.trials_maxout:
                 trials_state.exit = True
             return
         # run the backtest for each point to do (untested_Xi)
-        trials = [self.backtest_params(X) for X in untested_Xi]
+        trials = [cls.backtest_params(X) for X in untested_Xi]
         # filter losses
-        void_filtered = HyperoptMulti.filter_void_losses(trials, opt, trials_state, is_shared)
+        void_filtered = HyperoptMulti.filter_void_losses(
+            trials, opt, trials_state, is_shared
+        )
 
-        self.opt_log_trials(opt, void_filtered, t, jobs, is_shared, trials_state, epochs)
+        cls.opt_log_trials(
+            opt, void_filtered, t, jobs, is_shared, trials_state, epochs
+        )
         # disable gc at the end to prevent disposal of global vars
 
         gc.disable()
 
-    def opt_fetch_points(self, opt: Optimizer, epochs: Epochs, trials_state: TrialsState) -> List:
+    def opt_fetch_points(
+        self, opt: Optimizer, epochs: Epochs, trials_state: TrialsState
+    ) -> List:
         asked: Dict[str, List] = {}
         asked_d: Dict[str, List] = {}
         n_told = 0  # told while looping
@@ -531,7 +569,9 @@ class HyperoptMulti(HyperoptOut):
                     # if yes fit a new model with the new points
                     opt.tell(tested_Xi[n_told:], tested_yi[n_told:])
                     n_told = n_tested_Xi
-                elif asked != asked_d:  # or get new points from a different random state
+                elif (
+                    asked != asked_d
+                ):  # or get new points from a different random state
                     opt = HyperoptMulti.opt_rand(opt)
                     # getting a point by copy is the last try before
                     # terminating because of convergence
@@ -571,7 +611,11 @@ class HyperoptMulti(HyperoptOut):
 
     @staticmethod
     def opt_adjust_acq(
-        opt: Optimizer, jobs: int, epochs: Epochs, trials_state: TrialsState, is_shared: bool
+        opt: Optimizer,
+        jobs: int,
+        epochs: Epochs,
+        trials_state: TrialsState,
+        is_shared: bool,
     ) -> Optimizer:
         """ Tune exploration/exploitaion balance of optimizers """
 
@@ -583,9 +627,13 @@ class HyperoptMulti(HyperoptOut):
         ):
             # how many epochs since no best
             xi, kappa = None, None
-            loss, n_tail, last_period, loss_tail, loss_last = HyperoptMulti.opt_acq_window(
-                opt, is_shared, jobs, epochs
-            )
+            (
+                loss,
+                n_tail,
+                last_period,
+                loss_tail,
+                loss_last,
+            ) = HyperoptMulti.opt_acq_window(opt, is_shared, jobs, epochs)
 
             # increase exploitation around
             # any obs that exhibits a better (lower) score
@@ -610,7 +658,9 @@ class HyperoptMulti(HyperoptOut):
                     xi = -nanstd(loss_tail)
                 # LCB uses kappa instead of xi, and is based on variance
                 if opt.acq_func in ("LCB", "gp_hedge"):
-                    kappa = nanvar([epochs.current_best_loss, nanmin(loss_tail)]) or nanvar(
+                    kappa = nanvar(
+                        [epochs.current_best_loss, nanmin(loss_tail)]
+                    ) or nanvar(
                         # use mean when we just found a new best as var would be 0
                         [epochs.current_best_loss, nanmean(loss_tail)]
                     )
@@ -622,7 +672,9 @@ class HyperoptMulti(HyperoptOut):
                 backend.exploit = 0
                 # adjust to tail position as we are in general more exploitative
                 # at the beginning and more explorative towards the end
-                tail_position = (epochs.current_best_epoch + last_period) / epochs.max_epoch
+                tail_position = (
+                    epochs.current_best_epoch + last_period
+                ) / epochs.max_epoch
                 if opt.acq_func in ("PI", "EI", "gp_hedge"):
                     xi = nanstd(loss_last) * tail_position
                 if opt.acq_func in ("LCB", "gp_hedge"):
