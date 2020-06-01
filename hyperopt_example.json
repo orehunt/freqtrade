@@ -1,0 +1,43 @@
+{
+    "plot_pairs_profit": false,
+    "hyperopt_list_filter": true,
+    "hyperopt_list_keep_no_trades": false,
+    "hyperopt_list_trail": true,
+    "strategy": "MultiMADp",
+    "hyperopt": "MultiMADHyperOpt",
+    "hyperopt_trials_instance": "",
+    "hyperopt_list_dedup": false,
+    "hyperopt_list_best": [
+        "sum",
+        "ratio"
+    ],
+    "hyperopt_list_pct_best": 0.03,
+    "hyperopt_list_cutoff_best": 0.9,
+    "hyperopt_list_profitable": true,
+    "hyperopt_list_min_trades": 20,
+    "hyperopt_list_max_trades": null,
+    "hyperopt_list_min_avg_time": null,
+    "hyperopt_list_max_avg_time": null,
+    "hyperopt_list_min_avg_profit": 0,
+    "hyperopt_list_max_avg_profit": null,
+    "hyperopt_list_min_total_profit": 0,
+    "hyperopt_list_max_total_profit": null,
+    "hyperopt_list_step_values": {
+        "profit": 25,
+        "avg_profit": 0.05,
+        "duration": 5,
+        "trade_count": 20,
+        "loss": 1,
+        "range": "std"
+    },
+    "hyperopt_list_step_metric": [
+        "all"
+    ],
+    "hyperopt_list_sort_metric": [
+        "all"
+    ],
+    "hyperopt_trials_maxout": 60,
+    "hyperopt_trials_timeout": 120,
+    "hyperopt_min_candles_ratio": 0.5,
+    "print_colorized": true
+}

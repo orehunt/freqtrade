@@ -6,6 +6,7 @@ import json
 import io
 from pprint import pprint
 from typing import Any, Dict, Optional
+from pathlib import Path
 
 import rapidjson
 from colorama import Fore, Style
@@ -273,6 +274,7 @@ class HyperoptOut(HyperoptData):
             return
 
         # Verification for overwrite
+        path = Path(csv_file)
         if path.isfile(csv_file):
             logger.error(f"CSV file already exists: {csv_file}")
             return
@@ -386,6 +388,11 @@ class HyperoptOut(HyperoptData):
             if not cv
             else ""
         )
+        # TODO:
+        # - Buf reports negative values at the end when it's flushing the remaining trials
+        # - Exp goes below(above) the actual number of workers after sometime (gc related?)
+        # - max/minimizing tmux panes bugs the pbar once in a while requiring a tmux session restart
+        # or causes a very rare exception with a resize lock held by the enlighten manager
         trials_format = (
             "Best: "
             "{Style.BRIGHT}{backend.epochs.current_best_epoch}"

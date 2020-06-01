@@ -18,6 +18,7 @@ def parse_hopt_args() -> dict:
     parser.add_argument("-b", help="clear backtest cache", action="store_true")
     parser.add_argument("-s", help="no sell signal", action="store_true")
     parser.add_argument("-amt", help="spaces for amounts", default=0, type=int)
+    parser.add_argument("-edg", help="spaces for amounts", action="store_true")
     parser.add_argument("-pp", help="path for pairlist for profits tuning", default="")
     parser.add_argument("-ne", help="optimize evals number", type=str, default="")
     parser.add_argument(

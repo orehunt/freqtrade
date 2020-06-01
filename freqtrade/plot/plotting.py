@@ -394,7 +394,6 @@ def generate_profit_graph(
     fig = add_profit(fig, 2, df_comb, "cum_profit", "Profit")
     fig = add_max_drawdown(fig, 2, trades, df_comb, timeframe)
 
-<<<<<<< HEAD
     if plot_pairs_profit:
         for pair in pairs:
             profit_col = f"cum_profit_{pair}"
@@ -405,16 +404,6 @@ def generate_profit_graph(
                 df_comb[profit_col] = 0
 
             fig = add_profit(fig, 3, df_comb, profit_col, f"Profit {pair}")
-=======
-    for pair in pairs:
-        profit_col = f'cum_profit_{pair}'
-        try:
-            df_comb = create_cum_profit(df_comb, trades[trades['pair'] == pair], profit_col,
-                                        timeframe)
-            fig = add_profit(fig, 3, df_comb, profit_col, f"Profit {pair}")
-        except ValueError:
-            pass
->>>>>>> b1e6662c1101166c814cab9843574a86f1746f34
 
     return fig
 

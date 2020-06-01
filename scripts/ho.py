@@ -76,7 +76,7 @@ class Main:
         else:
             exchange_overrides.append(f"{config_dir}/{f}.json")
 
-    roi_config = f"{config_dir}/roi/{timeframe}.json"
+    roi_config = f"{config_dir}/roi/{timeframe}.json" if not args.edg else f"{config_dir}/roi/off.json"
     config_files = [
         hyperopt_config,
         exchange_config,
@@ -1078,7 +1078,7 @@ class Main:
                 "hyperopt_list_step_metric": ["all"],
                 "hyperopt_list_sort_metric": ["all"],
                 "hyperopt_list_best": ["sum", "ratio"],
-                "hyperopt_list_pct_best": "std",
+                "hyperopt_list_pct_best": "mean",
                 "hyperopt_list_cutoff_best": "std",
                 # "hyperopt_list_step_metric": ["profit"],
                 # "hyperopt_list_best": [],

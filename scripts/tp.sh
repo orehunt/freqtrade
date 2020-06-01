@@ -1,6 +1,7 @@
 #!/bin/bash
 
-OPTS="$(realpath $(dirname $_))"
+[ -n "$BASH_SOURCE" ] && src=$BASH_SOURCE || src=$_
+OPTS="$(realpath $(dirname $src))"
 . ${OPTS}/opts.sh
 
 freqtrade test-pairlist -c $strategy \

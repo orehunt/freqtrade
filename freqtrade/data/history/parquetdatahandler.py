@@ -50,7 +50,7 @@ class ParquetDataHandler(IDataHandler):
         if len(data) > 0:
             data["month"] = data["date"].dt.year.astype(str) + data["date"].dt.month.astype(str)
             kwargs = {}
-            data.to_parquet(filename, compression=self._compression, partition_cols=["month"], **kwargs)
+            data.to_parquet(str(filename), compression=self._compression, partition_cols=["month"], **kwargs)
 
     def _ohlcv_load(
         self, pair: str, timeframe: str, timerange: Optional[TimeRange] = None,
@@ -132,7 +132,7 @@ class ParquetDataHandler(IDataHandler):
         df.columns = df.columns.astype(str)
         dt = pd.to_datetime(df['0'], unit='ms').dt
         df["day"] = dt.year.astype(str) + dt.month.astype(str) + dt.day.astype(str)
-        df.to_parquet(filename, compression=self._compression, partition_cols=["day"])
+        df.to_parquet(str(filename), compression=self._compression, partition_cols=["day"])
 
     def trades_append(self, pair: str, data: TradeList):
         """
