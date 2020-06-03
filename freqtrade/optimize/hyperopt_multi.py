@@ -158,6 +158,7 @@ class HyperoptMulti(HyperoptOut):
         # split workers to diversify acquisition
         self.n_explorers = self.n_jobs // 2
         self.n_exploiters = self.n_jobs // 2 + self.n_jobs % 2
+        self.max_convergence_ratio = self.config.get("hyperopt_max_convergence_ratio", 0.05)
 
     @staticmethod
     def setup_backend():
@@ -507,8 +508,9 @@ class HyperoptMulti(HyperoptOut):
             cls.opt_state(s_opt=opt)
             # Terminate after enough workers didn't receive a point to test
             trials_state.empty_strikes += 1
-            if trials_state.empty_strikes >= cls.trials_maxout:
+            if trials_state.empty_strikes >= cls.trials_max_empty:
                 trials_state.exit = True
+                logger.warn("Reached empty strikes.")
             return
         # run the backtest for each point to do (untested_Xi)
         trials = [cls.backtest_params(X) for X in untested_Xi]

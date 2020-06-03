@@ -9,6 +9,7 @@ export FREQTRADE_USERDIR=$userdir
 
 $main_exec edge \
            -c $strategy \
+           -c $hyperopt \
            -c $live \
            -c $exchange \
            -c $amounts \

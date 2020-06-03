@@ -91,6 +91,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         )
         # or every n jobs
         self.trials_maxout = self.config.get("hyperopt_trials_maxout", self.n_jobs)
+        self.trials_max_empty = self.config.get("hyperopt_trials_max_empty", self.trials_maxout)
 
         # configure multi mode, before backtesting to not spawn another exchange instance
         # inside the manager
@@ -462,15 +463,14 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
 
             a = point()
             # check for termination when getting duplicates
-            if a in evald:
-                opt.update_next()
-                a = point()
-                if a in evald:
-                    break
+            while a in evald:
+                backend.epochs.convergence += 1
                 if backend.trials.exit or self._maybe_terminate(
                     t, jobs, backend.trials, backend.epochs
                 ):
                     break
+                opt.update_next()
+                a = point()
             evald.add(a)
             HyperoptOut._print_progress(t, jobs, self.trials_maxout)
             t += 1
@@ -478,21 +478,25 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
 
     @staticmethod
     def parallel_objective_sig_handler(
-            t: int, params: list, epochs: Epochs, trials_state: TrialsState, cls_file: Path
+        t: int, params: list, epochs: Epochs, trials_state: TrialsState, cls_file: Path
     ):
         """
         To handle Ctrl-C the worker main function has to be wrapped into a try/catch;
         NOTE: The Manager process also needs to be configured to handle SIGINT (in the backend)
         """
         try:
-            return Hyperopt.parallel_objective(t, params, epochs, trials_state, cls_file)
+            return Hyperopt.parallel_objective(
+                t, params, epochs, trials_state, cls_file
+            )
         except KeyboardInterrupt:
             trials_state.exit = True
-            return Hyperopt.parallel_objective(t, params, epochs, trials_state, cls_file)
+            return Hyperopt.parallel_objective(
+                t, params, epochs, trials_state, cls_file
+            )
 
     @staticmethod
     def parallel_objective(
-            t: int, params, epochs: Epochs, trials_state: TrialsState, cls_file: Path
+        t: int, params, epochs: Epochs, trials_state: TrialsState, cls_file: Path
     ):
         """ Run one single test and eventually save trials """
         # flush trials if terminating
@@ -660,7 +664,8 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                         )
                     )
                 self.dimensions = [
-                    k.replace("params_dict.", "") for k in self.target_trials.filter(regex="^params_dict.").columns
+                    k.replace("params_dict.", "")
+                    for k in self.target_trials.filter(regex="^params_dict.").columns
                 ]
             elif len(self.trials) > 0 and not self.multi:
                 if self.random_state != self.trials.iloc[-1]["random_state"]:
@@ -881,7 +886,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         """ signal workers to terminate if conditions are met """
         done = trials_state.num_done
         total = trials_state.num_saved + done
-        if done < t - jobs and not self.void_output_backoff:
+        if not self.void_output_backoff and done < t - jobs:
             logger.warn(
                 "Some evaluated epochs were void, "
                 "check the loss function and the search space."
@@ -889,20 +894,22 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             self.void_output_backoff = True
         if not done:
             trials_state.empty_strikes += 1
-        if (
+        cvg_ratio = (epochs.convergence / total) if total > 0 else 0
+        if cvg_ratio > self.max_convergence_ratio:
+            logger.warn(f"Max convergence ratio reached ({cvg_ratio:.2f}), terminating.")
+            trials_state.exit = True
+        elif (
             not done
             and self.search_space_size < total + self.epochs_limit()
             and not self.cv
-        ) or trials_state.empty_strikes > self.trials_maxout:
+        ) or trials_state.empty_strikes > self.trials_max_empty:
             logger.error("Terminating Hyperopt because trials were empty.")
             trials_state.exit = True
-            return True
         # give up if no best since max epochs
-        if total >= self.epochs_limit():
+        elif total >= self.epochs_limit():
             logger.warn("Max epoch reached, terminating.")
             trials_state.exit = True
-            return True
-        return False
+        return trials_state.exit
 
     def main_loop(self, jobs_scheduler):
         """ main parallel loop """

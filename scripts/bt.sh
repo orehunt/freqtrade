@@ -22,6 +22,7 @@ pairlists=$dir/pairlists_static.json
 
 exec $main_exec \
      backtesting  -c $strategy \
+     -c $hyperopt \
      -c $live \
      -c $exchange \
      -c $amounts \

@@ -15,6 +15,8 @@
 -------------------------------------------------------------------------------
 - datahandler with parquet as backing store
 - config option to avoid plotting pairs profit
+- stop hyperopt when convergence ratio reached (num of same points asked over saved ones)
+- add cofig optionn to increase empty count
 
 ## Files that use amounts config 
 ```

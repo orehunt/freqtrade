@@ -3,8 +3,8 @@
     "hyperopt_list_filter": true,
     "hyperopt_list_keep_no_trades": false,
     "hyperopt_list_trail": true,
-    "strategy": "MultiMADp",
-    "hyperopt": "MultiMADHyperOpt",
+    "strategy": "",
+    "hyperopt": "",
     "hyperopt_trials_instance": "",
     "hyperopt_list_dedup": false,
     "hyperopt_list_best": [
@@ -38,6 +38,7 @@
     ],
     "hyperopt_trials_maxout": 60,
     "hyperopt_trials_timeout": 120,
+    "hyperopt_trials_max_empty": 100,
     "hyperopt_min_candles_ratio": 0.5,
     "print_colorized": true
 }

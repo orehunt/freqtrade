@@ -179,7 +179,7 @@ class HyperoptData:
         locked = False
         # this is needed because it is a string that can exceed
         # the size preset by pd, and in append mode it can't be changed
-        min_itemsize = {"results_explanation": 110}
+        min_itemsize = {"results_explanation": 120}
         if "roi" in trials.columns:  # roi stored as json
             min_itemsize["roi"] = 190
         # NOTE: make sure to only index the columns really used for indexing

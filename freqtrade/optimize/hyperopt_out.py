@@ -378,7 +378,8 @@ class HyperoptOut(HyperoptData):
         color = "green"
         opt_format = (
             (
-                "Avg: {Style.BRIGHT}{Fore.BLUE}{backend.epochs.avg_last_occurrence} "
+                "Avg: {Style.BRIGHT}{Fore.BLUE}{backend.epochs.current_best_epoch}"
+                "+{backend.epochs.avg_last_occurrence} "
                 "{Style.RESET_ALL}"
                 "Exp: {Style.BRIGHT}{Fore.CYAN}{backend.epochs.explo} "
                 "{Style.RESET_ALL}"

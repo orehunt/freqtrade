@@ -43,6 +43,7 @@ paths = {
     "spaces": "spaces.json",
     "best": "best.json",
     "limits": "limits.json",
+    "limits_score": "limits_scores.json",
     "weights": "weights.json",
     "params": "params.json",
     "run": "run.json",
@@ -76,7 +77,8 @@ class Main:
         else:
             exchange_overrides.append(f"{config_dir}/{f}.json")
 
-    roi_config = f"{config_dir}/roi/{timeframe}.json" if not args.edg else f"{config_dir}/roi/off.json"
+    roi_dir = "roi" if not args.edg else "roi_edge"
+    roi_config = f"{config_dir}/{roi_dir}/{timeframe}.json"
     config_files = [
         hyperopt_config,
         exchange_config,
@@ -717,7 +719,8 @@ class Main:
             for v in best["params_dict"]:
                 num = best["params_dict"][v]
                 best["params_dict"][v] = float(num)
-            self.write_json_file({se: best["params_dict"]}, paths["limits"])
+            self.write_json_file(best["params_dict"], paths["limits"])
+            self.write_json_file({se: best["loss"]}, paths["limits_score"])
             se += k
 
     def opt_weights(self):
