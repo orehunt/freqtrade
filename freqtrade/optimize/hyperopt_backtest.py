@@ -1,16 +1,19 @@
 import logging
 
 from joblib import load
+import arrow
+from typing import Dict, Any, List
 from numpy import append, repeat, nan
-from pandas import Timedelta, to_timedelta, concat, Series, DataFrame
+from pandas import Timedelta, to_timedelta, concat, Series, DataFrame, Index
 
 from freqtrade.data.history import get_timerange
 import freqtrade.optimize.hyperopt_backend as backend
 from freqtrade.resolvers import ExchangeResolver, StrategyResolver
 from freqtrade.configuration import remove_credentials
 from freqtrade.data.dataprovider import DataProvider
-from freqtrade.optimize.backtesting import Backtesting
+from freqtrade.optimize.backtesting import Backtesting, BacktestResult
 from freqtrade.exceptions import OperationalException
+from freqtrade.strategy.interface import SellType
 
 from enum import IntEnum
 
@@ -26,98 +29,22 @@ class Candle(IntEnum):
 
 
 class HyperoptBacktesting(Backtesting):
+
+    empty_results = DataFrame.from_records([], columns=BacktestResult._fields)
+
     def __init__(self, config):
-        if self.config.get("backtesting_engine") == "vectorized":
+        if config.get("backtesting_engine") == "vectorized":
             self.backtest = self.vectorized_backtest
+            self.beacktesting_engine = "vectorized"
+        super().__init__(config)
 
-    def set_params(self, params_dict: Dict[str, Any] = None):
-        if self.has_space("buy"):
-            self.backtesting.strategy.advise_buy = self.custom_hyperopt.buy_strategy_generator(
-                params_dict
-            )
-
-        if self.has_space("sell"):
-            self.backtesting.strategy.advise_sell = self.custom_hyperopt.sell_strategy_generator(
-                params_dict
-            )
-
-        if self.has_space("stoploss"):
-            self.backtesting.strategy.amounts["stoploss"] = params_dict["stoploss"]
-
-        if self.has_space("trailing"):
-            d = self.custom_hyperopt.generate_trailing_params(params_dict)
-            self.backtesting.strategy.amounts["trailing_stop"] = d["trailing_stop"]
-            self.backtesting.strategy.amounts["trailing_stop_positive"] = d[
-                "trailing_stop_positive"
-            ]
-            self.backtesting.strategy.amounts["trailing_stop_positive_offset"] = d[
-                "trailing_stop_positive_offset"
-            ]
-            self.backtesting.strategy.amounts["trailing_only_offset_is_reached"] = d[
-                "trailing_only_offset_is_reached"
-            ]
-
-    def backtest_params(
-        self,
-        raw_params: List[Any] = None,
-        iteration=None,
-        params_dict: Dict[str, Any] = None,
-    ) -> Dict:
-        if not params_dict:
-            if raw_params:
-                params_dict = self._get_params_dict(raw_params)
-            else:
-                logger.debug("Epoch evaluation didn't receive any parameters")
-                return {}
-        params_details = self._get_params_details(params_dict)
-
-        self.set_params(params_dict)
-
-        if backend.data:
-            processed = backend.data
-        else:
-            processed = load(self.data_pickle_file)
-            backend.data = processed
-
-        min_date, max_date = get_timerange(processed)
-
-        backtesting_results = self.backtesting.backtest(
-            processed=processed, start_date=min_date, end_date=max_date,
-        )
-        return self._get_result(
-            backtesting_results,
-            min_date,
-            max_date,
-            params_dict,
-            params_details,
-            processed,
-        )
-
-    def vectorized_backtest(
-        self,
-        processed: dict[str, DataFrame],
-        start_date: arrow.Arrow,
-        end_date: arrow.Arrow,
-    ) -> DataFrame:
-        """ NOTE: can't have default values as arguments since it is an overridden function """
-        if len(processed) > 1:
-            raise OperationalException(
-                "Can only use vectorized backtest with one pair."
-            )
-
-        pair = next(processed)
-        pair_df = processed[pair]
-        pair_df["bought_or_sold"] = pair_df["buy"].shift(-1) - pair_df["sell"].shift(-1)
-        pair_df.loc[bought_or_sold.values == 1, "bought_or_sold"] = Candle.BOUGHT
-        pair_df.loc[bought_or_sold.values == -1, "bought_or_sold"] = Candle.SOLD
-        # add stoploss
-        bought = pair_df["bought_or_sold"].values == Candle.BOUGHT
-        sold = pair_df["bought_or_sold"].values == Candle.SOLD
-        not_bought_or_sold = pair_df["bought_or_sold"].values == Candle.NOOP
-        stoploss_rate = pair_df.loc[bought, "open"] * (
-            1 - self.config["stoploss"] + 2 * self.fee
-        )
-        # calc the number of candles after a buy order has been reached using the index diff
+    def set_stoploss(
+        self, bought_index: Index, stoploss_rate: Series, pair_df: DataFrame
+    ) -> Series:
+        """ Update dataframe stoploss col from Series of index matching stoploss rates """
+        # reduce stoploss rate to bought_df index
+        stoploss_rate = stoploss_rate.loc[bought_index]
+        # calc the number of candles for which to apply stoploss using the index diff
         repeats = stoploss_rate.index.values[1:] - stoploss_rate.index.values[:-1]
         # repeats is one element short, append the last that will be repeated until pair_df max idx
         # add 1 to compensate for the shift of bought_or_sold
@@ -129,16 +56,10 @@ class HyperoptBacktesting(Backtesting):
             index=pair_df.iloc[pair_df.index[0] : stoploss_rate.index[0]].index,
         )
         pair_df["stoploss"] = concat([no_sigs, stoploss_arr]).values
-        # # stoploss is triggered when it is below or equal the low
-        stoploss_triggered = pair_df["low"].values <= pair_df["stoploss"].values
-        # set stoploss only on candles which are not sold, as those use the open_rate
-        pair_df.loc[
-            (bought & stoploss_triggered), "bought_or_sold"
-        ] = Candle.BOUGHT_AND_STOPLOSS
-        pair_df.loc[
-            (not_bought_or_sold & stoploss_triggered), "bought_or_sold"
-        ] = Candle.STOPLOSS
 
+    @staticmethod
+    def get_events(pair_df: DataFrame) -> DataFrame:
+        """ return the dataframe reduced to only actionable candles """
         # include rows where there is an action
         events = pair_df.loc[pair_df["bought_or_sold"].values != Candle.NOOP]
         bos = events["bought_or_sold"]
@@ -158,38 +79,158 @@ class HyperoptBacktesting(Backtesting):
             | (
                 # bought candles where the previous is not bought
                 (bos.values == Candle.BOUGHT)
-                & ~bos_s1_bought
+                # NOTE: every bought candle here is an actual event
+                # and all duplicate actions should already have been filtered out
+                # so it is not necessary to check prev candles to not be already bought
+                # & ~bos_s1_bought
             )
         ]
         # exclude the first sell and the last buy
-        if events["bought_or_sold"].iloc[0] == Candle.SOLD:
+        if events["bought_or_sold"].iloc[0] == Candle.SOLD or \
+           events["bought_or_sold"].iloc[0] == Candle.STOPLOSS:
             events = events.iloc[1:]
         if events["bought_or_sold"].iloc[-1] == Candle.BOUGHT:
             events = events.iloc[:-1]
-        # adjust stoploss of bought_and_stoploss if the buy happens on the previous candle
-        # and modify candle to stoploss
+        return events
+
+    def get_results(self, pair: str, events_buy: DataFrame, events_sell: DataFrame) -> DataFrame:
+        # choose sell rate depending on sell reason and set sell_reason
+        bos_sell = events_sell["bought_or_sold"]
+        events_sold = events_sell.loc[bos_sell.values == Candle.SOLD]
+        # add new columns with reindex to allow multi col assignments of new columns
+        events_sell = events_sell.reindex(
+            columns=[*events_sell.columns, "close_rate", "sell_reason"]
+        )
+        events_sell.loc[events_sold.index, ["close_rate", "sell_reason"]] = [
+            events_sold["open"].values,
+            SellType.SELL_SIGNAL,
+        ]
+        events_stoploss = events_sell.loc[
+            (bos_sell.values == Candle.STOPLOSS)
+            | (bos_sell.values == Candle.BOUGHT_AND_STOPLOSS)
+        ]
+        events_sell.loc[events_stoploss.index, ["close_rate", "sell_reason"]] = [
+            events_stoploss["stoploss"].values,
+            SellType.STOP_LOSS,
+        ]
+
+        open_rate = events_buy["open"].values
+        close_rate = events_sell["close_rate"].values
+        profits = 1 - open_rate / close_rate - 2 * self.fee
+        trade_duration = Series(events_sell["date"].values - events_buy["date"].values)
+        # replace trade duration of same candle trades with half the timeframe reduce to minutes
+        half_timeframe_td = Timedelta(self.config["timeframe"]) / 2
+        trade_duration.loc[trade_duration == Timedelta(0)] = half_timeframe_td
+
+        results = DataFrame(
+            {
+                "pair": pair,
+                "profit_percent": profits,
+                "profit_abs": profits * self.config["stake_amount"],
+                "open_time": events_buy["date"].values,
+                "close_time": events_sell["date"].values,
+                "open_index": events_buy.index.values,
+                "close_index": events_sell.index.values,
+                "trade_duration": trade_duration.dt.seconds / 60,
+                "open_at_end": False,
+                "open_rate": open_rate,
+                "close_rate": close_rate,
+                "sell_reason": events_sell["sell_reason"].values,
+            }
+        )
+        return results
+
+    def vectorized_backtest(
+        self,
+        processed: Dict[str, DataFrame],
+        start_date: arrow.Arrow,
+        end_date: arrow.Arrow,
+        **kwargs,
+    ) -> DataFrame:
+        """ NOTE: can't have default values as arguments since it is an overridden function
+        TODO: benchmark if rewriting without use of df masks for readability gives a worthwhile speedup
+        """
+        if len(processed) > 1:
+            raise OperationalException(
+                "Can only use vectorized backtest with one pair."
+            )
+
+        pair = next(iter(processed))
+        pair_df = processed[pair].copy()
+        metadata = {"pair": pair}
+        pair_df = self.strategy.advise_buy(pair_df, metadata)
+        pair_df = self.strategy.advise_sell(pair_df, metadata)
+        pair_df.fillna({"buy": 0, "sell": 0}, inplace=True)
+        # set bought candles
+        pair_df["bought_or_sold"] = pair_df["buy"].shift(-1) - pair_df["sell"].shift(-1)
+        pair_df.loc[
+            pair_df["bought_or_sold"].values == 1, "bought_or_sold"
+        ] = Candle.BOUGHT
+        # skip if no valid bought candles are found
+        bought_df = pair_df.loc[pair_df["bought_or_sold"].values == Candle.BOUGHT]
+        if len(bought_df) < 1:
+            return self.empty_results
+        # set sold candles
+        pair_df.loc[
+            pair_df["bought_or_sold"].values == -1, "bought_or_sold"
+        ] = Candle.SOLD
+        # add stoploss (it is a negative value) on all the bought candles
+        stoploss_rate = bought_df["open"] * (1 + self.config["stoploss"] + 2 * self.fee)
+        # 1; check for the case where stoploss is triggered on same bought candle
+        bought_and_stoploss = bought_df.loc[
+            bought_df["low"].values <= stoploss_rate
+        ].index
+        # switch those bought candle to bought and stoploss
+        pair_df.loc[bought_and_stoploss, "bought_or_sold"] = Candle.BOUGHT_AND_STOPLOSS
+        # update bought_df excluding bought and stoploss candles by index
+        bought_df.drop(bought_and_stoploss, inplace=True)
+        # 2; noop index adjacent bought candles if no position stacking, by subtracting indexes and matching against 1
+        # (we already removed candles where stoploss is triggered on the same candle)
+        bought_adjacent = (
+            bought_df.iloc[1:]
+            .loc[bought_df.index.values[1:] - bought_df.index.values[:-1] == 1]
+            .index
+        )
+        pair_df.loc[bought_adjacent, "bought_or_sold"] = Candle.NOOP
+        # update bought_df excluding adjacent bought candles by index
+        bought_df.drop(bought_adjacent)
+
+        # stoploss f bought candles will be repeated only for non adjacent boughts
+        # and not bought_and_stoploss candles
+        self.set_stoploss(bought_df.index, stoploss_rate, pair_df)
+
+        # stoploss is triggered when low is below or equal
+        stoploss_triggered = pair_df["low"].values <= pair_df["stoploss"].values
+        # set the potential stoplosses as if no sell signal was triggered
+        pair_df.loc[
+            (pair_df["bought_or_sold"].values != Candle.SOLD) & stoploss_triggered,
+            "bought_or_sold",
+        ] = Candle.STOPLOSS
+        # select all possible events
+        possible = pair_df.loc[pair_df["bought_or_sold"].values != Candle.NOOP]
+        # remove subsequent bought candles as neither stoploss nor signal triggered
+        # or bought_and_stoploss candles preceded by a bought candles, as that bought
+        # would still be active
+        p_bos = possible["bought_or_sold"]
+        stale_bought = possible.loc[
+            (p_bos.shift(1).values == Candle.BOUGHT) &
+            (
+                (p_bos.values == Candle.BOUGHT) |
+                (p_bos.values == Candle.BOUGHT_AND_STOPLOSS)
+            )
+        ].index
+        pair_df.loc[stale_bought, "bought_or_sold"] = Candle.NOOP
+        # after removing bought candles with no sell trigger reset stoploss rate
+        self.set_stoploss(
+            pair_df.loc[pair_df["bought_or_sold"].values == Candle.BOUGHT].index,
+            stoploss_rate,
+            pair_df,
+        )
+
+        # split buys and sell and calc results
+        events = self.get_events(pair_df)
         bos = events["bought_or_sold"]
         bos_s1 = bos.shift(1)
-        stoploss_after_bought = events.loc[
-            (
-                # (bos.values == Candle.BOUGHT_AND_STOPLOSS) &
-                # (bos.shift(1).values == Candle.BOUGHT),
-                bos.values - bos_s1.values
-                == 9  # 11 - 2
-            )
-        ]
-        bought_before_stoploss = events.loc[
-            (
-                # (bos.values == Candle.BOUGHT) &
-                # (bos.shift(-1).values == Candle.BOUGHT_AND_STOPLOSS),
-                bos.values - bos.shift(-1).values
-                == -9  # 2 - 11
-            )
-        ]
-        events.loc[stoploss_after_bought.index, ["bought_or_sold", "stoploss"]] = [
-            Candle.STOPLOSS,
-            events.loc[bought_before_stoploss.index, "stoploss"].values,
-        ]
         events_buy = events.loc[
             (bos_s1.values != Candle.BOUGHT)
             & (
@@ -203,56 +244,4 @@ class HyperoptBacktesting(Backtesting):
             | (bos.values == Candle.BOUGHT_AND_STOPLOSS)
         ]
         assert len(events_buy) == len(events_sell)
-        # choose sell rate depending on sell reason
-        bos_sell = events_sell["bought_or_sold"]
-        events_sold = events_sell.loc[bos_sell.values == Candle.SOLD]
-        events_sell.loc[events_sold.index, "sell_rate"] = events_sold["open"].values
-        events_stoploss = events_sell.loc[
-            (bos_sell.values == Candle.STOPLOSS)
-            | (bos_sell.values == Candle.BOUGHT_AND_STOPLOSS)
-        ]
-        events_sell.loc[events_stoploss.index, "close_rate"] = events_stoploss[
-            "stoploss"
-        ].values
-
-        open_rate = events_buy["open"].values
-        close_rate = events_sell["sell_rate"].values
-        profits = 1 - open_rate / close_rate - 2 * self.fee
-        trade_duration = Series(events_sell["date"].values - events_buy["date"].values)
-        # replace trade duration of same candle trades with half the timeframe
-        half_timeframe_td = Timedelta(self.config["timeframe"]) / 2
-        trade_duration.loc[trade_duration == pd.Timedelta(0)] = half_timeframe_td
-
-        results = DataFrame(
-            {
-                "pair": pair,
-                "profit_percent": profits,
-                "profit_abs": profits * self.config["stake_amount"],
-                "open_time": events_buy["date"].values,
-                "close_time": events_sell["date"].values,
-                "open_index": events_buy.index.values,
-                "close_index": events_sell.index.values,
-                "trade_duration": trade_duration.values,
-                "open_at_end": False,
-                "open_rate": open_rate,
-                "close_rate": close_rate,
-            }
-        )
-        # results["pair"] = pair
-        # results["profit_percent"] = profits
-        # results["profit_abs"] = profits * self.config["stake_amount"]
-        # results["open_time"] = events_buy["date"].values
-        # results["close_time"] = events_sell["date"].values
-        # results["open_index"] = events_buy.index.values
-        # results["close_index"] = events_sell.index.values
-        # results["trade_duration"] = trade_duration.values
-        # results["open_at_end"] = False
-        # results["open_rate"] = open_rate
-        # results["close_rate"] = close_rate
-
-        avg_profit = profits.mean() * 100.0
-        duration = trade_duration.dt.seconds.mean() / 60
-        profits_sum = profits.values.sum()
-        profit = profits_sum * 100.0
-        total_profit = profits_sum * self.config["stake_amount"]
-        trade_count = len(open_rate)
+        return self.get_results(pair, events_buy, events_sell)

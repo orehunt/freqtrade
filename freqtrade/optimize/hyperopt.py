@@ -39,6 +39,7 @@ from freqtrade.optimize.hyperopt_backend import TrialsState, Epochs
 from freqtrade.optimize.hyperopt_multi import HyperoptMulti
 from freqtrade.optimize.hyperopt_out import HyperoptOut
 from freqtrade.optimize.hyperopt_cv import HyperoptCV
+from freqtrade.optimize.hyperopt_backtest import HyperoptBacktesting
 from freqtrade.optimize.hyperopt_constants import (
     VOID_LOSS,
     CYCLE_LIE_STRATS,
@@ -91,13 +92,15 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         )
         # or every n jobs
         self.trials_maxout = self.config.get("hyperopt_trials_maxout", self.n_jobs)
-        self.trials_max_empty = self.config.get("hyperopt_trials_max_empty", self.trials_maxout)
+        self.trials_max_empty = self.config.get(
+            "hyperopt_trials_max_empty", self.trials_maxout
+        )
 
         # configure multi mode, before backtesting to not spawn another exchange instance
         # inside the manager
         self.setup_multi()
 
-        self.backtesting = Backtesting(self.config)
+        self.backtesting = HyperoptBacktesting(self.config)
 
         self.custom_hyperopt = HyperOptResolver.load_hyperopt(self.config)
         self.custom_hyperoptloss = HyperOptLossResolver.load_hyperoptloss(self.config)
@@ -223,25 +226,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
 
         return spaces
 
-    def backtest_params(
-        self,
-        raw_params: List[Any] = None,
-        iteration=None,
-        params_dict: Dict[str, Any] = None,
-    ) -> Dict:
-        if not params_dict:
-            if raw_params:
-                params_dict = self._get_params_dict(raw_params)
-            else:
-                logger.debug("Epoch evaluation didn't receive any parameters")
-                return {}
-        params_details = self._get_params_details(params_dict)
-
-        if self.has_space("roi"):
-            self.backtesting.strategy.amounts[
-                "roi"
-            ] = self.custom_hyperopt.generate_roi_table(params_dict)
-
+    def _set_params(self, params_dict: Dict[str, Any] = None):
         if self.has_space("buy"):
             self.backtesting.strategy.advise_buy = self.custom_hyperopt.buy_strategy_generator(
                 params_dict
@@ -268,6 +253,22 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                 "trailing_only_offset_is_reached"
             ]
 
+    def backtest_params(
+        self,
+        raw_params: List[Any] = None,
+        iteration=None,
+        params_dict: Dict[str, Any] = None,
+    ) -> Dict:
+        if not params_dict:
+            if raw_params:
+                params_dict = self._get_params_dict(raw_params)
+            else:
+                logger.debug("Epoch evaluation didn't receive any parameters")
+                return {}
+        params_details = self._get_params_details(params_dict)
+
+        self._set_params(params_dict)
+
         if backend.data:
             processed = backend.data
         else:
@@ -278,9 +279,9 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
 
         backtesting_results = self.backtesting.backtest(
             processed=processed,
-            stake_amount=self.config["stake_amount"],
             start_date=min_date,
             end_date=max_date,
+            stake_amount=self.config["stake_amount"],
             max_open_trades=self.max_open_trades,
             position_stacking=self.position_stacking,
         )
@@ -896,7 +897,9 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             trials_state.empty_strikes += 1
         cvg_ratio = (epochs.convergence / total) if total > 0 else 0
         if cvg_ratio > self.max_convergence_ratio:
-            logger.warn(f"Max convergence ratio reached ({cvg_ratio:.2f}), terminating.")
+            logger.warn(
+                f"Max convergence ratio reached ({cvg_ratio:.2f}), terminating."
+            )
             trials_state.exit = True
         elif (
             not done
