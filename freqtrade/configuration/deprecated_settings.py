@@ -72,10 +72,9 @@ def process_temporary_deprecated_settings(config: Dict[str, Any]) -> None:
         "ignore_roi_if_buy_signal",
     )
 
-    if config.get("edge", {}).get(
-        "enabled", False
-    ) and "capital_available_percentage" in config.get("edge", {}):
-        logger.warning(
+    if (config.get('edge', {}).get('enabled', False)
+       and 'capital_available_percentage' in config.get('edge', {})):
+        raise OperationalException(
             "DEPRECATED: "
             "Using 'edge.capital_available_percentage' has been deprecated in favor of "
             "'tradable_balance_ratio'. Please migrate your configuration to "

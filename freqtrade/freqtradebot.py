@@ -733,7 +733,9 @@ class FreqtradeBot:
                 logger.warning("Sell Price at location from orderbook could not be determined.")
                 raise PricingError from e
         else:
-            rate = self.exchange.fetch_ticker(pair)[ask_strategy["price_side"]]
+            rate = self.exchange.fetch_ticker(pair)[ask_strategy['price_side']]
+        if rate is None:
+            raise PricingError(f"Sell-Rate for {pair} was empty.")
         self._sell_rate_cache[pair] = rate
         return rate
 
@@ -764,11 +766,10 @@ class FreqtradeBot:
                 )
 
         if config_ask_strategy.get('use_order_book', False):
-            # logger.debug('Order book %s',orderBook)
             order_book_min = config_ask_strategy.get('order_book_min', 1)
             order_book_max = config_ask_strategy.get('order_book_max', 1)
-            logger.info(f'Using order book between {order_book_min} and {order_book_max} '
-                        f'for selling {trade.pair}...')
+            logger.debug(f'Using order book between {order_book_min} and {order_book_max} '
+                         f'for selling {trade.pair}...')
 
             order_book = self._order_book_gen(trade.pair, f"{config_ask_strategy['price_side']}s",
                                               order_book_min=order_book_min,
@@ -783,6 +784,9 @@ class FreqtradeBot:
                     raise PricingError from e
                 logger.debug(f"  order book {config_ask_strategy['price_side']} top {i}: "
                              f"{sell_rate:0.8f}")
+                # Assign sell-rate to cache - otherwise sell-rate is never updated in the cache,
+                # resulting in outdated RPC messages
+                self._sell_rate_cache[trade.pair] = sell_rate
 
                 if self._check_and_execute_sell(trade, sell_rate, buy, sell):
                     return True

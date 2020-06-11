@@ -1,6 +1,6 @@
 # Stop Loss
 
-The `stoploss` configuration parameter is loss in percentage that should trigger a sale.
+The `stoploss` configuration parameter is loss as ratio that should trigger a sale.
 For example, value `-0.10` will cause immediate sell if the profit dips below -10% for a given trade. This parameter is optional.
 
 Most of the strategy files already include the optimal `stoploss` value.
@@ -101,7 +101,7 @@ Simplified example:
 
 ## Changing stoploss on open trades
 
-A stoploss on an open trade can be changed by changing the value in the configuration or strategy and use the `/reload_conf` command (alternatively, completely stopping and restarting the bot also works).
+A stoploss on an open trade can be changed by changing the value in the configuration or strategy and use the `/reload_config` command (alternatively, completely stopping and restarting the bot also works).
 
 The new stoploss value will be applied to open trades (and corresponding log-messages will be generated).
 

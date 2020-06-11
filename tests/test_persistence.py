@@ -298,7 +298,7 @@ def test_calc_profit(limit_buy_order, limit_sell_order, fee):
         fee_close=fee.return_value,
         exchange='bittrex',
     )
-    trade.open_order_id = 'profit_percent'
+    trade.open_order_id = 'something'
     trade.update(limit_buy_order)  # Buy @ 0.00001099
 
     # Custom closing rate and regular fee rate
@@ -332,7 +332,7 @@ def test_calc_profit_ratio(limit_buy_order, limit_sell_order, fee):
         fee_close=fee.return_value,
         exchange='bittrex',
     )
-    trade.open_order_id = 'profit_percent'
+    trade.open_order_id = 'something'
     trade.update(limit_buy_order)  # Buy @ 0.00001099
 
     # Get percent of profit with a custom rate (Higher than open rate)
@@ -762,12 +762,16 @@ def test_to_json(default_conf, fee):
                       'sell_reason': None,
                       'sell_order_status': None,
                       'stop_loss': None,
+                      'stop_loss_abs': None,
+                      'stop_loss_ratio': None,
                       'stop_loss_pct': None,
                       'stoploss_order_id': None,
                       'stoploss_last_update': None,
                       'stoploss_last_update_timestamp': None,
                       'initial_stop_loss': None,
+                      'initial_stop_loss_abs': None,
                       'initial_stop_loss_pct': None,
+                      'initial_stop_loss_ratio': None,
                       'min_rate': None,
                       'max_rate': None,
                       'strategy': None,
@@ -804,12 +808,16 @@ def test_to_json(default_conf, fee):
                       'amount': 100.0,
                       'stake_amount': 0.001,
                       'stop_loss': None,
+                      'stop_loss_abs': None,
                       'stop_loss_pct': None,
+                      'stop_loss_ratio': None,
                       'stoploss_order_id': None,
                       'stoploss_last_update': None,
                       'stoploss_last_update_timestamp': None,
                       'initial_stop_loss': None,
+                      'initial_stop_loss_abs': None,
                       'initial_stop_loss_pct': None,
+                      'initial_stop_loss_ratio': None,
                       'close_profit': None,
                       'close_profit_abs': None,
                       'close_rate_requested': None,

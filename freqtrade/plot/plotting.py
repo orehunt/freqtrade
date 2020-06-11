@@ -159,11 +159,9 @@ def plot_trades(fig, trades: pd.DataFrame) -> make_subplots:
     # Trades can be empty
     if trades is not None and len(trades) > 0:
         # Create description for sell summarizing the trade
-        trades["desc"] = trades.apply(
-            lambda row: f"{round(row['profitperc'] * 100, 1)}%, "
-            f"{row['sell_reason']}, {row['duration']} min",
-            axis=1,
-        )
+        trades['desc'] = trades.apply(lambda row: f"{round(row['profit_percent'] * 100, 1)}%, "
+                                                  f"{row['sell_reason']}, {row['duration']} min",
+                                                  axis=1)
         trade_buys = go.Scatter(
             x=trades["open_time"],
             y=trades["open_rate"],
@@ -174,20 +172,30 @@ def plot_trades(fig, trades: pd.DataFrame) -> make_subplots:
         )
 
         trade_sells = go.Scatter(
-            x=trades.loc[trades["profitperc"] > 0, "close_time"],
-            y=trades.loc[trades["profitperc"] > 0, "close_rate"],
-            text=trades.loc[trades["profitperc"] > 0, "desc"],
-            mode="markers",
-            name="Sell - Profit",
-            marker=dict(symbol="square-open", size=11, line=dict(width=2), color="green"),
+            x=trades.loc[trades['profit_percent'] > 0, "close_time"],
+            y=trades.loc[trades['profit_percent'] > 0, "close_rate"],
+            text=trades.loc[trades['profit_percent'] > 0, "desc"],
+            mode='markers',
+            name='Sell - Profit',
+            marker=dict(
+                symbol='square-open',
+                size=11,
+                line=dict(width=2),
+                color='green'
+            )
         )
         trade_sells_loss = go.Scatter(
-            x=trades.loc[trades["profitperc"] <= 0, "close_time"],
-            y=trades.loc[trades["profitperc"] <= 0, "close_rate"],
-            text=trades.loc[trades["profitperc"] <= 0, "desc"],
-            mode="markers",
-            name="Sell - Loss",
-            marker=dict(symbol="square-open", size=11, line=dict(width=2), color="red"),
+            x=trades.loc[trades['profit_percent'] <= 0, "close_time"],
+            y=trades.loc[trades['profit_percent'] <= 0, "close_rate"],
+            text=trades.loc[trades['profit_percent'] <= 0, "desc"],
+            mode='markers',
+            name='Sell - Loss',
+            marker=dict(
+                symbol='square-open',
+                size=11,
+                line=dict(width=2),
+                color='red'
+            )
         )
         fig.add_trace(trade_buys, 1, 1)
         fig.add_trace(trade_sells, 1, 1)

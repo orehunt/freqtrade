@@ -17,7 +17,9 @@ from freqtrade.data.converter import trim_dataframe
 from freqtrade.data.dataprovider import DataProvider
 from freqtrade.exceptions import OperationalException
 from freqtrade.exchange import timeframe_to_minutes, timeframe_to_seconds
-from freqtrade.optimize.optimize_reports import show_backtest_results, store_backtest_result
+from freqtrade.optimize.optimize_reports import (generate_backtest_stats,
+                                                 show_backtest_results,
+                                                 store_backtest_result)
 from freqtrade.pairlist.pairlistmanager import PairListManager
 from freqtrade.persistence import Trade
 from freqtrade.resolvers import ExchangeResolver, StrategyResolver
@@ -455,4 +457,5 @@ class Backtesting:
         if self.config.get("export", False):
             store_backtest_result(self.config["exportfilename"], all_results)
         # Show backtest results
-        show_backtest_results(self.config, data, all_results)
+        stats = generate_backtest_stats(self.config, data, all_results)
+        show_backtest_results(self.config, stats)

@@ -208,15 +208,11 @@ def trades_to_ohlcv(trades: List, timeframe: str) -> DataFrame:
                                      utc=True,)
     df = df.set_index('timestamp')
 
-    if trades:
-        df_new = df["price"].resample(f"{timeframe_minutes}min").ohlc()
-        df_new["volume"] = df["amount"].resample(f"{timeframe_minutes}min").sum()
-        df_new["date"] = df_new.index
-        # Drop 0 volume rows
-        df_new = df_new.dropna()
-    else:
-        df_new = DataFrame({}, columns=DEFAULT_DATAFRAME_COLUMNS)
-        df_new["date"] = df.resample((f"{timeframe_minutes}min")).asfreq().index
+    df_new = df['price'].resample(f'{timeframe_minutes}min').ohlc()
+    df_new['volume'] = df['amount'].resample(f'{timeframe_minutes}min').sum()
+    df_new['date'] = df_new.index
+    # Drop 0 volume rows
+    df_new = df_new.dropna()
     return df_new.loc[:, DEFAULT_DATAFRAME_COLUMNS]
 
 
