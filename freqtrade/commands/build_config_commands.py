@@ -76,8 +76,8 @@ def ask_user_config() -> Dict[str, Any]:
         },
         {
             "type": "text",
-            "name": "ticker_interval",
-            "message": "Please insert your timeframe (ticker interval):",
+            "name": "timeframe",
+            "message": "Please insert your desired timeframe (e.g. 5m):",
             "default": "5m",
         },
         {

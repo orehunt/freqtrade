@@ -55,9 +55,8 @@ class DataProvider:
                      Use False only for read-only operations (where the dataframe is not modified)
         """
         if self.runmode in (RunMode.DRY_RUN, RunMode.LIVE):
-            return self._exchange.klines(
-                (pair, timeframe or self._config["ticker_interval"]), copy=copy
-            )
+            return self._exchange.klines((pair, timeframe or self._config['timeframe']),
+                                         copy=copy)
         else:
             return DataFrame()
 
@@ -67,11 +66,10 @@ class DataProvider:
         :param pair: pair to get the data for
         :param timeframe: timeframe to get data for
         """
-        return load_pair_history(
-            pair=pair,
-            timeframe=timeframe or self._config["ticker_interval"],
-            datadir=self._config["datadir"],
-        )
+        return load_pair_history(pair=pair,
+                                 timeframe=timeframe or self._config['timeframe'],
+                                 datadir=self._config['datadir']
+                                 )
 
     def get_pair_dataframe(self, pair: str, timeframe: str = None) -> DataFrame:
         """

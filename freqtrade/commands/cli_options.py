@@ -100,8 +100,13 @@ AVAILABLE_CLI_OPTIONS = {
         action="store_true",
     ),
     # Optimize common
-    "ticker_interval": Arg(
-        "-i", "--ticker-interval", help="Specify ticker interval (`1m`, `5m`, `30m`, `1h`, `1d`)."
+    "timeframe": Arg(
+        '-i', '--timeframe', '--ticker-interval',
+        help='Specify ticker interval (`1m`, `5m`, `30m`, `1h`, `1d`).',
+    ),
+    "timerange": Arg(
+        '--timerange',
+        help='Specify what timerange of data to use.',
     ),
     "timerange": Arg("--timerange", help="Specify what timerange of data to use."),
     "max_open_trades": Arg(

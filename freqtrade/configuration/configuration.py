@@ -209,18 +209,12 @@ class Configuration:
     def _process_optimize_options(self, config: Dict[str, Any]) -> None:
 
         # This will override the strategy configuration
-        self._args_to_config(
-            config,
-            argname="ticker_interval",
-            logstring="Parameter -i/--ticker-interval detected ... "
-            "Using ticker_interval: {} ...",
-        )
+        self._args_to_config(config, argname='timeframe',
+                             logstring='Parameter -i/--timeframe detected ... '
+                             'Using timeframe: {} ...')
 
-        self._args_to_config(
-            config,
-            argname="position_stacking",
-            logstring="Parameter --enable-position-stacking detected ...",
-        )
+        self._args_to_config(config, argname='position_stacking',
+                             logstring='Parameter --enable-position-stacking detected ...')
 
         # Setting max_open_trades to infinite if -1
         if config.get("max_open_trades") == -1:
@@ -262,11 +256,8 @@ class Configuration:
             logfun=len,
         )
 
-        self._args_to_config(
-            config,
-            argname="ticker_interval",
-            logstring="Overriding ticker interval with Command line argument",
-        )
+        self._args_to_config(config, argname='timeframe',
+                             logstring='Overriding timeframe with Command line argument')
 
         self._args_to_config(
             config, argname="export", logstring="Parameter --export detected: {} ..."

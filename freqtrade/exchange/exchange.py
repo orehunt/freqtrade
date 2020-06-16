@@ -81,10 +81,10 @@ class Exchange:
         # Holds all open sell orders for dry_run
         self._dry_run_open_orders: Dict[str, Any] = {}
 
-        if config["dry_run"]:
-            logger.info("Instance is running with dry_run enabled")
-
-        exchange_config = config["exchange"]
+        if config['dry_run']:
+            logger.info('Instance is running with dry_run enabled')
+        logger.info(f"Using CCXT {ccxt.__version__}")
+        exchange_config = config['exchange']
 
         # Deep merge ft_has with default ft_has options
         self._ft_has = deep_merge_dicts(self._ft_has, deepcopy(self._ft_has_default))
@@ -119,7 +119,7 @@ class Exchange:
 
         if validate:
             # Check if timeframe is available
-            self.validate_timeframes(config.get("ticker_interval"))
+            self.validate_timeframes(config.get('timeframe'))
 
             # Initial markets load
             self._load_markets()
@@ -202,7 +202,7 @@ class Exchange:
     def markets(self) -> Dict:
         """exchange ccxt markets"""
         if not self._api.markets:
-            logger.warning("Markets were not loaded. Loading them now..")
+            logger.info("Markets were not loaded. Loading them now..")
             self._load_markets()
         return self._api.markets
 
@@ -294,8 +294,8 @@ class Exchange:
         except ccxt.BaseError as e:
             logger.warning("Unable to initialize markets. Reason: %s", e)
 
-    def _reload_markets(self) -> None:
-        """Reload markets both sync and async, if refresh interval has passed"""
+    def reload_markets(self) -> None:
+        """Reload markets both sync and async if refresh interval has passed """
         # Check whether markets have to be reloaded
         if (self._last_markets_refresh > 0) and (
             self._last_markets_refresh + self.markets_refresh_interval > arrow.utcnow().timestamp
@@ -1014,6 +1014,9 @@ class Exchange:
         except ccxt.BaseError as e:
             raise OperationalException(e) from e
 
+    # Assign method to get_stoploss_order to allow easy overriding in other classes
+    cancel_stoploss_order = cancel_order
+
     def is_cancel_order_result_suitable(self, corder) -> bool:
         if not isinstance(corder, dict):
             return False
@@ -1068,6 +1071,9 @@ class Exchange:
             ) from e
         except ccxt.BaseError as e:
             raise OperationalException(e) from e
+
+    # Assign method to get_stoploss_order to allow easy overriding in other classes
+    get_stoploss_order = get_order
 
     @retrier
     def fetch_l2_order_book(self, pair: str, limit: int = 100) -> dict:

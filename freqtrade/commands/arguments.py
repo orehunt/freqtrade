@@ -15,7 +15,7 @@ ARGS_STRATEGY = ["strategy", "strategy_path"]
 
 ARGS_TRADE = ["db_url", "sd_notify", "dry_run"]
 
-ARGS_COMMON_OPTIMIZE = ["ticker_interval", "timerange", "max_open_trades", "stake_amount", "fee"]
+ARGS_COMMON_OPTIMIZE = ["timeframe", "timerange", "max_open_trades", "stake_amount", "fee"]
 
 ARGS_BACKTEST = ARGS_COMMON_OPTIMIZE + [
     "position_stacking",
@@ -80,41 +80,15 @@ ARGS_BUILD_HYPEROPT = ["user_data_dir", "hyperopt", "template"]
 ARGS_CONVERT_DATA = ["pairs", "format_from", "format_to", "erase"]
 ARGS_CONVERT_DATA_OHLCV = ARGS_CONVERT_DATA + ["timeframes"]
 
-ARGS_DOWNLOAD_DATA = [
-    "pairs",
-    "pairs_file",
-    "days",
-    "download_trades",
-    "exchange",
-    "timeframes",
-    "erase",
-    "dataformat_ohlcv",
-    "dataformat_trades",
-]
+ARGS_DOWNLOAD_DATA = ["pairs", "pairs_file", "days", "download_trades", "exchange",
+                      "timeframes", "erase", "dataformat_ohlcv", "dataformat_trades"]
 
-ARGS_PLOT_DATAFRAME = [
-    "pairs",
-    "indicators1",
-    "indicators2",
-    "plot_limit",
-    "db_url",
-    "trade_source",
-    "export",
-    "exportfilename",
-    "timerange",
-    "ticker_interval",
-    "no_trades",
-]
+ARGS_PLOT_DATAFRAME = ["pairs", "indicators1", "indicators2", "plot_limit",
+                       "db_url", "trade_source", "export", "exportfilename",
+                       "timerange", "timeframe", "no_trades"]
 
-ARGS_PLOT_PROFIT = [
-    "pairs",
-    "timerange",
-    "export",
-    "exportfilename",
-    "db_url",
-    "trade_source",
-    "ticker_interval",
-]
+ARGS_PLOT_PROFIT = ["pairs", "timerange", "export", "exportfilename", "db_url",
+                    "trade_source", "timeframe"]
 
 ARGS_SHOW_TRADES = ["db_url", "trade_ids", "print_json"]
 
@@ -402,7 +376,7 @@ class Arguments:
         # Add list-timeframes subcommand
         list_timeframes_cmd = subparsers.add_parser(
             'list-timeframes',
-            help='Print available ticker intervals (timeframes) for the exchange.',
+            help='Print available timeframes for the exchange.',
             parents=[_common_parser],
         )
         list_timeframes_cmd.set_defaults(func=start_list_timeframes)

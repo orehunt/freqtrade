@@ -25,8 +25,7 @@ def start_test_pairlist(args: Dict[str, Any]) -> None:
         quote_currencies = [config.get("stake_currency")]
     results = {}
     for curr in quote_currencies:
-        config["stake_currency"] = curr
-        # Do not use ticker_interval set in the config
+        config['stake_currency'] = curr
         pairlists = PairListManager(exchange, config)
         pairlists.refresh_pairlist()
         results[curr] = pairlists.whitelist
