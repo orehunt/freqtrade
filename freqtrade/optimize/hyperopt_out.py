@@ -4,7 +4,7 @@ import logging
 import sys
 import json
 import io
-from pprint import pprint
+from pprint import pformat
 from typing import Any, Dict, Optional
 from pathlib import Path
 
@@ -48,7 +48,11 @@ class HyperoptOut(HyperoptData):
 
     @staticmethod
     def print_epoch_details(
-        trial, total_epochs: int, print_json: bool, no_header: bool = False, header_str: str = None
+        trial,
+        total_epochs: int,
+        print_json: bool,
+        no_header: bool = False,
+        header_str: str = None,
     ) -> None:
         """
         Display details of the hyperopt result
@@ -60,7 +64,9 @@ class HyperoptOut(HyperoptData):
             header_str = "Best result"
 
         if not no_header:
-            explanation_str = HyperoptOut._format_explanation_string(trial, total_epochs)
+            explanation_str = HyperoptOut._format_explanation_string(
+                trial, total_epochs
+            )
             print(f"\n{header_str}:\n\n{explanation_str}\n")
 
         if print_json:
@@ -71,7 +77,9 @@ class HyperoptOut(HyperoptData):
                 HyperoptData._params_update_for_json(result_dict, params, s)
             print(
                 rapidjson.dumps(
-                    result_dict, default=str, number_mode=(rapidjson.NM_NATIVE | rapidjson.NM_NAN)
+                    result_dict,
+                    default=str,
+                    number_mode=(rapidjson.NM_NATIVE | rapidjson.NM_NAN),
                 )
             )
 
@@ -90,15 +98,18 @@ class HyperoptOut(HyperoptData):
     def reset_line():
         print(end="\r")
 
-    @staticmethod
     def _params_pretty_print(params, space: str, header: str) -> None:
         if space in params:
             space_params = HyperoptOut._space_params(params, space, 5)
+            print(f"\n    # {header}")
             if space == "stoploss":
-                print(header, space_params.get("stoploss"))
+                print("    stoploss =", space_params.get("stoploss"))
             else:
-                print(header)
-                pprint(space_params, indent=4)
+                params_result = pformat(space_params, indent=4).replace("}", "\n}")
+                params_result = params_result.replace("{", "{\n ").replace(
+                    "\n", "\n    "
+                )
+                print(f"    {space}_params = {params_result}")
 
     @staticmethod
     def _space_params(params, space: str, r: int = None) -> Dict:
@@ -146,7 +157,11 @@ class HyperoptOut(HyperoptData):
     @staticmethod
     def _format_explanation_string(results, total_epochs) -> str:
         return (
-            ("*" if "is_initial_point" in results and results["is_initial_point"] else " ")
+            (
+                "*"
+                if "is_initial_point" in results and results["is_initial_point"]
+                else " "
+            )
             + f"{results['current_epoch']:5d}/{total_epochs}: "
             + f"{results['results_explanation']} "
             + f"Objective: {results['loss']:.5f}"
@@ -206,16 +221,24 @@ class HyperoptOut(HyperoptData):
         trials["Trades"] = trials["Trades"].astype(str)
 
         trials["Epoch"] = trials["Epoch"].apply(
-            lambda x: "{}/{}".format(str(x).rjust(len(str(total_epochs)), " "), total_epochs)
+            lambda x: "{}/{}".format(
+                str(x).rjust(len(str(total_epochs)), " "), total_epochs
+            )
         )
         trials["Avg profit"] = trials["Avg profit"].apply(
-            lambda x: "{:,.2f}%".format(x).rjust(7, " ") if not isna(x) else "--".rjust(7, " ")
+            lambda x: "{:,.2f}%".format(x).rjust(7, " ")
+            if not isna(x)
+            else "--".rjust(7, " ")
         )
         trials["Avg duration"] = trials["Avg duration"].apply(
-            lambda x: "{:,.1f} m".format(x).rjust(7, " ") if not isna(x) else "--".rjust(7, " ")
+            lambda x: "{:,.1f} m".format(x).rjust(7, " ")
+            if not isna(x)
+            else "--".rjust(7, " ")
         )
         trials["Objective"] = trials["Objective"].apply(
-            lambda x: "{:,.5f}".format(x).rjust(8, " ") if x != 100000 else "N/A".rjust(8, " ")
+            lambda x: "{:,.5f}".format(x).rjust(8, " ")
+            if x != 100000
+            else "N/A".rjust(8, " ")
         )
 
         trials["Profit"] = trials.apply(
@@ -248,24 +271,37 @@ class HyperoptOut(HyperoptData):
         trials = trials.drop(columns=["is_initial_point", "is_best", "is_profit"])
         if remove_header > 0:
             table = tabulate.tabulate(
-                trials.to_dict(orient="list"), tablefmt="orgtbl", headers="keys", stralign="right"
+                trials.to_dict(orient="list"),
+                tablefmt="orgtbl",
+                headers="keys",
+                stralign="right",
             )
 
             table = table.split("\n", remove_header)[remove_header]
         elif remove_header < 0:
             table = tabulate.tabulate(
-                trials.to_dict(orient="list"), tablefmt="psql", headers="keys", stralign="right"
+                trials.to_dict(orient="list"),
+                tablefmt="psql",
+                headers="keys",
+                stralign="right",
             )
             table = "\n".join(table.split("\n")[0:remove_header])
         else:
             table = tabulate.tabulate(
-                trials.to_dict(orient="list"), tablefmt="psql", headers="keys", stralign="right"
+                trials.to_dict(orient="list"),
+                tablefmt="psql",
+                headers="keys",
+                stralign="right",
             )
         return table
 
     @staticmethod
     def export_csv_file(
-        config: dict, results: list, total_epochs: int, highlight_best: bool, csv_file: str
+        config: dict,
+        results: list,
+        total_epochs: int,
+        highlight_best: bool,
+        csv_file: str,
     ) -> None:
         """
         Log result to csv-file
@@ -345,7 +381,9 @@ class HyperoptOut(HyperoptData):
         logger.info(f"CSV file created: {csv_file}")
 
     @staticmethod
-    def _format_results_explanation_string(stake_cur: str, results_metrics: Dict) -> str:
+    def _format_results_explanation_string(
+        stake_cur: str, results_metrics: Dict
+    ) -> str:
         """
         Return the formatted results explanation in a string
         """
@@ -425,11 +463,13 @@ class HyperoptOut(HyperoptData):
             counter_format=counter_format,
             color=color,
             additional_fields={"Style": Style, "Fore": Fore, "backend": backend},
-            min_delta=0.5
+            min_delta=0.5,
         )
 
     @staticmethod
     def _print_progress(t: int, jobs: int, maxout: int, finish=False):
-        backend.pbar["total"].update(backend.trials.num_saved - backend.pbar["total"].count)
+        backend.pbar["total"].update(
+            backend.trials.num_saved - backend.pbar["total"].count
+        )
         if finish:
             backend.pbar["total"].close()
