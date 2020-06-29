@@ -60,9 +60,37 @@ class HyperoptBacktesting(Backtesting):
     td_zero = Timedelta(0)
     td_half_timeframe: Timedelta
 
+    def wrap_backtest(
+        self,
+        processed: Dict[str, DataFrame],
+        start_date: arrow.Arrow,
+        end_date: arrow.Arrow,
+        **kwargs,
+    ) -> DataFrame:
+        # results = self.backtest_stock(
+        #     processed, self.config["stake_amount"], start_date, end_date
+        # )
+        results = self.vectorized_backtest(processed, start_date, end_date)
+        import pickle
+
+        with open("/tmp/backtest.pkl", "rb+") as fp:
+            # pickle.dump(results, fp)
+            saved_results = pickle.load(fp)
+        # print(results.iloc[-50:])
+        to_print = []
+        for i in results["open_index"].values:
+            if i not in saved_results["open_index"].values:
+                to_print.append(i)
+        # print(results.iloc[:10])
+        # print(saved_results.iloc[:10])
+        print(to_print)
+        return results.iloc[:-1]
+
     def __init__(self, config):
         if config.get("backtesting_engine") == "vectorized":
-            self.backtest = self.vectorized_backtest
+            self.backtest_stock = self.backtest
+            self.backtest = self.wrap_backtest
+            # self.backtest = self.vectorized_backtest
             self.beacktesting_engine = "vectorized"
             self.td_half_timeframe = (
                 Timedelta(config.get("timeframe", config["timeframe"])) / 2
@@ -79,21 +107,28 @@ class HyperoptBacktesting(Backtesting):
         ]
         # add new columns with reindex to allow multi col assignments of new columns
         events_sell = events_sell.reindex(
-            columns=[*events_sell.columns, "close_rate", "sell_reason"], copy=False
+            columns=[*events_sell.columns, "close_rate", "sell_reason", "index"],
+            copy=False,
         )
-        events_sell.loc[events_sold.index, ["close_rate", "sell_reason"]] = [
+        events_sell.loc[events_sold.index, ["close_rate", "sell_reason", "index"]] = [
             events_sold["open"].values,
             SellType.SELL_SIGNAL,
+            events_sold.index.values,
         ]
         events_stoploss = events_sell.loc[events_sell["stoploss_idx"].notna().values]
-        events_sell.loc[events_stoploss.index, ["close_rate", "sell_reason"]] = [
+        events_sell.loc[
+            events_stoploss.index, ["close_rate", "sell_reason", "index"]
+        ] = [
             events_stoploss["stoploss_rate"].values,
             SellType.STOP_LOSS,
+            events_stoploss["stoploss_idx"].values,
         ]
 
         open_rate = events_buy["open"].values
         close_rate = events_sell["close_rate"].values
-        profits = 1 - open_rate / close_rate - 2 * self.fee
+        profits = (close_rate - close_rate * self.fee) / (
+            open_rate + open_rate * self.fee
+        ) - 1
         trade_duration = Series(events_sell["date"].values - events_buy["date"].values)
         # replace trade duration of same candle trades with half the timeframe reduce to minutes
         trade_duration.loc[trade_duration == self.td_zero] = self.td_half_timeframe
@@ -102,11 +137,11 @@ class HyperoptBacktesting(Backtesting):
             {
                 "pair": pair,
                 "profit_percent": profits,
-                "profit_abs": profits * self.config["stake_amount"],
+                "profit_abs": self.config["stake_amount"] * profits,
                 "open_time": events_buy["date"].values,
                 "close_time": events_sell["date"].values,
                 "open_index": events_buy.index.values,
-                "close_index": events_sell.index.values,
+                "close_index": events_sell["index"].values,
                 "trade_duration": trade_duration.dt.seconds / 60,
                 "open_at_end": False,
                 "open_rate": open_rate,
@@ -208,7 +243,13 @@ class HyperoptBacktesting(Backtesting):
         index of each bought
         """
         pair_df = pair_df.reindex(
-            copy=False, columns=[*pair_df.columns, "stoploss_idx", "stoploss_rate", "last_stoploss"],
+            copy=False,
+            columns=[
+                *pair_df.columns,
+                "stoploss_idx",
+                "stoploss_rate",
+                "last_stoploss",
+            ],
         )
         bts_df = self.boughts_to_sold(pair_df).reset_index()
         # align sold to bought
@@ -229,13 +270,17 @@ class HyperoptBacktesting(Backtesting):
         bought = bts_df.loc[bts_df["bought_or_sold"].values == Candle.BOUGHT]
         # get the index ranges of each bought->sold spans
         bought_ranges = bought["next_sold_idx"].values - bought["index"].values
-        # bts_df = self._pd_select_triggered_stoploss(
-        #     pair_df, bought, bought_ranges, bts_df
-        # )
-        bts_df = self._pd_2_select_triggered_stoploss(
-            pair_df, bought, bought_ranges, sold, bts_df
-        )
-
+        # could also just use the sum...
+        if bought_ranges.mean() < 100:
+            # intervals are short compute everything in one round
+            bts_df = self._pd_select_triggered_stoploss(
+                pair_df, bought, bought_ranges, bts_df
+            )
+        else:
+            # intervals are too long, jump over candles
+            bts_df = self._pd_2_select_triggered_stoploss(
+                pair_df, bought, bought_ranges, sold, bts_df
+            )
         return bts_df
 
     def _pd_2_select_triggered_stoploss(
@@ -251,14 +296,14 @@ class HyperoptBacktesting(Backtesting):
         current_index = bought_idx
         stoploss_index = []
         stoploss_rate = []
-        active_boughts = []
+        bought_stoploss_idx = []
+        last_stoploss_idx = []
         last_stoploss = []
         end_idx = pair_df.index[-1]
         # exclude sold candles from stoploss check
         ohlc_no_sold = pair_df.loc[~pair_df.index.isin(sold["index"].values)]
 
         while bought_idx < end_idx:
-            active_boughts.append(bought_idx) 
             ohlc_range = ohlc_no_sold.loc[bought_idx : bought_idx + bought_ranges[b]]
             # calculate the rate only from the first candle
             stoploss_triggered_rate = self._calc_stoploss_rate_value(
@@ -272,6 +317,7 @@ class HyperoptBacktesting(Backtesting):
                 current_index = stoploss_triggered.index[0]
                 stoploss_index.append(current_index)
                 stoploss_rate.append(stoploss_triggered_rate)
+                bought_stoploss_idx.append(bought_idx)
                 # print(
                 #     "stoploss triggered for:",
                 #     bought_idx,
@@ -283,6 +329,11 @@ class HyperoptBacktesting(Backtesting):
                 try:
                     # get the first row where the bought index is higher than the current stoploss index
                     b = list(bought["index"].values > current_index).index(True)
+
+                    # repeat the stoploss index for the boughts in between the stoploss and the bought with higher idx
+                    last_stoploss_idx.extend(
+                        [current_index] * (b - len(last_stoploss_idx))
+                    )
                     bought_idx = bought["index"].iat[b]
                 except ValueError:
                     break
@@ -292,17 +343,24 @@ class HyperoptBacktesting(Backtesting):
                     b = list(
                         bought["index"].values > bought["next_sold_idx"].iat[b]
                     ).index(True)
+                    last_stoploss_idx.extend([-1] * (b - len(last_stoploss_idx)))
                     bought_idx = bought["index"].iat[b]
                 except ValueError:
                     break
                 # print("skipping to next bought", b, bought_idx)
 
-        # print("returning stoploss ", bought_idx, pair_df.index[-1])
-        bts_df.loc[bought_stoploss_idx, ["stoploss_idx", "stoploss_rate", "last_stoploss"]] = [
-            stoploss_index,
-            stoploss_rate,
-            stoploss_index,
+        last_stoploss_idx.extend([-1] * (len(bought) - len(last_stoploss_idx)))
+        bts_df.set_index("index", inplace=True)
+        bts_df.loc[bought["index"], "last_stoploss"] = last_stoploss_idx
+        bts_df.loc[
+            bts_df.index.isin(bought_stoploss_idx),
+            ["stoploss_idx", "stoploss_rate", "last_stoploss"],
+        ] = [
+            [stoploss_index],
+            [stoploss_rate],
+            [stoploss_index],
         ]
+        bts_df["last_stoploss"].fillna(-1, inplace=True)
         return bts_df
 
     def _np_calc_triggered_stoploss(
@@ -474,7 +532,6 @@ class HyperoptBacktesting(Backtesting):
             columns=["stoploss_idx", "bought_idx", "stoploss_rate"],
             copy=False,
         )
-
         bts_df = bts_df.set_index("index").combine_first(
             stoploss.set_index("bought_idx")
         )
@@ -487,7 +544,10 @@ class HyperoptBacktesting(Backtesting):
                 (bts_df["stoploss_idx"].values == bts_df["last_stoploss"].values)
                 # it must be the first bought matching that stoploss index, in case of subsequent
                 # boughts that triggers on the same index which wouldn't happen without position stacking
-                & (bts_df["last_stoploss"].values != bts_df["last_stoploss"].shift().values)
+                & (
+                    bts_df["last_stoploss"].values
+                    != bts_df["last_stoploss"].shift().values
+                )
             ),
             ["stoploss_idx", "stoploss_rate"],
         ] = [nan, nan]
@@ -500,10 +560,10 @@ class HyperoptBacktesting(Backtesting):
         df["stoploss_rate"] = self._calc_stoploss_rate(df)
 
     def _calc_stoploss_rate(self, df: DataFrame) -> ndarray:
-        return df["open"].values * (1 + self.config["stoploss"] + 2 * self.fee)
+        return df["open"].values * (1 + self.config["stoploss"])
 
     def _calc_stoploss_rate_value(self, open_price: float) -> float:
-        return open_price * (1 + self.config["stoploss"] + 2 * self.fee)
+        return open_price * (1 + self.config["stoploss"])
 
     def vectorized_backtest_buy_sell(
         self,
