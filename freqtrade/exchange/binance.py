@@ -4,13 +4,11 @@ from typing import Dict
 
 import ccxt
 
-from freqtrade.exceptions import (
-    DependencyException,
-    InvalidOrderException,
-    OperationalException,
-    TemporaryError,
-)
+from freqtrade.exceptions import (DDosProtection, ExchangeError,
+                                  InvalidOrderException, OperationalException,
+                                  TemporaryError)
 from freqtrade.exchange import Exchange
+from freqtrade.exchange.common import retrier
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +41,7 @@ class Binance(Exchange):
         """
         return order["type"] == "stop_loss_limit" and stop_loss > float(order["info"]["stopPrice"])
 
+    @retrier(retries=0)
     def stoploss(self, pair: str, amount: float, stop_price: float, order_types: Dict) -> Dict:
         """
         creates a stoploss limit order.
@@ -81,19 +80,19 @@ class Binance(Exchange):
                         'stop price: %s. limit: %s', pair, stop_price, rate)
             return order
         except ccxt.InsufficientFunds as e:
-            raise DependencyException(
-                f"Insufficient funds to create {ordertype} sell order on market {pair}."
-                f"Tried to sell amount {amount} at rate {rate}. "
-                f"Message: {e}"
-            ) from e
+            raise ExchangeError(
+                f'Insufficient funds to create {ordertype} sell order on market {pair}.'
+                f'Tried to sell amount {amount} at rate {rate}. '
+                f'Message: {e}') from e
         except ccxt.InvalidOrder as e:
             # Errors:
             # `binance Order would trigger immediately.`
             raise InvalidOrderException(
-                f"Could not create {ordertype} sell order on market {pair}. "
-                f"Tried to sell amount {amount} at rate {rate}. "
-                f"Message: {e}"
-            ) from e
+                f'Could not create {ordertype} sell order on market {pair}. '
+                f'Tried to sell amount {amount} at rate {rate}. '
+                f'Message: {e}') from e
+        except ccxt.DDoSProtection as e:
+            raise DDosProtection(e) from e
         except (ccxt.NetworkError, ccxt.ExchangeError) as e:
             raise TemporaryError(
                 f"Could not place sell order due to {e.__class__.__name__}. Message: {e}"

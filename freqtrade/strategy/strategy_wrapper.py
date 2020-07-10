@@ -5,7 +5,7 @@ from freqtrade.exceptions import StrategyError
 logger = logging.getLogger(__name__)
 
 
-def strategy_safe_wrapper(f, message: str = "", default_retval=None):
+def strategy_safe_wrapper(f, message: str = "", default_retval=None, supress_error=False):
     """
     Wrapper around user-provided methods and functions.
     Caches all exceptions and returns either the default_retval (if it's not None) or raises
@@ -16,13 +16,20 @@ def strategy_safe_wrapper(f, message: str = "", default_retval=None):
         try:
             return f(*args, **kwargs)
         except ValueError as error:
-            logger.warning(f"{message}" f"Strategy caused the following exception: {error}" f"{f}")
-            if default_retval is None:
+            logger.warning(
+                f"{message}"
+                f"Strategy caused the following exception: {error}"
+                f"{f}"
+            )
+            if default_retval is None and not supress_error:
                 raise StrategyError(str(error)) from error
             return default_retval
         except Exception as error:
-            logger.exception(f"{message}" f"Unexpected error {error} calling {f}")
-            if default_retval is None:
+            logger.exception(
+                f"{message}"
+                f"Unexpected error {error} calling {f}"
+            )
+            if default_retval is None and not supress_error:
                 raise StrategyError(str(error)) from error
             return default_retval
 

@@ -351,4 +351,5 @@ CANCEL_REASON = {
 }
 
 # List of pairs with their timeframes
-ListPairsWithTimeframes = List[Tuple[str, str]]
+PairWithTimeframe = Tuple[str, str]
+ListPairsWithTimeframes = List[PairWithTimeframe]

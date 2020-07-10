@@ -389,7 +389,7 @@ def test_VolumePairList_whitelist_gen(mocker, whitelist_conf, shitcoinmarkets, t
         for pairlist in pairlists:
             if pairlist['method'] == 'AgeFilter' and pairlist['min_days_listed'] and \
                     len(ohlcv_history_list) <= pairlist['min_days_listed']:
-                assert log_has_re(r'^Removed .* from whitelist, because age is less than '
+                assert log_has_re(r'^Removed .* from whitelist, because age .* is less than '
                                   r'.* day.*', caplog)
             if pairlist['method'] == 'PrecisionFilter' and whitelist_result:
                 assert log_has_re(r'^Removed .* from whitelist, because stop price .* '
@@ -405,6 +405,17 @@ def test_VolumePairList_whitelist_gen(mocker, whitelist_conf, shitcoinmarkets, t
                     assert log_has(logmsg, caplog)
                 else:
                     assert not log_has(logmsg, caplog)
+
+
+def test_PrecisionFilter_error(mocker, whitelist_conf, tickers) -> None:
+    whitelist_conf['pairlists'] = [{"method": "StaticPairList"}, {"method": "PrecisionFilter"}]
+    del whitelist_conf['stoploss']
+
+    mocker.patch('freqtrade.exchange.Exchange.exchange_has', MagicMock(return_value=True))
+
+    with pytest.raises(OperationalException,
+                       match=r"PrecisionFilter can only work with stoploss defined\..*"):
+        PairListManager(MagicMock, whitelist_conf)
 
 
 def test_gen_pair_whitelist_not_supported(mocker, default_conf, tickers) -> None:
