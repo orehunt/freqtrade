@@ -1,6 +1,7 @@
 import logging
 
 from joblib import load
+from functools import reduce
 import arrow
 import gc
 from typing import Dict, Any, List, Tuple
@@ -12,13 +13,36 @@ from numpy import (
     concatenate,
     arange,
     ndarray,
+    array,
+    empty,
     memmap,
-    ma,
     where,
     transpose,
     maximum,
+    full,
+    split,
+    unique,
+    asarray,
+    roll,
+    insert,
+    isnan,
 )
-from pandas import Timedelta, to_timedelta, concat, Series, DataFrame, Index, merge
+from pandas import (
+    Timedelta,
+    to_timedelta,
+    concat,
+    Series,
+    DataFrame,
+    Index,
+    CategoricalIndex,
+    merge,
+    MultiIndex,
+    SparseArray,
+    SparseDtype,
+    Categorical,
+    merge_ordered,
+)
+from pandas import IndexSlice as idx
 import pandas as pd
 
 pd.set_option("display.max_rows", 1000)
@@ -47,9 +71,34 @@ process = psutil.Process(os.getpid())
 class Candle(IntEnum):
     BOUGHT = 2
     SOLD = 5
-    BOUGHT_AND_STOPLOSS = 11
-    STOPLOSS = 17
     NOOP = 0
+    END = 11  # references the last candle of a pair
+    # STOPLOSS = 17
+
+
+@njit  # fastmath=True ? there is no math involved here though..
+def for_trail_idx(index, bos, rate, stop_idx):
+    last = -2
+    col = [0] * len(index)
+    for i in range(len(index)):
+        if bos[i] == Candle.BOUGHT:
+            if index[i] > last and last != -1:
+                if rate[i] > 0:
+                    last = stop_idx[i]
+                else:
+                    last = -1
+            col[i] = last
+        else:
+            last = -2
+            col[i] = -1
+    return col
+
+
+def union_eq(arr: ndarray, vals: List) -> ndarray:
+    res = arr == vals[0]
+    for v in vals[1:]:
+        res = res | (arr == v)
+    return res
 
 
 class HyperoptBacktesting(Backtesting):
@@ -59,65 +108,37 @@ class HyperoptBacktesting(Backtesting):
 
     td_zero = Timedelta(0)
     td_half_timeframe: Timedelta
-
-    def wrap_backtest(
-        self,
-        processed: Dict[str, DataFrame],
-        start_date: arrow.Arrow,
-        end_date: arrow.Arrow,
-        **kwargs,
-    ) -> DataFrame:
-        # results = self.backtest_stock(
-        #     processed, self.config["stake_amount"], start_date, end_date
-        # )
-        results = self.vectorized_backtest(processed, start_date, end_date)
-        import pickle
-
-        with open("/tmp/backtest.pkl", "rb+") as fp:
-            # pickle.dump(results, fp)
-            saved_results = pickle.load(fp)
-        # print(results.iloc[-50:])
-        to_print = []
-        for i in results["open_index"].values:
-            if i not in saved_results["open_index"].values:
-                to_print.append(i)
-        # print(results.iloc[:10])
-        # print(saved_results.iloc[:10])
-        print(to_print)
-        return results.iloc[:-1]
+    pairs_offset = []
 
     def __init__(self, config):
         if config.get("backtesting_engine") == "vectorized":
             self.backtest_stock = self.backtest
-            self.backtest = self.wrap_backtest
-            # self.backtest = self.vectorized_backtest
+            self.backtest = (
+                self._wrap_backtest if self.debug else self.vectorized_backtest
+            )
             self.beacktesting_engine = "vectorized"
             self.td_half_timeframe = (
                 Timedelta(config.get("timeframe", config["timeframe"])) / 2
             )
         super().__init__(config)
-        # self.config["stoploss"] = 0.01
 
-    def get_results(
-        self, pair: str, events_buy: DataFrame, events_sell: DataFrame
-    ) -> DataFrame:
+    def get_results(self, events_buy: DataFrame, events_sell: DataFrame) -> DataFrame:
         # choose sell rate depending on sell reason and set sell_reason
         events_sold = events_sell.loc[
             events_sell["bought_or_sold"].values == Candle.SOLD
         ]
         # add new columns with reindex to allow multi col assignments of new columns
         events_sell = events_sell.reindex(
-            columns=[*events_sell.columns, "close_rate", "sell_reason", "index"],
-            copy=False,
+            columns=[*events_sell.columns, "close_rate", "sell_reason"], copy=False,
         )
-        events_sell.loc[events_sold.index, ["close_rate", "sell_reason", "index"]] = [
+        events_sell.loc[events_sold.index, ["close_rate", "sell_reason", "ohlc"]] = [
             events_sold["open"].values,
             SellType.SELL_SIGNAL,
-            events_sold.index.values,
+            events_sold["ohlc"].values,
         ]
         events_stoploss = events_sell.loc[events_sell["stoploss_idx"].notna().values]
         events_sell.loc[
-            events_stoploss.index, ["close_rate", "sell_reason", "index"]
+            events_stoploss.index, ["close_rate", "sell_reason", "ohlc"]
         ] = [
             events_stoploss["stoploss_rate"].values,
             SellType.STOP_LOSS,
@@ -135,13 +156,13 @@ class HyperoptBacktesting(Backtesting):
 
         return DataFrame(
             {
-                "pair": pair,
+                "pair": events_buy["pair"].values,
                 "profit_percent": profits,
                 "profit_abs": self.config["stake_amount"] * profits,
                 "open_time": events_buy["date"].values,
                 "close_time": events_sell["date"].values,
-                "open_index": events_buy.index.values,
-                "close_index": events_sell["index"].values,
+                "open_index": events_buy["ohlc"].values,
+                "close_index": events_sell["ohlc"].values,
                 "trade_duration": trade_duration.dt.seconds / 60,
                 "open_at_end": False,
                 "open_rate": open_rate,
@@ -150,64 +171,132 @@ class HyperoptBacktesting(Backtesting):
             }
         )
 
-    def get_pair_df(self, processed: Dict[str, DataFrame]) -> DataFrame:
-        """ Execute strategy signals and return df """
-        if len(processed) > 1:
-            raise OperationalException(
-                "Can only use vectorized backtest with one pair."
-            )
-
-        pair = next(iter(processed))
-        pair_df = processed[pair].copy()
-        metadata = {"pair": pair}
-        pair_df = self.strategy.advise_buy(pair_df, metadata)
-        pair_df = self.strategy.advise_sell(pair_df, metadata)
-        pair_df.fillna({"buy": 0, "sell": 0}, inplace=True)
-        return pair_df, pair
-
-    def bought_or_sold(self, pair_df: DataFrame) -> Tuple[DataFrame, DataFrame, bool]:
-        """ Set bought_or_sold columns according to buy and sell signals """
-        # set bought candles
-        pair_df["bought_or_sold"] = (pair_df["buy"] - pair_df["sell"]).shift(1).values
-        pair_df.loc[
-            pair_df["bought_or_sold"].values == 1, "bought_or_sold"
-        ] = Candle.BOUGHT
-        # skip if no valid bought candles are found
-        bought_df = pair_df.loc[pair_df["bought_or_sold"].values == Candle.BOUGHT]
-        if len(bought_df) < 1:
-            return None, None, True
-        # set sold candles
-        pair_df.loc[
-            pair_df["bought_or_sold"].values == -1, "bought_or_sold"
-        ] = Candle.SOLD
-        return pair_df, bought_df, False
+    def advise_pair_df(self, df: DataFrame, pair: str) -> DataFrame:
+        """ Execute strategy signals and return df for given pair """
+        meta = {"pair": pair}
+        df = self.strategy.advise_buy(df, meta)
+        df = self.strategy.advise_sell(df, meta)
+        df.fillna({"buy": 0, "sell": 0}, inplace=True)
+        return df
 
     @staticmethod
-    def boughts_to_sold(pair_df: DataFrame) -> DataFrame:
+    def _get_multi_index(pairs: list, idx: ndarray) -> MultiIndex:
+        # if a list of [idx, pairs] is passed to from_product , the df would infer
+        # the counter as the columns, when we want it as the rows, so we have to pass
+        # a swapped mi to the df, there surely is a better way for this...
+        return MultiIndex.from_product([pairs, idx], names=["pair", "ohlc"]).swaplevel(
+            0, 1
+        )
+
+    def merge_pairs_df(self, processed: Dict[str, DataFrame]) -> DataFrame:
+        """ join all the pairs data into one concatenate df adding needed columns """
+        advised = {}
+        data = []
+        max_len = 0
+        pairs_end = []
+        nan_data_pairs = []
+
+        # get the df with the longest ohlc data since all the pairs will be padded to it
+        max_df = max(processed.values(), key=len)
+        max_len = len(max_df)
+        for pair, df in processed.items():
+            advised[pair] = self.advise_pair_df(df.copy(), pair)
+            apv = advised[pair].values
+            lapv = len(apv)
+            pairs_end.append(lapv)
+            if lapv < max_len:
+                # pad shorter data, with an empty array of same shape (columns)
+                data.extend(
+                    concatenate([apv, full((max_len - lapv, apv.shape[1]), nan)])
+                )
+                nan_data_pairs.append(pair)
+            else:
+                data.extend(apv)
+
+        self.pairs = {p: n for n, p in enumerate(advised.keys())}
+        self.pairs_max_len = max_len
+        self.n_pairs = len(self.pairs)
+        self.pairs_end = array(pairs_end, dtype=int) - 1
+        # the index shouldn't change after the advise call, so we can take the pre-advised index
+        # to create the multiindex where each pair is indexed with max len
+        self.n_rows = len(max_df.index.values)
+        self.mi = self._get_multi_index(advised.keys(), max_df.index.values)
+        # take a post advised df for the right columns count as the advise call
+        # might have added new columns
+        df = DataFrame(data, index=self.mi, columns=advised[pair].columns)
+        # set startup offset from the first index (should be equal for all pairs)
+        self.startup_offset = df.index.get_level_values(0)[0]
+        # add a column for pairs offsets to make the index unique
+        offsets_arr, self.pairs_offset = self._calc_pairs_offsets(df, return_ofs=True)
+        self.pairs_ofs_end = self.pairs_offset + self.pairs_end
+        # loop over the missing data pairs and calculate the point where data ends
+        # plus the absolute offset
+        self.nan_data_ends = [
+            self.pairs_ofs_end[self.pairs[p]] + 1 for p in nan_data_pairs
+        ]
+        df["ofs"] = Categorical(offsets_arr, self.pairs_offset)
+        # could as easily be arange(len(df)) ...
+        df["ohlc_ofs"] = (
+            df.index.get_level_values(0).values + offsets_arr - self.startup_offset
+        )
+        return df
+
+    def bought_or_sold(self, df: DataFrame) -> Tuple[DataFrame, DataFrame, bool]:
+        """ Set bought_or_sold columns according to buy and sell signals """
+        # set bought candles
+        df.loc[:, "bought_or_sold"] = asarray(  # us asarray in case of sparse data
+            (df["buy"] - df["sell"]).groupby(level=1).shift().values
+        )
+
+        df.loc[df["bought_or_sold"].values == 1, "bought_or_sold"] = Candle.BOUGHT
+        # skip if no valid bought candles are found
+        if len(df.loc[df["bought_or_sold"].values == Candle.BOUGHT]) < 1:
+            return None, True
+        # set sold candles
+        df.loc[df["bought_or_sold"].values == -1, "bought_or_sold"] = Candle.SOLD
+        df["bought_or_sold"] = Categorical(
+            df["bought_or_sold"].values, categories=list(map(int, Candle))
+        )
+        # set END candles as the last non nan candle of each pair data
+        bos_loc = df.columns.get_loc("bought_or_sold")
+        df.iloc[self.pairs_ofs_end, bos_loc] = Candle.END
+        # Since bought_or_sold is shifted, null the row after the last non-nan one
+        # as it doesn't have data, exclude pairs which data matches the max_len since
+        # they have no nans
+        df.iloc[self.nan_data_ends, bos_loc] = Candle.NOOP
+        return df, False
+
+    @staticmethod
+    def boughts_to_sold(df: DataFrame) -> DataFrame:
         """
         reduce df such that there are many bought interleaved by one sold candle
         NOTE: does not modify input df
         """
-        bos_df = pair_df.loc[
-            (pair_df["bought_or_sold"].values == Candle.BOUGHT)
-            | (pair_df["bought_or_sold"].values == Candle.SOLD)
+        bos_df = df.loc[
+            union_eq(
+                df["bought_or_sold"].values, [Candle.BOUGHT, Candle.SOLD, Candle.END]
+            )
         ]
         bos_df = bos_df.loc[
             # exclude duplicate sold
             ~(
                 (bos_df["bought_or_sold"].values == Candle.SOLD)
-                & (bos_df["bought_or_sold"].shift().values == Candle.SOLD)
+                & (
+                    bos_df["bought_or_sold"]
+                    .groupby(level=1)
+                    .shift(fill_value=Candle.SOLD)
+                    .values
+                    == Candle.SOLD
+                )
             )
         ]
-        # skip the first sold candle since it's useless without boughts
-        if bos_df.iloc[0]["bought_or_sold"] == Candle.SOLD:
-            bos_df = bos_df.iloc[1:]
         return bos_df
 
     # @staticmethod
-    # def fill_stub_sold(pair_df: DataFrame, bts_df: DataFrame) -> DataFrame:
+    # def fill_stub_sold(df: DataFrame, bts_df: DataFrame) -> DataFrame:
+    #     """ Helper function to limit trades duration """
     #     sold = (
-    #         pair_df.loc[~pair_df.index.isin(bts_df.set_index("index").index)]
+    #         df.loc[~df.index.isin(bts_df.set_index("index").index)]
     #         .iloc[::1000]
     #         .reset_index()
     #     )
@@ -224,137 +313,146 @@ class HyperoptBacktesting(Backtesting):
     #     )
     #     # ensure the latest candle is always sold
     #     if bts_df.iloc[-1]["bought_or_sold"] == Candle.BOUGHT:
-    #         sold.iloc[len(sold)] = pair_df.iloc[-1]
+    #         sold.iloc[len(sold)] = df.iloc[-1]
     #         sold.iloc[-1]["bought_or_sold"] = Candle.SOLD
     #     return (bts_df, sold)
 
-    def set_stoploss_col(
-        self, pair_df: DataFrame, stoploss_index, stoploss_rate: ndarray
-    ):
-        # set stoploss and stoploss_rate columns
-        pair_df.loc[stoploss_index, ["stoploss", "stoploss_rate"]] = [
-            Candle.STOPLOSS,
-            stoploss_rate,
-        ]
-
-    def set_stoploss(self, pair_df: DataFrame) -> DataFrame:
+    def set_stoploss(self, df: DataFrame) -> DataFrame:
         """
         returns the df of valid boughts where stoploss triggered, with matching stoploss
         index of each bought
         """
-        pair_df = pair_df.reindex(
-            copy=False,
-            columns=[
-                *pair_df.columns,
-                "stoploss_idx",
-                "stoploss_rate",
-                "last_stoploss",
-            ],
-        )
-        bts_df = self.boughts_to_sold(pair_df).reset_index()
+        # recompose the multi index swapping the ohlc count with a contiguous range
+        bts_df = self.boughts_to_sold(df).reset_index()
+        bts_df["bts_index"] = bts_df.index.values
+        # don't drop the index column since groupby truncates the index to the specified level
+        # and can't be accessed from the .index attribute
+        bts_df = bts_df.set_index(["bts_index", "pair"], drop=False)
         # align sold to bought
-        sold = bts_df.loc[bts_df["bought_or_sold"].values == Candle.SOLD]
+        sold = bts_df.loc[
+            union_eq(bts_df["bought_or_sold"].values, [Candle.SOLD, Candle.END])
+        ]
         # if no sold signals, return
         if len(sold) < 1:
-            return DataFrame(columns=[*bts_df.columns, "last_stoploss"])
+            return DataFrame(columns=[*bts_df.columns])
             # if no sell sig is provided a limit on the trade duration could be applied..
-            # bts_df, sold = self.fill_stub_sold(pair_df, bts_df)
+            # bts_df, sold = self.fill_stub_sold(df, bts_df)
         # skip remaining bought candles without sold candle
-        bts_df = bts_df.loc[: sold.index[-1]]
-        pair_df.loc[sold.index[-1] + 1 :, "bought_or_sold"] = Candle.NOOP
-        sold_repeats = sold.index.values[1:] - sold.index.values[:-1]
-        # prepend the first range subtracting the index of the first bought
-        sold_repeats = [sold.index[0] + 1, *sold_repeats]
-        # NOTE: use the "index" col with original indexes added by reset_index
-        bts_df["next_sold_idx"] = repeat(sold["index"].values, sold_repeats)
+        bts_df = bts_df.groupby(level=1, group_keys=False).apply(
+            # slice from the beginning (:) until the last ([-1]) pair-wise label (idx[:, x.name])
+            # where x.name == "pair" of the sold index
+            lambda x: x.loc[: sold.loc[idx[:, x.name], :].index[-1]]
+        )
+        first_boughts = bts_df.groupby(level=1).first()
+        # index col is only needed by first_boughts
+        bts_df.drop(columns="bts_index", inplace=True)
+
+        def repeats(x, rep):
+            vals = x.index.get_level_values(0).values
+            # prepend the first range subtracting the index of the first bought
+            rep.append(vals[0] - first_boughts.at[x.name, "bts_index"] + 1)
+            rep.extend(vals[1:] - vals[:-1])
+
+        sold_repeats = []
+        sold.groupby(level=1).apply(repeats, rep=sold_repeats)
+        # NOTE: use the "ohlc_ofs" col with offsetted original indexes
+        # for stoploss calculation, consider the last candle of each pair as a sell,
+        # even thought the bought will be valid only if an amount condition is triggered
+        bts_df["next_sold_ofs"] = repeat(sold["ohlc_ofs"].values, sold_repeats)
         bought = bts_df.loc[bts_df["bought_or_sold"].values == Candle.BOUGHT]
         # get the index ranges of each bought->sold spans
-        bought_ranges = bought["next_sold_idx"].values - bought["index"].values
+        bought_ranges = bought["next_sold_ofs"].values - bought["ohlc_ofs"].values
         # could also just use the sum...
         if bought_ranges.mean() < 100:
             # intervals are short compute everything in one round
             bts_df = self._pd_select_triggered_stoploss(
-                pair_df, bought, bought_ranges, bts_df
+                df, bought, bought_ranges, bts_df
             )
         else:
             # intervals are too long, jump over candles
             bts_df = self._pd_2_select_triggered_stoploss(
-                pair_df, bought, bought_ranges, sold, bts_df
+                df, bought, bought_ranges, sold, bts_df
             )
         return bts_df
 
     def _pd_2_select_triggered_stoploss(
         self,
-        pair_df: DataFrame,
+        df: DataFrame,
         bought: DataFrame,
         bought_ranges: ndarray,
         sold: DataFrame,
         bts_df: DataFrame,
     ):
-        b = 0
-        bought_idx = bought["index"].iat[b]
-        current_index = bought_idx
         stoploss_index = []
         stoploss_rate = []
-        bought_stoploss_idx = []
+        bought_stoploss_ofs = []
         last_stoploss_idx = []
         last_stoploss = []
-        end_idx = pair_df.index[-1]
-        # exclude sold candles from stoploss check
-        ohlc_no_sold = pair_df.loc[~pair_df.index.isin(sold["index"].values)]
+        # copy cols for faster index accessing
+        bofs = bought["ohlc_ofs"].values
+        bohlc = bought["ohlc"].values
+        bsold = bought["next_sold_ofs"].values
+        bopen = bought["open"].values
+        b = 0
+        stoploss_bought_ohlc = bofs[b]
 
-        while bought_idx < end_idx:
-            ohlc_range = ohlc_no_sold.loc[bought_idx : bought_idx + bought_ranges[b]]
-            # calculate the rate only from the first candle
-            stoploss_triggered_rate = self._calc_stoploss_rate_value(
-                ohlc_range["open"].iat[0]
+        ohlc_low = df["low"].values
+        ohlc_ofs = df["ohlc_ofs"].values
+        ohlc_ofs_start = 0
+        ohlc_idx = df.index.get_level_values(0)
+        current_ofs = stoploss_bought_ohlc
+        end_ofs = ohlc_ofs[-1]
+
+        while stoploss_bought_ohlc < end_ofs:
+            # calculate the rate from the bought candle
+            stoploss_triggered_rate = self._calc_stoploss_rate_value(bopen[b])
+            # check trigger for the range of the current bought
+            ohlc_ofs_start += ohlc_ofs[ohlc_ofs_start:].searchsorted(
+                stoploss_bought_ohlc, "left"
             )
-            stoploss_triggered = ohlc_range.loc[
-                ohlc_range["low"].values <= stoploss_triggered_rate
-            ]
-            if len(stoploss_triggered) > 0:
-                # the first that triggers is the one that happens
-                current_index = stoploss_triggered.index[0]
-                stoploss_index.append(current_index)
+            stoploss_triggered = (
+                ohlc_low[ohlc_ofs_start : ohlc_ofs_start + bought_ranges[b]]
+                <= stoploss_triggered_rate
+            )
+            # get the position where stoploss triggered relative to the current bought slice
+            stop_max_idx = stoploss_triggered.argmax()
+            # check that the index returned by argmax is True
+            if stoploss_triggered[stop_max_idx]:
+                # set the offset of the triggered stoploss index
+                current_ofs = stoploss_bought_ohlc + stop_max_idx
+                stop_ohlc_idx = ohlc_idx[current_ofs]
+                stoploss_index.append(stop_ohlc_idx)
                 stoploss_rate.append(stoploss_triggered_rate)
-                bought_stoploss_idx.append(bought_idx)
-                # print(
-                #     "stoploss triggered for:",
-                #     bought_idx,
-                #     "at index: ",
-                #     current_index,
-                #     "before sell: ",
-                #     bought["next_sold_idx"].iat[b],
-                # )
+                bought_stoploss_ofs.append(stoploss_bought_ohlc)
                 try:
                     # get the first row where the bought index is higher than the current stoploss index
-                    b = list(bought["index"].values > current_index).index(True)
-
-                    # repeat the stoploss index for the boughts in between the stoploss and the bought with higher idx
+                    b += bofs[b:].searchsorted(current_ofs, "right")
+                    # repeat the stoploss index for the boughts in between the stoploss
+                    # and the bought with higher idx
                     last_stoploss_idx.extend(
-                        [current_index] * (b - len(last_stoploss_idx))
+                        [stop_ohlc_idx] * (b - len(last_stoploss_idx))
                     )
-                    bought_idx = bought["index"].iat[b]
-                except ValueError:
+                    stoploss_bought_ohlc = bofs[b]
+                except IndexError:
                     break
-                # print("next bought after stoploss at:", bought_idx, b)
             else:  # if stoploss did not trigger, jump to the first bought after next sold idx
                 try:
-                    b = list(
-                        bought["index"].values > bought["next_sold_idx"].iat[b]
-                    ).index(True)
+                    b += bofs[b:].searchsorted(bsold[b], "right")
                     last_stoploss_idx.extend([-1] * (b - len(last_stoploss_idx)))
-                    bought_idx = bought["index"].iat[b]
-                except ValueError:
+                    stoploss_bought_ohlc = bofs[b]
+                except IndexError:
                     break
-                # print("skipping to next bought", b, bought_idx)
-
+        # pad the last stoploss array with the remaining boughts
         last_stoploss_idx.extend([-1] * (len(bought) - len(last_stoploss_idx)))
-        bts_df.set_index("index", inplace=True)
-        bts_df.loc[bought["index"], "last_stoploss"] = last_stoploss_idx
+        # set the index to the offset and add the columns to set the stoploss
+        # data points on the relevant boughts
+        bts_df.set_index("ohlc_ofs", inplace=True)
+        bts_df = bts_df.reindex(
+            columns=[*bts_df.columns, "stoploss_idx", "stoploss_rate", "last_stoploss"]
+        )
+        bts_df.loc[bought["ohlc_ofs"], "last_stoploss"] = last_stoploss_idx
         bts_df.loc[
-            bts_df.index.isin(bought_stoploss_idx),
-            ["stoploss_idx", "stoploss_rate", "last_stoploss"],
+            bought_stoploss_ofs, ["stoploss_idx", "stoploss_rate", "last_stoploss"],
         ] = [
             [stoploss_index],
             [stoploss_rate],
@@ -363,35 +461,58 @@ class HyperoptBacktesting(Backtesting):
         bts_df["last_stoploss"].fillna(-1, inplace=True)
         return bts_df
 
+    def _calc_pairs_offsets(
+        self, df: DataFrame, group=None, return_ofs=False
+    ) -> ndarray:
+        # all the pairs with df candles
+        gb = df.groupby(group) if group else df.groupby(level=1)
+        df_pairs = [self.pairs[p] for p in gb.indices.keys()]
+        # since pairs are concatenated, their candles start at their ordered position
+        pairs_offset = [self.n_rows * n for n in df_pairs]
+        pairs_offset_arr = repeat(pairs_offset, gb.size().values)
+        if return_ofs:
+            return pairs_offset_arr, pairs_offset
+        else:
+            return pairs_offset_arr - self.startup_offset
+
+    def _columns_indexes(self, df: DataFrame) -> Dict[str, int]:
+        cols_idx = {}
+        for col in ("open", "low", "ohlc", "pair"):
+            cols_idx[col] = df.columns.get_loc(col)
+        return cols_idx
+
     def _np_calc_triggered_stoploss(
-        self, pair_df: DataFrame, bought: DataFrame, bought_ranges: ndarray,
+        self, df: DataFrame, bought: DataFrame, bought_ranges: ndarray,
     ) -> (ndarray, ndarray):
         """ numpy equivalent of _pd_calc_triggered_stoploss that is more memory efficient """
         # clear up memory
         gc.collect()
-        # expand bought ranges into ohlc data
-        r_pair_df = pair_df.reset_index()
-        ohlc_vals = r_pair_df.values
-        # align the start of pair_df index in case it doesn't start from 0 (e.g. startup candles are trimmed
-        offset_idx = pair_df.index[0]
-        open_col_idx = r_pair_df.columns.get_loc("open")
-        low_col_idx = r_pair_df.columns.get_loc("low")
-        index_col_idx = r_pair_df.columns.get_loc("index")
-        # 0: open, 1: low, 2: stoploss_idx, 3: bought_idx, 4: stoploss_rate
-        data_expd = ma.concatenate(
+        # expand bought ranges into ohlc processed
+        r_df = df.reset_index()
+        ohlc_cols = list(self._columns_indexes(r_df).values())
+        # prefetch the columns of interest to avoid querying the index over the loop (avoid nd indexes)
+        ohlc_vals = r_df.iloc[:, ohlc_cols].values
+
+        # 0: open, 1: low, 2: stoploss_idx, 3: pair, 4: stoploss_bought_ohlc, 5: stoploss_rate
+        data_expd = concatenate(
             [
-                ma.concatenate(
+                concatenate(
                     [
-                        ohlc_vals[
-                            i : i + bought_ranges[n],
-                            [open_col_idx, low_col_idx, index_col_idx],
-                        ]
-                        for n, i in enumerate(bought["index"].values - offset_idx)
+                        ohlc_vals[i : i + bought_ranges[n]]
+                        # the array position of each bought row comes from the offset
+                        # of each pair from the beginning (adjusted to the startup candles count)
+                        # plus the ohlc (actual order of the initial df of concatenated pairs)
+                        for n, i in enumerate(
+                            bought["ohlc"].values
+                            + bought["ofs"].values.tolist()
+                            - self.startup_offset
+                        )
                     ]
                 ),
+                # stoploss_bought_ohlc and stoploss_rate to the expanded columns
                 transpose(
                     repeat(
-                        [bought["index"].values, self._calc_stoploss_rate(bought),],
+                        [bought["ohlc"].values, self._calc_stoploss_rate(bought),],
                         bought_ranges,
                         axis=1,
                     )
@@ -399,76 +520,141 @@ class HyperoptBacktesting(Backtesting):
             ],
             axis=1,
         )
-        triggered = data_expd[data_expd[:, 1] <= data_expd[:, 4], :]
-        # # only where the bought_idx (3) is not the same as the previous
-        bought_idx_triggered_s1 = ma.concatenate([[nan], triggered[:-1, 3]])
-        # # use where here because array is 1 element shorter
-        first_triggers = triggered[where(triggered[:, 3] != bought_idx_triggered_s1)]
-        # # index column is (2)
+
+        # low (1) <= stoploss_rate (5)
+        triggered = data_expd[data_expd[:, 1] <= data_expd[:, 5], :]
+        if len(triggered) < 1:
+            # keep shape since return value is accessed without reference
+            return full((0, data_expd.shape[1]), nan)
+        # only where the stoploss_bought_ohlc (4) is not the same as the previous
+        stoploss_bought_ohlc_triggered_s1 = insert(triggered[:-1, 4], 0, nan)
+        pair_triggered_s1 = insert(triggered[:-1, 3], 0, nan)
+        first_triggers = triggered[
+            where(
+                (triggered[:, 4] != stoploss_bought_ohlc_triggered_s1)
+                # edge case when a pair has only one bought candle and the next one
+                # first bought candle is at the same index
+                | (triggered[:, 3] != pair_triggered_s1)
+            )
+        ]
+        first_triggers_pairs_offset = unique(first_triggers[:, 3], return_index=True)[1]
+        # index column is (2)
         stoploss = first_triggers[
-            where(first_triggers[:, 2] >= maximum.accumulate(first_triggers[:, 2]))
+            # exclude stoplosses that are triggered before the bought cumulative maximum index
+            concatenate(
+                [
+                    # add the offset since where indexes are relative to each pairs array
+                    first_triggers_pairs_offset[n]
+                    + where(p[:, 4] >= maximum.accumulate(p[:, 4]))[0]
+                    for n, p in enumerate(
+                        split(
+                            first_triggers,
+                            # exclude the first since it's 0
+                            first_triggers_pairs_offset[1:],
+                        )
+                    )
+                ],
+            )
         ]
         # mark objects for gc
         del (
             data_expd,
             triggered,
-            bought_idx_triggered_s1,
+            stoploss_bought_ohlc_triggered_s1,
             first_triggers,
-            r_pair_df,
+            r_df,
             ohlc_vals,
         )
         gc.collect()
         return stoploss
 
     def _pd_calc_triggered_stoploss(
-        self, pair_df: DataFrame, bought: DataFrame, bought_ranges: ndarray,
+        self, df: DataFrame, bought: DataFrame, bought_ranges: ndarray,
     ):
         """ Expand the ohlc dataframe for each bought candle to check if stoploss was triggered """
-        idx = pair_df.index.values
-        offset_idx = idx[0]
-        offset = idx[0]
-        stoploss_idx_expd = DataFrame(
-            ma.concatenate(
-                [
-                    idx[i : i + bought_ranges[n]]
-                    for n, i in enumerate(bought["index"].values - offset_idx)
-                ]
-            ),
-            columns=["stoploss_idx"],
+        gc.collect()
+
+        # code you want to profile
+
+        df["ohlc"] = df.index.get_level_values(0).values
+        df["ohlc_ofs"] = (
+            df["ohlc"].values + df["ofs"].values.tolist() - self.startup_offset
         )
+        ohlc_vals = df["ohlc_ofs"].values
+
+        # create a df with just the indexes to expand
+        stoploss_idx_expd = DataFrame(
+            (
+                concatenate(
+                    [
+                        ohlc_vals[i : i + bought_ranges[n]]
+                        # loop over the pair/offsetted indexes that will be used as merge key
+                        for n, i in enumerate(
+                            bought["ohlc"].values
+                            + bought["ofs"].values.tolist()
+                            - self.startup_offset
+                        )
+                    ]
+                )
+            ),
+            columns=["ohlc_ofs"],
+        )
+        # add the row data to the expanded indexes
         bought_expd = stoploss_idx_expd.merge(
-            pair_df, how="left", left_on=["stoploss_idx"], right_index=True
+            # reset level 1 to preserve pair column
+            df.reset_index(level=1),
+            how="left",
+            left_on="ohlc_ofs",
+            right_on="ohlc_ofs",
         )
         # set bought idx for each bought timerange, so that we know to which bought candle
         # the row belongs to, and stoploss rates relative to each bought
-        bought_stop_idx = repeat(
-            [bought["index"].values, self._calc_stoploss_rate(bought),],
+        bought_expd["stoploss_bought_ohlc"], bought_expd["stoploss_rate"] = repeat(
+            [bought["ohlc"].values, self._calc_stoploss_rate(bought),],
             bought_ranges,
             axis=1,
         )
-        bought_expd["bought_idx"] = bought_stop_idx[0]
-        bought_expd["stoploss_rate"] = bought_stop_idx[1]
 
         triggered = bought_expd.loc[
             bought_expd["low"].values <= bought_expd["stoploss_rate"].values
         ]
         # filter out duplicate subsequent triggers of the same bought candle as only the first ones matters
         first_triggers = triggered.loc[
-            triggered["bought_idx"].values != triggered["bought_idx"].shift().values
-        ]
-        stoploss = first_triggers.loc[
-            # if the stoploss_idx is lower than the cummax then it was a bought that
-            # happened before the last stoploss so, exclude them
             (
-                first_triggers["stoploss_idx"].values
-                >= first_triggers["stoploss_idx"].cummax().values
+                triggered["stoploss_bought_ohlc"].values
+                != triggered["stoploss_bought_ohlc"].shift().values
             )
-            # select only the relevant columns to speedup combine
-        ].loc[:, ["stoploss_idx", "bought_idx", "stoploss_rate"],]
+            | (triggered["pair"].values != triggered["pair"].shift().values)
+        ]
+        # filter out "late" stoplosses that wouldn't be applied because a previous stoploss
+        # would still be active at that time
+        # since stoplosses are sorted by trigger date, any stoploss having a bought index older than
+        # the ohlc index are invalid
+        stoploss = first_triggers.loc[
+            concatenate(
+                first_triggers.groupby("pair")["stoploss_bought_ohlc"].apply(
+                    lambda x: x.values >= x.cummax().values
+                )
+            )
+        ]
+        # select columns
+        stoploss = stoploss[
+            ["ohlc", "pair", "stoploss_bought_ohlc", "stoploss_rate"]
+        ].rename({"ohlc": "stoploss_idx"}, axis=1)
+        # mark objects for gc
+        del (
+            df,
+            stoploss_idx_expd,
+            bought_expd,
+            triggered,
+            first_triggers,
+            ohlc_vals,
+        )
+        gc.collect()
         return stoploss
 
     @staticmethod
-    def _last_stoploss_apply(pair_df: DataFrame, bts_df: DataFrame):
+    def _last_stoploss_apply(df: DataFrame):
         """ Loop over each row of the dataframe and only select stoplosses for boughts that
         happened after the last set stoploss """
         last = [0]
@@ -476,7 +662,7 @@ class HyperoptBacktesting(Backtesting):
         def trail_idx(x, last):
             if x.bought_or_sold == Candle.BOUGHT:
                 # if a bought candle happens after the last active stoploss index
-                if x.name > last[0]:
+                if x.ohlc > last[0]:
                     # if stoploss is triggered
                     if x.stoploss_rate > 0:
                         # set the new active stoploss to the current stoploss index
@@ -489,56 +675,66 @@ class HyperoptBacktesting(Backtesting):
                 last[0] = 0
                 return nan
 
-        bts_df["last_stoploss"] = bts_df.apply(trail_idx, axis=1, raw=True, args=[last])
+        return df.apply(trail_idx, axis=1, raw=True, args=[last]).values
 
     @staticmethod
-    def _last_stoploss_numba(pair_df: DataFrame, bts_df: DataFrame):
+    def _last_stoploss_numba(bts_df: DataFrame):
         """ numba version of _last_stoploss_apply """
 
-        @njit  # fastmath=True ? there is no math involved here though..
-        def for_trail_idx(index, bos, rate, stop_idx):
-            last = -2
-            col = [0] * len(index)
-            for i in range(len(index)):
-                if bos[i] == Candle.BOUGHT:
-                    if index[i] > last and last != -1:
-                        if rate[i] > 0:
-                            last = stop_idx[i]
-                        else:
-                            last = -1
-                    col[i] = last
-                else:
-                    last = -2
-                    col[i] = -1
-            return col
-
-        bts_df["last_stoploss"] = for_trail_idx(
-            bts_df.index.astype(int).values,
+        return for_trail_idx(
+            bts_df["ohlc"].astype(int).values,
             bts_df["bought_or_sold"].astype(int).values,
             bts_df["stoploss_rate"].fillna(0).astype(float).values,
             bts_df["stoploss_idx"].fillna(-1).astype(int).values,
         )
 
+    @staticmethod
+    def start_pyinst():
+        from pyinstrument import Profiler
+
+        global profiler
+        profiler = Profiler()
+        profiler.start()
+
+    @staticmethod
+    def stop_pyinst():
+        global profiler
+        profiler.stop()
+        print(profiler.output_text(unicode=True, color=True))
+        exit()
+
     def _pd_select_triggered_stoploss(
         self,
-        pair_df: DataFrame,
+        df: DataFrame,
         bought: DataFrame,
         bought_ranges: ndarray,
         bts_df: DataFrame,
     ) -> (Index, ndarray):
 
+        bts_df.drop(columns="pair", inplace=True)
+        # compute all the stoplosses for the buy signals and filter out clear invalids
         stoploss = DataFrame(
-            self._np_calc_triggered_stoploss(pair_df, bought, bought_ranges)[:, 2:],
-            columns=["stoploss_idx", "bought_idx", "stoploss_rate"],
+            self._np_calc_triggered_stoploss(df, bought, bought_ranges)[:, 2:],
+            columns=["stoploss_idx", "pair", "stoploss_bought_ohlc", "stoploss_rate"],
             copy=False,
         )
-        bts_df = bts_df.set_index("index").combine_first(
-            stoploss.set_index("bought_idx")
-        )
+        # stoploss = self._pd_calc_triggered_stoploss(df, bought, bought_ranges)
+
+        # add stoploss data to the bought/sold dataframe
+        bts_df = bts_df.merge(
+            stoploss,
+            left_on=["ohlc", "pair"],
+            right_on=["stoploss_bought_ohlc", "pair"],
+            how="left",
+        ).set_index("ohlc_ofs")
         # don't apply stoploss to sold candles
         bts_df.loc[bts_df["bought_or_sold"].values == Candle.SOLD, "stoploss_idx"] = nan
-        self._last_stoploss_numba(pair_df, bts_df)
-
+        # exclude nested boughts
+        # --> | BUY1 | BUY2..STOP2 | STOP1 | -->
+        # -->      V       X      X       V  -->
+        bts_df["last_stoploss"] = concatenate(
+            bts_df.groupby("pair").apply(self._last_stoploss_numba).values
+        )
         bts_df.loc[
             ~(  # last active stoploss matches the current stoploss, otherwise it's stale
                 (bts_df["stoploss_idx"].values == bts_df["last_stoploss"].values)
@@ -551,7 +747,6 @@ class HyperoptBacktesting(Backtesting):
             ),
             ["stoploss_idx", "stoploss_rate"],
         ] = [nan, nan]
-        # del stoploss
         gc.collect()
         return bts_df
 
@@ -584,18 +779,20 @@ class HyperoptBacktesting(Backtesting):
         """ NOTE: can't have default values as arguments since it is an overridden function
         TODO: benchmark if rewriting without use of df masks for readability gives a worthwhile speedup
         """
-        pair_df, pair = self.get_pair_df(processed)
+        df = self.merge_pairs_df(processed)
 
-        pair_df, bought_df, empty = self.bought_or_sold(pair_df)
+        df, empty = self.bought_or_sold(df)
+
         if empty:  # if no bought signals
             return self.empty_results
 
-        bts_df = self.set_stoploss(pair_df)
+        bts_df = self.set_stoploss(df)
 
         if len(bts_df) < 1:
             return self.empty_results
 
-        bts_ls_s1 = bts_df["last_stoploss"].shift().values
+        bts_gb = bts_df.groupby("pair")
+        bts_ls_s1 = bts_gb.last_stoploss.shift().values
         events_buy = bts_df.loc[
             (bts_df["bought_or_sold"].values == Candle.BOUGHT)
             & (
@@ -603,10 +800,15 @@ class HyperoptBacktesting(Backtesting):
                     bts_df["bought_or_sold"].shift(fill_value=Candle.SOLD).values
                     == Candle.SOLD
                 )
-                # happens if a stoploss was triggered on the previous bought
-                # last_stoploss is only valid if == shift(1) if the previous candle is SOLD
-                # which is covered by the previous case
-                | (bts_df["last_stoploss"].values != bts_ls_s1)
+                # last_stoploss is only valid if == shift(1)
+                # if the previous candle is SOLD it is covered by the previous case
+                | ((bts_df["last_stoploss"].values != bts_ls_s1))
+            )
+            # exclude the last boughts that are not stoploss and which next sold is
+            # END sold candle
+            & ~(
+                (bts_df["stoploss_idx"].isna())
+                & union_eq(bts_df["next_sold_ofs"], self.pairs_ofs_end)
             )
         ]
         events_sell = bts_df.loc[
@@ -618,12 +820,55 @@ class HyperoptBacktesting(Backtesting):
             # and stoplosses (all candles with notna stoploss_idx should be valid)
             | ((bts_df["stoploss_idx"].notna().values))
         ]
+        # if isnan(events_sell["open"].iat[-1]):
+        # events_sell = events_sell.iloc[:-1]
+        # remove
+        self._validate_results(events_buy, events_sell)
+        results = self.get_results(events_buy, events_sell)
+        return results
+
+    def _validate_results(self, events_buy: DataFrame, events_sell: DataFrame):
         try:
             assert len(events_buy) == len(events_sell)
         except AssertionError:
-            print("Buy and sell events not matching")
+            print("Buy and sell events not matching", self.pairs_end)
             print(len(events_buy), len(events_sell))
-            print(events_buy.iloc[:10], events_sell.iloc[:10])
+            print(events_buy.iloc[-10:], events_sell.iloc[-10:])
             raise OperationalException
-        results = self.get_results(pair, events_buy, events_sell)
+
+    def _wrap_backtest(
+        self,
+        processed: Dict[str, DataFrame],
+        start_date: arrow.Arrow,
+        end_date: arrow.Arrow,
+        **kwargs,
+    ) -> DataFrame:
+        """ debugging """
+        import pickle
+        # results = self.backtest_stock(
+        #     processed, self.config["stake_amount"], start_date, end_date
+        # )
+        results = self.vectorized_backtest(processed, start_date, end_date)
+        with open("/tmp/backtest.pkl", "rb+") as fp:
+            # pickle.dump(results, fp)
+            saved_results: DataFrame = pickle.load(fp)
+        to_print = []
+        # for i in results["open_index"].values:
+        #     if i not in saved_results["open_index"].values:
+        #         to_print.append(i)
+        for i in saved_results["open_index"].values:
+            if i not in results["open_index"].values:
+                to_print.append(i)
+        # print(saved_results.sort_values(["pair", "open_time"]).iloc[:10])
+        # print(
+        #     "to_print count: ",
+        #     len(to_print),
+        #     "computed res: ",
+        #     len(results),
+        #     "saved res: ",
+        #     len(saved_results),
+        # )
+        # print(to_print[:10])
+        if to_print:
+            print(saved_results.loc[saved_results["open_index"].isin(to_print)])
         return results
