@@ -309,7 +309,7 @@ class HyperoptBacktesting(Backtesting):
                     self._shift_paw(
                         bos_df["bought_or_sold"],
                         fill_v=Candle.SOLD,
-                        null_v=Candle.NOOP,
+                        null_v=Candle.SOLD,
                         ofs=self._diff_indexes(bos_df.index.get_level_values(1)),
                     ).values
                     == Candle.SOLD
@@ -320,16 +320,20 @@ class HyperoptBacktesting(Backtesting):
 
     def _pd_calc_sold_repeats(self, bts_df: DataFrame, sold: DataFrame) -> list:
         """ deprecated; pandas version of the next_sold_ofs calculation """
-        first_bought = bts_df.groupby(level=1).first()
+        first_bought = (
+            bts_df.assign(bts_index=bts_df.index.values)
+            .groupby("pair", sort=False)
+            .first()
+        )
 
         def repeats(x, rep):
-            vals = x.index.get_level_values(0).values
+            vals = x.index.values
             # prepend the first range subtracting the index of the first bought
             rep.append(vals[0] - first_bought.at[x.name, "bts_index"] + 1)
             rep.extend(vals[1:] - vals[:-1])
 
         sold_repeats: List = []
-        sold.groupby(level=1).apply(repeats, rep=sold_repeats)
+        sold.groupby("pair", sort=False).apply(repeats, rep=sold_repeats)
         return sold_repeats
 
     def _np_calc_sold_repeats(self, bts_df: DataFrame, sold: DataFrame) -> list:
@@ -545,8 +549,9 @@ class HyperoptBacktesting(Backtesting):
         self, df: DataFrame, group=None, return_ofs=False
     ) -> ndarray:
         # all the pairs with df candles
-        gb = df.groupby(group) if group else df.groupby(level=1)
-        df_pairs = [self.pairs[p] for p in gb.indices.keys()]
+        gb = df.groupby(group, sort=False) if group else df.groupby(level=1, sort=False)
+        # pairs should keep order, make sure groupby sort is False
+        df_pairs = [self.pairs[p] for p in gb.groups.keys()]
         # since pairs are concatenated, their candles start at their ordered position
         pairs_offset = [self.n_rows * n for n in df_pairs]
         pairs_offset_arr = repeat(pairs_offset, gb.size().values)
