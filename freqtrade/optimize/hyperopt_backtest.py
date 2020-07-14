@@ -17,25 +17,22 @@ from numpy import (
     transpose,
     maximum,
     full,
-    split,
     unique,
-    asarray,
     insert,
     isfinite,
     isnan,
 )
 from pandas import (
     Timedelta,
-    to_timedelta,
-    concat,
     Series,
     DataFrame,
     Categorical,
-    merge,
     Index,
     MultiIndex,
-    SparseArray,
+    # SparseArray,
     set_option,
+    to_timedelta,
+    to_datetime,
 )
 
 from freqtrade.optimize.backtesting import Backtesting, BacktestResult
@@ -88,7 +85,7 @@ def union_eq(arr: ndarray, vals: List) -> ndarray:
 class HyperoptBacktesting(Backtesting):
 
     empty_results = DataFrame.from_records([], columns=BacktestResult._fields)
-    debug = False
+    debug = True
 
     td_zero = Timedelta(0)
     td_half_timeframe: Timedelta
@@ -121,7 +118,8 @@ class HyperoptBacktesting(Backtesting):
         ]
         # add new columns to allow multi col assignments of new columns
         result_cols = ["close_rate", "sell_reason", "ohlc"]
-        # can't pass the index here because indexes are duplicated with position_stacking, would have to reindex beforehand
+        # can't pass the index here because indexes are duplicated with position_stacking,
+        # would have to reindex beforehand
         events_sell.loc[
             events_sold.index
             if not self.position_stacking
@@ -144,7 +142,9 @@ class HyperoptBacktesting(Backtesting):
         profits = (close_rate - close_rate * self.fee) / (
             open_rate + open_rate * self.fee
         ) - 1
-        trade_duration = Series(events_sell["date"].values - events_buy["date"].values)
+        trade_duration = to_timedelta(
+            Series(events_sell["date"].values - events_buy["date"].values)
+        )
         # replace trade duration of same candle trades with half the timeframe reduce to minutes
         trade_duration.loc[trade_duration == self.td_zero] = self.td_half_timeframe
 
@@ -153,8 +153,8 @@ class HyperoptBacktesting(Backtesting):
                 "pair": events_buy["pair"].values,
                 "profit_percent": profits,
                 "profit_abs": self.config["stake_amount"] * profits,
-                "open_time": events_buy["date"].values,
-                "close_time": events_sell["date"].values,
+                "open_time": to_datetime(events_buy["date"].values),
+                "close_time": to_datetime(events_sell["date"].values),
                 "open_index": events_buy["ohlc"].values,
                 "close_index": events_sell["ohlc"].values,
                 "trade_duration": trade_duration.dt.seconds / 60,
@@ -192,6 +192,8 @@ class HyperoptBacktesting(Backtesting):
         df = self.strategy.advise_buy(df, meta)
         df = self.strategy.advise_sell(df, meta)
         df.fillna({"buy": 0, "sell": 0}, inplace=True)
+        # cast date as intent to prevent TZ conversion when accessing values
+        df["date"] = df["date"].astype(int)
         return df
 
     @staticmethod
@@ -228,12 +230,11 @@ class HyperoptBacktesting(Backtesting):
                 nan_data_pairs.append(pair)
             else:
                 data.extend(apv)
-
         self.pairs = {p: n for n, p in enumerate(advised.keys())}
         # the index shouldn't change after the advise call, so we can take the pre-advised index
         # to create the multiindex where each pair is indexed with max len
         self.n_rows = len(max_df.index.values)
-        self.mi = self._get_multi_index(advised.keys(), max_df.index.values)
+        self.mi = self._get_multi_index(list(advised.keys()), max_df.index.values)
         # take a post advised df for the right columns count as the advise call
         # adds new columns
         df = DataFrame(data, index=self.mi, columns=advised[pair].columns)
@@ -242,7 +243,6 @@ class HyperoptBacktesting(Backtesting):
         # add a column for pairs offsets to make the index unique
         offsets_arr, self.pairs_offset = self._calc_pairs_offsets(df, return_ofs=True)
         self.pairs_ofs_end = self.pairs_offset + array(pairs_end, dtype=int) - 1
-        self.pairs_ofs_end_r = self.pairs_ofs_end + 2
         # loop over the missing data pairs and calculate the point where data ends
         # plus the absolute offset
         self.nan_data_ends = [
@@ -255,7 +255,7 @@ class HyperoptBacktesting(Backtesting):
         )
         return df
 
-    def bought_or_sold(self, df: DataFrame) -> Tuple[DataFrame, DataFrame, bool]:
+    def bought_or_sold(self, df: DataFrame) -> Tuple[DataFrame, bool]:
         """ Set bought_or_sold columns according to buy and sell signals """
         # set bought candles
         # skip if no valid bought candles are found
@@ -320,7 +320,7 @@ class HyperoptBacktesting(Backtesting):
             rep.append(vals[0] - first_bought.at[x.name, "bts_index"] + 1)
             rep.extend(vals[1:] - vals[:-1])
 
-        sold_repeats = []
+        sold_repeats: List = []
         sold.groupby(level=1).apply(repeats, rep=sold_repeats)
         return sold_repeats
 
@@ -452,11 +452,9 @@ class HyperoptBacktesting(Backtesting):
         stoploss_index = []
         stoploss_rate = []
         bought_stoploss_ofs = []
-        last_stoploss_ofs = []
-        last_stoploss = []
+        last_stoploss_ofs: List = []
         # copy cols for faster index accessing
         bofs = bought["ohlc_ofs"].values
-        bohlc = bought["ohlc"].values
         bsold = bought["next_sold_ofs"].values
         bopen = bought["open"].values
         b = 0
@@ -491,7 +489,8 @@ class HyperoptBacktesting(Backtesting):
                 stoploss_rate.append(stoploss_triggered_rate)
                 bought_stoploss_ofs.append(stoploss_bought_ofs)
                 try:
-                    # get the first row where the bought index is higher than the current stoploss index
+                    # get the first row where the bought index is
+                    # higher than the current stoploss index
                     b += bofs[b:].searchsorted(current_ofs, "right")
                     # repeat the stoploss index for the boughts in between the stoploss
                     # and the bought with higher idx
@@ -552,13 +551,14 @@ class HyperoptBacktesting(Backtesting):
 
     def _np_calc_triggered_stoploss(
         self, df: DataFrame, bought: DataFrame, bought_ranges: ndarray,
-    ) -> (ndarray, ndarray):
+    ) -> ndarray:
         """ numpy equivalent of _pd_calc_triggered_stoploss that is more memory efficient """
         # clear up memory
         gc.collect()
         # expand bought ranges into ohlc processed
         ohlc_cols = list(self._columns_indexes(df).values())
-        # prefetch the columns of interest to avoid querying the index over the loop (avoid nd indexes)
+        # prefetch the columns of interest to avoid querying
+        # the index over the loop (avoid nd indexes)
         ohlc_vals = df.iloc[:, ohlc_cols].values
         stoploss_rate = self._calc_stoploss_rate(bought)
 
@@ -648,7 +648,8 @@ class HyperoptBacktesting(Backtesting):
         stoploss = stoploss.loc[
             stoploss["low"].values <= stoploss["stoploss_rate"].values
         ]
-        # filter out duplicate subsequent triggers of the same bought candle as only the first ones matters
+        # filter out duplicate subsequent triggers
+        # of the same bought candle as only the first ones matters
         stoploss = stoploss.loc[
             (
                 stoploss["stoploss_bought_ofs"].values
@@ -658,7 +659,8 @@ class HyperoptBacktesting(Backtesting):
         if not self.position_stacking:
             # filter out "late" stoplosses that wouldn't be applied because a previous stoploss
             # would still be active at that time
-            # since stoplosses are sorted by trigger date, any stoploss having a bought index older than
+            # since stoplosses are sorted by trigger date,
+            # any stoploss having a bought index older than
             # the ohlc index are invalid
             stoploss = stoploss.loc[
                 stoploss["stoploss_bought_ofs"]
@@ -733,7 +735,7 @@ class HyperoptBacktesting(Backtesting):
         bought: DataFrame,
         bought_ranges: ndarray,
         bts_df: DataFrame,
-    ) -> (Index, ndarray):
+    ) -> DataFrame:
 
         # compute all the stoplosses for the buy signals and filter out clear invalids
         stoploss = DataFrame(
@@ -762,8 +764,9 @@ class HyperoptBacktesting(Backtesting):
             bts_df.loc[
                 ~(  # last active stoploss matches the current stoploss, otherwise it's stale
                     (bts_df["stoploss_ofs"].values == bts_df["last_stoploss"].values)
-                    # it must be the first bought matching that stoploss index, in case of subsequent
-                    # boughts that triggers on the same index which wouldn't happen without position stacking
+                    # it must be the first bought matching that stoploss index,
+                    # in case of subsequent boughts that triggers on the same index
+                    # which wouldn't happen without position stacking
                     & (
                         bts_df["last_stoploss"].values
                         != bts_df["last_stoploss"].shift().values
@@ -843,8 +846,9 @@ class HyperoptBacktesting(Backtesting):
             return_counts=True,
         )
         # need to check for membership against the bought candles next_sold_ofs here because
-        # some sold candles can be void if all the preceding bought candles (after the previous sold)
-        # are triggered by a stoploss (otherwise would just be an eq check == Candle.SOLD)
+        # some sold candles can be void if all the preceding bought candles
+        # (after the previous sold) are triggered by a stoploss
+        # (otherwise would just be an eq check == Candle.SOLD)
         events_sell = bts_df.loc[
             bts_df.index.isin(nso) | isfinite(bts_df["stoploss_ofs"].values)
         ]
@@ -861,7 +865,8 @@ class HyperoptBacktesting(Backtesting):
         **kwargs,
     ) -> DataFrame:
         """ NOTE: can't have default values as arguments since it is an overridden function
-        TODO: benchmark if rewriting without use of df masks for readability gives a worthwhile speedup
+        TODO: benchmark if rewriting without use of df masks for
+        readability gives a worthwhile speedup
         """
         df = self.merge_pairs_df(processed)
 
@@ -904,7 +909,12 @@ class HyperoptBacktesting(Backtesting):
         import pickle
 
         # results = self.backtest_stock(
-        #     processed, self.config["stake_amount"], start_date, end_date
+        #     processed,
+        #     self.config["stake_amount"],
+        #     start_date,
+        #     end_date,
+        #     max_open_trades=-1,
+        #     position_stacking=self.position_stacking,
         # )
         results = self.vectorized_backtest(processed, start_date, end_date)
         with open("/tmp/backtest.pkl", "rb+") as fp:

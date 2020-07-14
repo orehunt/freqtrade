@@ -2,7 +2,7 @@ import logging
 import re
 from pathlib import Path
 from shutil import rmtree
-from typing import List, Optional
+from typing import List, Optional, Dict
 
 import numpy as np
 from pandas import DataFrame, read_json, to_datetime, read_parquet
@@ -32,7 +32,7 @@ class ParquetDataHandler(IDataHandler):
         :return: List of Pairs
         """
 
-        _tmp = list(datadir.glob(f"{timeframe}/*"))
+        _tmp: List[str] = list(map(str, datadir.glob(f"{timeframe}/*")))
         # Check if regex found something and only return these results
         return [match[0].replace("_", "/") for match in _tmp if match]
 
@@ -49,7 +49,7 @@ class ParquetDataHandler(IDataHandler):
         filename = self._pair_data_filename(self._datadir, pair, timeframe)
         if len(data) > 0:
             data["month"] = data["date"].dt.year.astype(str) + data["date"].dt.month.astype(str)
-            kwargs = {}
+            kwargs: Dict = {}
             data.to_parquet(str(filename), compression=self._compression, partition_cols=["month"], **kwargs)
 
     def _ohlcv_load(
@@ -114,7 +114,7 @@ class ParquetDataHandler(IDataHandler):
         :param datadir: Directory to search for ohlcv files
         :return: List of Pairs
         """
-        _tmp = list(datadir.glob(f"trades/*"))
+        _tmp = list(map(str, datadir.glob(f"trades/*")))
         # Check if regex found something and only return these results to avoid exceptions.
         return [match[0].replace("_", "/") for match in _tmp if match]
 
