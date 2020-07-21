@@ -1,5 +1,6 @@
 # Load common requirements
 -r requirements-common.txt
+-r requirements-custom.txt
 
 numpy==1.19.0
 pandas==1.0.5
