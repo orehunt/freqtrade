@@ -154,9 +154,9 @@ class HyperoptBacktesting(Backtesting):
 
         open_rate = events_buy["open"].values
         close_rate = events_sell["close_rate"].values
-        profits = (close_rate - close_rate * self.fee) / (
-            open_rate + open_rate * self.fee
-        ) - 1
+
+        profits_abs, profits_prc = self._calc_profits(open_rate, close_rate)
+
         trade_duration = to_timedelta(
             Series(events_sell["date"].values - events_buy["date"].values)
         )
@@ -166,8 +166,8 @@ class HyperoptBacktesting(Backtesting):
         return DataFrame(
             {
                 "pair": events_buy["pair"].values,
-                "profit_percent": profits,
-                "profit_abs": self.config["stake_amount"] * profits,
+                "profit_percent": profits_prc,
+                "profit_abs": profits_abs,
                 "open_time": to_datetime(events_buy["date"].values),
                 "close_time": to_datetime(events_sell["date"].values),
                 "open_index": events_buy["ohlc"].values,
@@ -179,6 +179,27 @@ class HyperoptBacktesting(Backtesting):
                 "sell_reason": events_sell["sell_reason"].values,
             }
         )
+
+    def _calc_profits(self, open_rate: ndarray, close_rate: ndarray, dec=False) -> ndarray:
+        if dec:
+            from decimal import Decimal
+            sa, fee = Decimal(self.config["stake_amount"]), Decimal(self.fee)
+            open_rate = array([Decimal(n) for n in open_rate], dtype=Decimal)
+            close_rate = array([Decimal(n) for n in close_rate], dtype=Decimal)
+        else:
+            sa, fee = self.config["stake_amount"], self.fee
+        am = sa / open_rate
+        open_amount = am * open_rate
+        close_amount = am * close_rate
+        open_price = open_amount + open_amount * fee
+        close_price = close_amount - close_amount * fee
+        profits_abs =  close_price - open_price
+        profits_prc = close_price / open_price - 1
+        if dec:
+            return profits_abs.astype(float), profits_prc.astype(float)
+        else:
+            return profits_abs, profits_prc
+
 
     def null_forward(self, ofs: list, period: int):
         return ofs if ofs is not None else self.pairs_ofs_end + 1 + period
@@ -755,11 +776,11 @@ class HyperoptBacktesting(Backtesting):
         )
 
     @staticmethod
-    def start_pyinst():
+    def start_pyinst(interval=0.001):
         from pyinstrument import Profiler
 
         global profiler
-        profiler = Profiler()
+        profiler = Profiler(interval=interval)
         profiler.start()
 
     @staticmethod
@@ -1118,7 +1139,9 @@ class HyperoptBacktesting(Backtesting):
         else:
             saved_results = self.backtest_stock(processed, **kwargs,)
             results = self.vectorized_backtest(processed)
-        self._cmp_indexes(("open_index", "open_index"), results, saved_results)
+        # self._cmp_indexes(("open_index", "open_index"), results, saved_results)
+        # print(results.iloc[:10], '\n', saved_results.iloc[:10])
+        # return saved_results
         return results
 
     # @staticmethod
