@@ -621,17 +621,18 @@ class FreqtradeBot:
         Sends rpc notification when a buy occured.
         """
         msg = {
-            "type": RPCMessageType.BUY_NOTIFICATION,
-            "exchange": self.exchange.name.capitalize(),
-            "pair": trade.pair,
-            "limit": trade.open_rate,
-            "order_type": order_type,
-            "stake_amount": trade.stake_amount,
-            "stake_currency": self.config["stake_currency"],
-            "fiat_currency": self.config.get("fiat_display_currency", None),
-            "amount": trade.amount,
-            "open_date": trade.open_date or datetime.utcnow(),
-            "current_rate": trade.open_rate_requested,
+            'trade_id': trade.id,
+            'type': RPCMessageType.BUY_NOTIFICATION,
+            'exchange': self.exchange.name.capitalize(),
+            'pair': trade.pair,
+            'limit': trade.open_rate,
+            'order_type': order_type,
+            'stake_amount': trade.stake_amount,
+            'stake_currency': self.config['stake_currency'],
+            'fiat_currency': self.config.get('fiat_display_currency', None),
+            'amount': trade.amount,
+            'open_date': trade.open_date or datetime.utcnow(),
+            'current_rate': trade.open_rate_requested,
         }
 
         # Send the message
@@ -644,17 +645,18 @@ class FreqtradeBot:
         current_rate = self.get_buy_rate(trade.pair, False)
 
         msg = {
-            "type": RPCMessageType.BUY_CANCEL_NOTIFICATION,
-            "exchange": self.exchange.name.capitalize(),
-            "pair": trade.pair,
-            "limit": trade.open_rate,
-            "order_type": order_type,
-            "stake_amount": trade.stake_amount,
-            "stake_currency": self.config["stake_currency"],
-            "fiat_currency": self.config.get("fiat_display_currency", None),
-            "amount": trade.amount,
-            "open_date": trade.open_date,
-            "current_rate": current_rate,
+            'trade_id': trade.id,
+            'type': RPCMessageType.BUY_CANCEL_NOTIFICATION,
+            'exchange': self.exchange.name.capitalize(),
+            'pair': trade.pair,
+            'limit': trade.open_rate,
+            'order_type': order_type,
+            'stake_amount': trade.stake_amount,
+            'stake_currency': self.config['stake_currency'],
+            'fiat_currency': self.config.get('fiat_display_currency', None),
+            'amount': trade.amount,
+            'open_date': trade.open_date,
+            'current_rate': current_rate,
         }
 
         # Send the message
@@ -854,9 +856,7 @@ class FreqtradeBot:
 
         # If buy order is fulfilled but there is no stoploss, we add a stoploss on exchange
         if not stoploss_order:
-
             stoploss = self.edge.stoploss(pair=trade.pair) if self.edge else self.strategy.stoploss
-
             stop_price = trade.open_rate * (1 + stoploss)
 
             if self.create_stoploss_order(trade=trade, stop_price=stop_price, rate=stop_price):
@@ -1196,22 +1196,23 @@ class FreqtradeBot:
         gain = "profit" if profit_ratio > 0 else "loss"
 
         msg = {
-            "type": RPCMessageType.SELL_NOTIFICATION,
-            "exchange": trade.exchange.capitalize(),
-            "pair": trade.pair,
-            "gain": gain,
-            "limit": profit_rate,
-            "order_type": order_type,
-            "amount": trade.amount,
-            "open_rate": trade.open_rate,
-            "current_rate": current_rate,
-            "profit_amount": profit_trade,
-            "profit_ratio": profit_ratio,
-            "sell_reason": trade.sell_reason,
-            "open_date": trade.open_date,
-            "close_date": trade.close_date or datetime.utcnow(),
-            "stake_currency": self.config["stake_currency"],
-            "fiat_currency": self.config.get("fiat_display_currency", None),
+            'type': RPCMessageType.SELL_NOTIFICATION,
+            'trade_id': trade.id,
+            'exchange': trade.exchange.capitalize(),
+            'pair': trade.pair,
+            'gain': gain,
+            'limit': profit_rate,
+            'order_type': order_type,
+            'amount': trade.amount,
+            'open_rate': trade.open_rate,
+            'current_rate': current_rate,
+            'profit_amount': profit_trade,
+            'profit_ratio': profit_ratio,
+            'sell_reason': trade.sell_reason,
+            'open_date': trade.open_date,
+            'close_date': trade.close_date or datetime.utcnow(),
+            'stake_currency': self.config['stake_currency'],
+            'fiat_currency': self.config.get('fiat_display_currency', None),
         }
 
         if "fiat_display_currency" in self.config:
@@ -1238,23 +1239,24 @@ class FreqtradeBot:
         gain = "profit" if profit_ratio > 0 else "loss"
 
         msg = {
-            "type": RPCMessageType.SELL_CANCEL_NOTIFICATION,
-            "exchange": trade.exchange.capitalize(),
-            "pair": trade.pair,
-            "gain": gain,
-            "limit": profit_rate,
-            "order_type": order_type,
-            "amount": trade.amount,
-            "open_rate": trade.open_rate,
-            "current_rate": current_rate,
-            "profit_amount": profit_trade,
-            "profit_ratio": profit_ratio,
-            "sell_reason": trade.sell_reason,
-            "open_date": trade.open_date,
-            "close_date": trade.close_date,
-            "stake_currency": self.config["stake_currency"],
-            "fiat_currency": self.config.get("fiat_display_currency", None),
-            "reason": reason,
+            'type': RPCMessageType.SELL_CANCEL_NOTIFICATION,
+            'trade_id': trade.id,
+            'exchange': trade.exchange.capitalize(),
+            'pair': trade.pair,
+            'gain': gain,
+            'limit': profit_rate,
+            'order_type': order_type,
+            'amount': trade.amount,
+            'open_rate': trade.open_rate,
+            'current_rate': current_rate,
+            'profit_amount': profit_trade,
+            'profit_ratio': profit_ratio,
+            'sell_reason': trade.sell_reason,
+            'open_date': trade.open_date,
+            'close_date': trade.close_date,
+            'stake_currency': self.config['stake_currency'],
+            'fiat_currency': self.config.get('fiat_display_currency', None),
+            'reason': reason,
         }
 
         if "fiat_display_currency" in self.config:

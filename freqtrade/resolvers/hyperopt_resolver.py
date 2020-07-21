@@ -32,32 +32,25 @@ class HyperOptResolver(IResolver):
         Load the custom hyperopt class from config parameter
         :param config: configuration dictionary
         """
-        if not config.get("hyperopt"):
-            raise OperationalException(
-                "No Hyperopt set. Please use `--hyperopt` to specify " "the Hyperopt class to use."
-            )
+        if not config.get('hyperopt'):
+            raise OperationalException("No Hyperopt set. Please use `--hyperopt` to specify "
+                                       "the Hyperopt class to use.")
 
-        hyperopt_name = config["hyperopt"]
+        hyperopt_name = config['hyperopt']
 
-        hyperopt = HyperOptResolver.load_object(
-            hyperopt_name, config, kwargs={"config": config}, extra_dir=config.get("hyperopt_path")
-        )
+        hyperopt = HyperOptResolver.load_object(hyperopt_name, config,
+                                                kwargs={'config': config},
+                                                extra_dir=config.get('hyperopt_path'))
 
-        if not hasattr(hyperopt, "populate_indicators"):
-            logger.warning(
-                "Hyperopt class does not provide populate_indicators() method. "
-                "Using populate_indicators from the strategy."
-            )
-        if not hasattr(hyperopt, "populate_buy_trend"):
-            logger.warning(
-                "Hyperopt class does not provide populate_buy_trend() method. "
-                "Using populate_buy_trend from the strategy."
-            )
-        if not hasattr(hyperopt, "populate_sell_trend"):
-            logger.warning(
-                "Hyperopt class does not provide populate_sell_trend() method. "
-                "Using populate_sell_trend from the strategy."
-            )
+        if not hasattr(hyperopt, 'populate_indicators'):
+            logger.info("Hyperopt class does not provide populate_indicators() method. "
+                        "Using populate_indicators from the strategy.")
+        if not hasattr(hyperopt, 'populate_buy_trend'):
+            logger.info("Hyperopt class does not provide populate_buy_trend() method. "
+                        "Using populate_buy_trend from the strategy.")
+        if not hasattr(hyperopt, 'populate_sell_trend'):
+            logger.info("Hyperopt class does not provide populate_sell_trend() method. "
+                        "Using populate_sell_trend from the strategy.")
         return hyperopt
 
 
