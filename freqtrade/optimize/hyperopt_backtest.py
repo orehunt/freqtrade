@@ -20,9 +20,11 @@ from numpy import (
     full,
     unique,
     insert,
+    append,
     isfinite,
     isnan,
     isin,
+    sign,
 )
 from pandas import (
     Timedelta,
@@ -35,6 +37,7 @@ from pandas import (
     set_option,
     to_timedelta,
     to_datetime,
+    concat,
 )
 
 from freqtrade.optimize.backtesting import Backtesting, BacktestResult
@@ -97,6 +100,14 @@ class HyperoptBacktesting(Backtesting):
 
     # TODO: cast columns for indexing to int (since they are inferred as floats)
     df_cols = ["date", "open", "high", "low", "close", "volume", "ofs"]
+    sold_cols = [
+        "bought_or_sold",
+        "stoploss_ofs",
+        "stoploss_bought_ofs",
+        "last_stoploss",
+        "next_sold_ofs",
+        "pair",
+    ]
 
     def __init__(self, config):
         if config.get("backtesting_engine") == "vectorized":
@@ -136,7 +147,7 @@ class HyperoptBacktesting(Backtesting):
         events_sell.loc[
             events_sold.index
             if not self.position_stacking
-            else events_sell.index.isin(events_sold.index.drop_duplicates()),
+            else events_sell.index.isin(unique(events_sold.index.values)),
             result_cols,
         ] = [
             events_sold["open"].values,
@@ -162,7 +173,6 @@ class HyperoptBacktesting(Backtesting):
         )
         # replace trade duration of same candle trades with half the timeframe reduce to minutes
         trade_duration.loc[trade_duration == self.td_zero] = self.td_half_timeframe
-
         return DataFrame(
             {
                 "pair": events_buy["pair"].values,
@@ -203,8 +213,18 @@ class HyperoptBacktesting(Backtesting):
         else:
             return profits_abs, profits_prc
 
-    def null_forward(self, ofs: list, period: int):
-        return ofs if ofs is not None else self.pairs_ofs_end + period
+    def shifted_offsets(self, ofs: ndarray, period: int):
+        s = sign(period)
+        indexes = []
+        if ofs is None:
+            ofs = self.pairs_ofs_end
+        # if s > 0:
+        #     ofs = ofs[:-1]
+        # else:  # ignore s == 0...
+        #     ofs = ofs[1:]
+        for i in range(0, period, s):
+            indexes.extend(ofs + i)
+        return indexes
 
     def _shift_paw(
         self,
@@ -212,25 +232,43 @@ class HyperoptBacktesting(Backtesting):
         period=1,
         fill_v=nan,
         null_v=nan,
-        ofs=None,
+        diff_arr: Union[None, Series] = None,
     ) -> Union[DataFrame, Series]:
-        """ pair aware shifting nulls rows that cross over the next pair data in concat data """
-        # shifted = data.shift(period, fill_value=fill_v)
+        """ pair aware shifting nulls rows that cross over the next pair data"""
+        if diff_arr is None:
+            ofs = None
+        else:
+            # shifted_diff = diff_arr.shift(period)
+            # shifted_diff.fillna(
+            #     method=("backfill" if period > 0 else "pad"), inplace=True
+            # )
+            # ofs = self._diff_indexes(shifted_diff.values) - period
+            ofs = self._diff_indexes(diff_arr.values)
         shifted = data.shift(period, fill_value=fill_v)
-        shifted.iloc[self.null_forward(ofs, period)] = null_v
+        shifted.iloc[self.shifted_offsets(ofs, period)] = null_v
         return shifted
 
     @staticmethod
-    def _diff_indexes(arr: ndarray, with_start=False) -> ndarray:
+    def _diff_indexes(arr: ndarray, with_start=False, with_end=False) -> ndarray:
         """ returns the indexes where consecutive values are not equal,
         used for finding pairs ends """
-        return where(arr != insert(arr[:-1], 0, nan if with_start else arr[0]))[0]
+        if with_start:
+            if with_end:
+                raise OperationalException("with_start and with_end are exclusive")
+            return where(arr != insert(arr[:-1], 0, nan))[0]
+        elif with_end:
+            if with_start:
+                raise OperationalException("with_end and with_start are exclusive")
+            return where(arr != append(arr[1:], nan))[0]
+        else:
+            return where(arr != insert(arr[:-1], 0, arr[0]))[0]
 
     def advise_pair_df(self, df: DataFrame, pair: str) -> DataFrame:
         """ Execute strategy signals and return df for given pair """
         meta = {"pair": pair}
         df["buy"] = 0
         df["sell"] = 0
+        df["pair"] = pair
 
         df = self.strategy.advise_buy(df, meta)
         df = self.strategy.advise_sell(df, meta)
@@ -256,50 +294,31 @@ class HyperoptBacktesting(Backtesting):
         max_len = 0
         pairs_end = []
         nan_data_pairs = []
+        pairs = {}
 
         # get the df with the longest ohlc data since all the pairs will be padded to it
-        max_df = max(processed.values(), key=len)
-        max_len = len(max_df)
+        pair_counter = 0
         for pair, df in processed.items():
             # make sure to copy the df to not clobber the source data since it is accessed globally
             advised[pair] = self.advise_pair_df(df.copy(), pair)
-            apv = advised[pair].values
-            lapv = len(apv)
-            pairs_end.append(lapv)
-            if lapv < max_len:
-                # pad shorter data, with an empty array of same shape (columns)
-                data.extend(
-                    concatenate([apv, full((max_len - lapv, apv.shape[1]), nan)])
-                )
-                nan_data_pairs.append(pair)
-            else:
-                data.extend(apv)
-        self.pairs = {p: n for n, p in enumerate(advised.keys())}
+            pairs[pair] = pair_counter
+            pair_counter += 1
+        self.pairs = pairs
         # the index shouldn't change after the advise call, so we can take the pre-advised index
         # to create the multiindex where each pair is indexed with max len
-        self.n_rows = len(max_df.index.values)
-        self.mi = self._get_multi_index(list(advised.keys()), max_df.index.values)
-        # take a post advised df for the right columns count as the advise call
-        # adds new columns
-        df = DataFrame(data, index=self.mi, columns=advised[pair].columns)
+        df = concat(advised.values(), copy=False)
         # set startup offset from the first index (should be equal for all pairs)
-        self.startup_offset = df.index.get_level_values(0)[0]
+        self.startup_offset = df.index[0]
         # add a column for pairs offsets to make the index unique
         offsets_arr, self.pairs_offset = self._calc_pairs_offsets(df, return_ofs=True)
-        self.pairs_ofs_end = self.pairs_offset + array(pairs_end, dtype=int) - 1
+        self.pairs_ofs_end = append(self.pairs_offset[1:] - 1, len(df) - 1)
         # loop over the missing data pairs and calculate the point where data ends
         # plus the absolute offset
-        self.nan_data_ends = [
-            self.pairs_ofs_end[self.pairs[p]] + 1 for p in nan_data_pairs
-        ]
-        # don't null when all the pairs have max len candles
-        if len(self.nan_data_ends) == 0:
-            self.null_forward = lambda ofs, period: []
         df["ofs"] = Categorical(offsets_arr, self.pairs_offset)
         # could as easily be arange(len(df)) ...
-        df["ohlc_ofs"] = (
-            df.index.get_level_values(0).values + offsets_arr - self.startup_offset
-        )
+        df["ohlc_ofs"] = df.index.values + offsets_arr - self.startup_offset
+        df["ohlc"] = df.index.values
+        df.set_index("ohlc_ofs", inplace=True, drop=False)
         return df
 
     def bought_or_sold(self, df: DataFrame) -> Tuple[DataFrame, bool]:
@@ -308,12 +327,14 @@ class HyperoptBacktesting(Backtesting):
         # skip if no valid bought candles are found
         # df["bought_or_sold"] = (df["buy"] - df["sell"]).groupby(level=1).shift().values
         df["bought_or_sold"] = self._shift_paw(
-            df["buy"] - df["sell"], fill_v=Candle.NOOP,
+            df["buy"] - df["sell"],
+            fill_v=Candle.NOOP,
+            null_v=Candle.NOOP,
+            diff_arr=df["pair"],
         ).values
 
-        df.loc[df["bought_or_sold"].values == 1, "bought_or_sold"] = Candle.BOUGHT
+        df["bought_or_sold"].replace({1: Candle.BOUGHT, -1: Candle.SOLD}, inplace=True)
         # set sold candles
-        df.loc[df["bought_or_sold"].values == -1, "bought_or_sold"] = Candle.SOLD
         df["bought_or_sold"] = Categorical(
             df["bought_or_sold"].values, categories=list(map(int, Candle))
         )
@@ -324,7 +345,7 @@ class HyperoptBacktesting(Backtesting):
         # Since bought_or_sold is shifted, null the row after the last non-nan one
         # as it doesn't have data, exclude pairs which data matches the max_len since
         # they have no nans
-        df.iloc[self.nan_data_ends, bos_loc] = Candle.NOOP
+        # df.iloc[self.nan_data_ends, bos_loc] = Candle.NOOP
         return df, len(df.loc[df["bought_or_sold"].values == Candle.BOUGHT]) < 1
 
     def boughts_to_sold(self, df: DataFrame) -> DataFrame:
@@ -337,9 +358,6 @@ class HyperoptBacktesting(Backtesting):
                 df["bought_or_sold"].values, [Candle.BOUGHT, Candle.SOLD, Candle.END,],
             )
         ]
-        # bos_df = df.loc[
-        # isin(df["bought_or_sold"].values, [Candle.BOUGHT, Candle.SOLD, Candle.END,], assume_unique=True)
-        # ]
         bos_df = bos_df.loc[
             # exclude duplicate sold
             ~(
@@ -349,16 +367,21 @@ class HyperoptBacktesting(Backtesting):
                     # .groupby(level=1)
                     # .shift(fill_value=Candle.SOLD)
                     # .values
-                    self._shift_paw(
-                        bos_df["bought_or_sold"],
-                        fill_v=Candle.SOLD,
-                        null_v=Candle.SOLD,
-                        ofs=self._diff_indexes(bos_df.index.get_level_values(1)),
-                    ).values
-                    == Candle.SOLD
+                    (
+                        self._shift_paw(
+                            bos_df["bought_or_sold"],
+                            fill_v=Candle.SOLD,
+                            null_v=Candle.NOOP,
+                            diff_arr=bos_df["pair"],
+                        ).values
+                        == Candle.SOLD
+                    )
+                    # don't sell different pairs
+                    | (bos_df["pair"].values != bos_df["pair"].shift().values)
                 )
             )
         ]
+        bos_df.reset_index(inplace=True, drop=True)
         return bos_df
 
     def _pd_calc_sold_repeats(self, bts_df: DataFrame, sold: DataFrame) -> list:
@@ -398,7 +421,6 @@ class HyperoptBacktesting(Backtesting):
     def set_sold(self, df: DataFrame) -> DataFrame:
         # recompose the multi index swapping the ohlc count with a contiguous range
         bts_df = self.boughts_to_sold(df)
-        bts_df.reset_index(inplace=True)
         # align sold to bought
         sold = bts_df.loc[
             union_eq(bts_df["bought_or_sold"].values, [Candle.SOLD, Candle.END],)
@@ -412,6 +434,7 @@ class HyperoptBacktesting(Backtesting):
         # for stoploss calculation, consider the last candle of each pair as a sell,
         # even thought the bought will be valid only if an amount condition is triggered
         bts_df["next_sold_ofs"] = repeat(sold["ohlc_ofs"].values, self.sold_repeats)
+        # could also do this by setting by location (sold.index) and backfilling, but this is faster
         return bts_df, sold
 
     def set_stoploss(self, df: DataFrame) -> DataFrame:
@@ -605,25 +628,21 @@ class HyperoptBacktesting(Backtesting):
             df[c] = df[c].values - ofs_vals + self.startup_offset
 
     def _calc_pairs_offsets(
-        self, df: DataFrame, group=None, return_ofs=False
+        self, df: DataFrame, group="pair", return_ofs=False
     ) -> ndarray:
-        # all the pairs with df candles
-        gb = df.groupby(group, sort=False) if group else df.groupby(level=1, sort=False)
-        # pairs should keep order, make sure groupby sort is False
-        df_pairs = [self.pairs[p] for p in gb.groups.keys()]
-        # since pairs are concatenated, their candles start at their ordered position
-        pairs_offset = [self.n_rows * n for n in df_pairs]
-        pairs_offset_arr = repeat(pairs_offset, gb.size().values)
+        # since pairs are concatenated orderly diffing on the previous rows
+        # gives the offset of each pair data
+        pairs_offset = self._diff_indexes(df[group].values, with_start=True)
+        # add the last span at the end of the repeats, since we are working with starting offsets
+        pairs_ofs_repeats = append(
+            pairs_offset[1:] - pairs_offset[:-1], len(df) - pairs_offset[-1]
+        )
+        # each pair queried at pairs_offset indexes should be unique
+        pairs_offset_arr = repeat(pairs_offset, pairs_ofs_repeats)
         if return_ofs:
             return pairs_offset_arr, pairs_offset
         else:
             return pairs_offset_arr - self.startup_offset
-
-    def _columns_indexes(self, df: DataFrame) -> Dict[str, int]:
-        cols_idx = {}
-        for col in ("open", "low", "ohlc_ofs"):
-            cols_idx[col] = df.columns.get_loc(col)
-        return cols_idx
 
     def _np_calc_triggered_stoploss(
         self, df: DataFrame, bought: DataFrame, bought_ranges: ndarray,
@@ -632,7 +651,6 @@ class HyperoptBacktesting(Backtesting):
         # clear up memory
         # gc.collect()
         # expand bought ranges into ohlc processed
-        # ohlc_cols = list(self._columns_indexes(df).values())
         # prefetch the columns of interest to avoid querying
         # the index over the loop (avoid nd indexes)
         ohlc_vals = df[["open", "low", "ohlc_ofs", "date"]].values
@@ -870,9 +888,9 @@ class HyperoptBacktesting(Backtesting):
             ]
             # loop over the filtered boughts to determine order of execution
             boughts = bts_df["bought_or_sold"].values == Candle.BOUGHT
-            bts_df.loc[boughts, "last_stoploss"] = self._last_stoploss_numba(
+            bts_df.loc[boughts, "last_stoploss"] = array(self._last_stoploss_numba(
                 bts_df.loc[boughts]
-            )
+            )).astype(int)
             # fill the last_stoploss column for non boughts
             bts_df["last_stoploss"].fillna(method="pad", inplace=True)
             bts_df.loc[
@@ -925,9 +943,10 @@ class HyperoptBacktesting(Backtesting):
         if self.stoploss_enabled:
             bts_ls_s1 = self._shift_paw(
                 bts_df["last_stoploss"].astype(int),
-                ofs=self._diff_indexes(bts_df["pair"].values),
+                diff_arr=bts_df["pair"],
+                fill_v=-1,
+                null_v=-1,
             )
-            self.start_pyinst()
             events_buy = bts_df.loc[
                 (bts_df["bought_or_sold"].values == Candle.BOUGHT)
                 & (
@@ -939,6 +958,7 @@ class HyperoptBacktesting(Backtesting):
                     # if the previous candle is SOLD it is covered by the previous case
                     # this also covers the case the previous candle == Candle.END
                     | (bts_df["last_stoploss"].values != bts_ls_s1)
+                    | (bts_df["pair"].values != bts_df["pair"].shift().values)
                 )
                 # exclude the last boughts that are not stoploss and which next sold is
                 # END sold candle
@@ -947,7 +967,6 @@ class HyperoptBacktesting(Backtesting):
                     & isin(bts_df["next_sold_ofs"].values, self.pairs_ofs_end)
                 )
             ]
-            self.stop_pyinst()
             events_sell = bts_df.loc[
                 (
                     (bts_df["bought_or_sold"].values == Candle.SOLD)
@@ -1056,8 +1075,24 @@ class HyperoptBacktesting(Backtesting):
         try:
             assert len(events_buy) == len(events_sell)
         except AssertionError:
+            # find locations where a sell is after two or more buys
+            for n, i in enumerate(events_buy.index.values[1:], 1):
+                nxt = (events_sell.iloc[n].name >= i) & (
+                    events_sell.iloc[n - 1].name < i
+                )
+                if not nxt:
+                    print(events_buy.iloc[n])
+                    print(events_buy.iloc[n - 1 : n + 1])
+                    print(events_sell.iloc[n - 1 : n + 1], end="\n")
+                    raise OperationalException("Buy and sell events not matching")
+                    return
+            events_buy, events_sell = (
+                events_buy[self.df_cols],
+                events_sell[self.df_cols],
+            )
             print(len(events_buy), len(events_sell))
-            print(events_buy.iloc[-10:], events_sell.iloc[-10:])
+            print(events_buy.iloc[:3], "\n", events_sell.iloc[:3])
+            print(events_buy.iloc[-3:], "\n", events_sell.iloc[-3:])
             raise OperationalException("Buy and sell events not matching")
 
     def _debug_opts(self):
@@ -1103,6 +1138,8 @@ class HyperoptBacktesting(Backtesting):
         filter_fsell=True,
         print_inc=True,
     ):
+        """ find all the non matching indexes between results, differentiate between not present (to include)
+        and invalid (to exclude) """
         to_inc, to_exc = [], []
         key_0 = where[0]
         key_1 = where[1]
@@ -1111,10 +1148,14 @@ class HyperoptBacktesting(Backtesting):
 
         if len(results) == 0 and len(saved_results) == 0:
             return
+        # we don't consider missing force sells as wrong
         if filter_fsell:
-            end_candles = self.events.loc[
-                self.events["next_sold_ofs"].isin(self.pairs_ofs_end)
-            ]["ohlc"].values
+            if "events" in dir(self):
+                end_candles = self.events.loc[
+                    self.events["next_sold_ofs"].isin(self.pairs_ofs_end)
+                ]["ohlc"].values
+            else:
+                end_candles = []
             results = results.loc[
                 (results["sell_reason"].values != SellType.FORCE_SELL)
                 & ~(results[key_0].isin(end_candles))
@@ -1124,8 +1165,10 @@ class HyperoptBacktesting(Backtesting):
                 & ~(saved_results[key_1].isin(end_candles).values)
             ]
 
+        # stock results are sorted, so align indexes
         results = results.sort_values(by=["pair", key_0])
         saved_results = saved_results.sort_values(by=["pair", key_1])
+        # have to match indexes to the correct pairs, so make sets of (index, pair) tuples
         where_0 = set(zip(results[key_0].astype(int).values, results["pair"].values,))
         where_1 = set(zip(saved_results[key_1].values, saved_results["pair"].values,))
         results[key_pair_0], saved_results[key_pair_1] = where_0, where_1
@@ -1152,6 +1195,8 @@ class HyperoptBacktesting(Backtesting):
                 to_exc[0] if len(to_exc) > 0 else None,
                 f"({len(to_exc)})",
             )
+        # print the first event that is wrong and the range of the
+        # boughts_to_sold df (saved in self.events) that includes it
         if to_inc and print_inc:
             first = to_inc[0]
         elif to_exc:
@@ -1160,7 +1205,10 @@ class HyperoptBacktesting(Backtesting):
             first = None
 
         if first is not None:
-            idx = (self.events["ohlc"].values == int(first[0])).argmax()
+            idx = (
+                (self.events["ohlc"].values == int(first[0]))
+                & (self.events["pair"].values == first[1])
+            ).argmax()
             print(
                 self.events.iloc[max(0, idx - 50) : min(idx + 50, len(self.events))][
                     self.cols
@@ -1176,11 +1224,15 @@ class HyperoptBacktesting(Backtesting):
 
     def _wrap_backtest(self, processed: Dict[str, DataFrame], **kwargs,) -> DataFrame:
         """ debugging """
+        # results to debug
         results = None
+        # results to compare against
         saved_results = None
+        # if some epoch far down the (reproducible) iteration needs debugging set it here
         check_at = 0
         if check_at and self._check_counter(check_at):
             return self.empty_results
+        # if testing only one epoch use "store" once then set it to "load"
         cache = ""
         if cache == "load":
             results = self.vectorized_backtest(processed)
