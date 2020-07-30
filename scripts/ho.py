@@ -216,8 +216,6 @@ class Main:
         if "buy" in self.spaces:
             self.config["ask_strategy"]["prefer_sell_signal"] = False
             logger.warn("Disabling prefer_sell_signal")
-            self.config["ask_strategy"]["ignore_roi_if_buy_signal"] = True
-            logger.warn("Enabling ignore_roi_if_buy_signal")
         elif "sell" in self.spaces:
             self.config["ask_strategy"]["prefer_sell_signal"] = True
             logger.warn("Enabling prefer_sell_signal")

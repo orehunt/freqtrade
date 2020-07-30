@@ -227,6 +227,10 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         return spaces
 
     def _set_params(self, params_dict: Dict[str, Any] = None):
+        if self.has_space("roi"):
+            self.backtesting.strategy.amounts["roi"] = self.custom_hyperopt.generate_roi_table(
+                params_dict
+            )
         if self.has_space("buy"):
             self.backtesting.strategy.advise_buy = self.custom_hyperopt.buy_strategy_generator(
                 params_dict
