@@ -17,6 +17,7 @@ from numpy import (
     ndarray,
     array,
     where,
+    argwhere,
     transpose,
     maximum,
     full,
@@ -33,6 +34,7 @@ from numpy import (
     arange,
     iinfo,
     int32,
+    zeros,
 )
 from pandas import (
     Timedelta,
@@ -498,7 +500,8 @@ class HyperoptBacktesting(Backtesting):
         # get the index ranges of each bought->sold spans
         bought_ranges = bought["next_sold_ofs"].values - bought["ohlc_ofs"].values
         # Use the first version only if the expanded array would take < ~500MB per col
-        if bought_ranges.sum() < 10e6:
+        # if bought_ranges.sum() < 10e6:
+        if False:
             self.calc_type = True
             # intervals are short compute everything in one round
             bts_df = self._pd_select_triggered_events(df, bought, bought_ranges, bts_df)
@@ -536,7 +539,7 @@ class HyperoptBacktesting(Backtesting):
         ohlc_low = df["low"].values
         ohlc_ofs = df["ohlc_ofs"].values
         ohlc_date = df["date"].values
-        ohlc_ofs_start = 0
+        ofs_start = 0
         ohlc_idx = df.index.get_level_values(0)
         end_ofs = ohlc_ofs[-1]
 
@@ -544,11 +547,9 @@ class HyperoptBacktesting(Backtesting):
             # calculate the rate from the bought candle
             stoploss_triggered_rate = self._calc_stoploss_rate_value(bopen[b])
             # check trigger for the range of the current bought
-            ohlc_ofs_start += ohlc_ofs[ohlc_ofs_start:].searchsorted(
-                trigger_bought_ofs, "left"
-            )
+            ofs_start += ohlc_ofs[ofs_start:].searchsorted(trigger_bought_ofs, "left")
             stoploss_triggered = (
-                ohlc_low[ohlc_ofs_start : ohlc_ofs_start + bought_ranges[b]]
+                ohlc_low[ofs_start : ofs_start + bought_ranges[b]]
                 <= stoploss_triggered_rate
             )
             # get the position where stoploss triggered relative to the current bought slice
@@ -587,88 +588,164 @@ class HyperoptBacktesting(Backtesting):
         sold: DataFrame,
         bts_df: DataFrame,
     ):
-        stoploss_index = []
-        stoploss_rate = []
-        trigger_date = []
-        bought_trigger_ofs = []
-        last_trigger_ofs: List = []
+        col_names = [
+            "trigger_ofs",
+            "trigger_date",
+            "trigger_bought_ofs",
+            "last_trigger_ofs",
+        ]
+        range_names = []
+        # the number of columns for the shape of the trigger range
+        trg_n_cols = 0
+        if self.stoploss_enabled:
+            col_names.extend(["stoploss_rate", "stoploss_triggered"])
+            trg_stoploss_ofs = trg_n_cols
+            trg_n_cols += 1
+            range_names.append("stoploss_triggered")
+        if self.roi_enabled:
+            col_names.extend(["roi_profit", "roi_triggered"])
+            self.roi_timeouts, self.roi_values = self._filter_roi({}, bought)
+            roi_timeouts = array(list(self.roi_timeouts.keys()))
+            n_timeouts = len(roi_timeouts)
+            # nan indexes are relative, so can be pre calculated
+            nan_early_idx = array(
+                [
+                    n_timeouts * f + n
+                    for n, t in enumerate(roi_timeouts)
+                    for f in range(t)
+                ]
+            )
+            # transpose roi values such that we can operate with profits ndarray
+            roi_values = array(self.roi_values).reshape((len(self.roi_values), 1))
+            trg_roi_ofs = trg_n_cols
+            trg_n_cols += n_timeouts
         # copy cols for faster index accessing
         bofs = bought["ohlc_ofs"].values
         bsold = bought["next_sold_ofs"].values
         bopen = bought["open"].values
         b = 0
-        trigger_bought_ofs = bofs[b]
+        bought_ofs = bofs[b]
 
         ohlc_low = df["low"].values
+        ohlc_high = df["high"].values
         ohlc_ofs = df["ohlc_ofs"].values
         ohlc_date = df["date"].values
-        ohlc_ofs_start = 0
-        ohlc_idx = df.index.get_level_values(0)
-        current_ofs = trigger_bought_ofs
+        ofs_start = 0
+        current_ofs = bought_ofs
         end_ofs = ohlc_ofs[-1]
 
-        while trigger_bought_ofs < end_ofs:
-            # calculate the rate from the bought candle
-            stoploss_triggered_rate = self._calc_stoploss_rate_value(bopen[b])
+        col, roi_cols = self._columns_indexes(col_names, [], [], roi_timeouts)
+        roi_idx = tuple(roi_cols.values())
+        trg_col, trg_roi_cols = self._columns_indexes(range_names, [], [], roi_timeouts)
+        trg_roi_idx = tuple(trg_roi_cols.values())
+        triggers = zeros(shape=(len(bought), len(col_names)))
+        triggers[:, col.last_trigger_ofs] = -1
+        triggers[:, col.trigger_ofs] = nan
+        last_trigger = 0
+
+        while bought_ofs < end_ofs:
             # check trigger for the range of the current bought
-            ohlc_ofs_start += ohlc_ofs[ohlc_ofs_start:].searchsorted(
-                trigger_bought_ofs, "left"
-            )
-            stoploss_triggered = (
-                ohlc_low[ohlc_ofs_start : ohlc_ofs_start + bought_ranges[b]]
-                <= stoploss_triggered_rate
-            )
-            # get the position where stoploss triggered relative to the current bought slice
-            stop_max_idx = stoploss_triggered.argmax()
-            # check that the index returned by argmax is True
-            if stoploss_triggered[stop_max_idx]:
-                # set the offset of the triggered stoploss index
-                current_ofs = trigger_bought_ofs + stop_max_idx
-                stop_ohlc_idx = ohlc_idx[current_ofs]
-                stoploss_index.append(stop_ohlc_idx)
-                trigger_date.append(ohlc_date[current_ofs])
-                stoploss_rate.append(stoploss_triggered_rate)
-                bought_trigger_ofs.append(trigger_bought_ofs)
+            br = bought_ranges[b]
+            ofs_start += ohlc_ofs[ofs_start:].searchsorted(bought_ofs, "left")
+            ofs_stop = ofs_start + br
+            trg_range = ndarray(shape=(br, trg_n_cols))
+
+            if self.stoploss_enabled:
+                # calculate the rate from the bought candle
+                stoploss_triggered_rate = self._calc_stoploss_rate_value(bopen[b])
+                trg_range[:, trg_col.stoploss_triggered] = (
+                    ohlc_low[ofs_start:ofs_stop] <= stoploss_triggered_rate
+                )
+            if self.roi_enabled:
+                cur_profits = self._calc_profits(
+                    bopen[b], ohlc_high[ofs_start:ofs_stop]
+                )
+                # trg_range[:, trg_roi_idx] = (cur_profits >= roi_values).swapaxes(0, 1)
+                # get a view of the roi triggers because we need to nan indexes
+                # relative to (flattened) roi triggers only
+                roi_triggers = (cur_profits >= roi_values).swapaxes(0, 1).flatten()
+                # NOTE: clip nan_early_idx to the length of the bought_range
+                # NOTE: use False, not nan, since bool(nan) == True
+                roi_triggers[nan_early_idx[nan_early_idx <= br * trg_n_cols]] = False
+                trg_range[:, trg_roi_idx] = roi_triggers.reshape(br, n_timeouts)
+            # apply argmax over axis 0, such that we get the first timeframe
+            # where a trigger happened (argmax of each column)
+            trg_first_idx = trg_range.argmax(axis=0)
+            # filter out columns that have no true trigger, flatten because argwhere
+            # preserve the shape, and truths are picked on different rows per each column
+            valid_cols = argwhere(trg_range[trg_first_idx, arange(trg_n_cols)]).flatten()
+            # check that it is actually True
+            if len(valid_cols):
+                # get the column index that triggered first row sie
+                trg_first = trg_first_idx[valid_cols].argmin()
+                # lastly get the trigger offset from the index of the first valid column
+                trg_ofs = trg_first_idx[valid_cols[trg_first]]
+                if trg_first == trg_col.stoploss_triggered:
+                    # print("stoploss", bought_ofs, b)
+                    # exit()
+                    triggers[b, col.stoploss_triggered] = True
+                    triggers[b, col.stoploss_rate] = stoploss_triggered_rate
+                elif trg_first in trg_roi_idx:
+                    triggers[b, col.roi_triggered] = True
+                    # NOTE: scaletrg_first by how many preceding columns (stoploss,trailing)
+                    # there are before roi columns, in order to get the offset
+                    # relative to only the (ordered) roi columns
+                    triggers[b, col.roi_profit] = roi_values[trg_first - 1]
+                current_ofs = bought_ofs + trg_ofs
+                trg_ohlc_idx = ohlc_ofs[current_ofs]
+                triggers[b, col.trigger_ofs] = trg_ohlc_idx
+                triggers[b, col.trigger_date] = ohlc_date[current_ofs]
+                triggers[b, col.trigger_bought_ofs] = bought_ofs
                 try:
+                    last_trigger = b
                     # get the first row where the bought index is
                     # higher than the current stoploss index
                     b += bofs[b:].searchsorted(current_ofs, "right")
-                    # repeat the stoploss index for the boughts in between the stoploss
+                    # repeat the trigger index for the boughts in between the trigger
                     # and the bought with higher idx
-                    last_trigger_ofs.extend(
-                        [stop_ohlc_idx] * (b - len(last_trigger_ofs))
-                    )
-                    trigger_bought_ofs = bofs[b]
+                    triggers[last_trigger:b, col.last_trigger_ofs] = trg_ohlc_idx
+                    bought_ofs = bofs[b]
                 except IndexError:
                     break
+                trigger = False
             else:  # if stoploss did not trigger, jump to the first bought after next sold idx
                 try:
+                    # last_b = b
                     b += bofs[b:].searchsorted(bsold[b], "right")
-                    last_trigger_ofs.extend([-1] * (b - len(last_trigger_ofs)))
-                    trigger_bought_ofs = bofs[b]
+                    bought_ofs = bofs[b]
                 except IndexError:
                     break
-        # pad the last stoploss array with the remaining boughts
-        last_trigger_ofs.extend([-1] * (len(bought) - len(last_trigger_ofs)))
         # set the index to the offset and add the columns to set the stoploss
         # data points on the relevant boughts
         bts_df.set_index("ohlc_ofs", inplace=True)
-        stoploss_cols = [
+        trigger_names = [
             "trigger_ofs",
-            "stoploss_rate",
-            "last_trigger",
             "trigger_date",
+            "trigger_bought_ofs",
+            "last_trigger",
         ]
-        bts_df = bts_df.reindex(columns=[*bts_df.columns, *stoploss_cols], copy=False)
-        bts_df.loc[bought["ohlc_ofs"], "last_trigger"] = last_trigger_ofs
-        bts_df.loc[bought_trigger_ofs, stoploss_cols] = [
-            [stoploss_index],
-            [stoploss_rate],
-            [stoploss_index],
-            [trigger_date],
+        trigger_vals = [
+            col.trigger_ofs,
+            col.trigger_date,
+            col.trigger_bought_ofs,
+            col.last_trigger_ofs,
         ]
+        if self.stoploss_enabled:
+            trigger_names.extend(["stoploss_rate", "stoploss_triggered"])
+            trigger_vals.extend([col.stoploss_rate, col.stoploss_triggered])
+        if self.roi_enabled:
+            trigger_names.extend(["roi_profit", "roi_triggered"])
+            trigger_vals.extend([col.roi_profit, col.roi_triggered])
+        bts_df = bts_df.reindex(columns=[*bts_df.columns, *trigger_names], copy=False)
+        bts_df.loc[bought["ohlc_ofs"], trigger_names] = triggers[:, trigger_vals]
         bts_df["last_trigger"].fillna(-1, inplace=True)
-        return bts_df
+        return bts_df.astype(
+            {
+                "stoploss_triggered": "bool",
+                "roi_triggered": "bool",
+                "roi_profit": "float64",
+            }
+        )
 
     def _remove_pairs_offsets(self, df: DataFrame, cols: List):
         ofs_vals = df["ofs"].values.tolist()
@@ -730,7 +807,7 @@ class HyperoptBacktesting(Backtesting):
             post_cols.extend(["roi_profit", "roi_triggered"])
             post_types.extend(["float64", "float32"])
         expd_cols_n = df_cols_n + len(bought_data)
-        col, roi_cols = self._expd_data_columns(
+        col, roi_cols = self._columns_indexes(
             df_cols, bought_data.keys(), post_cols, roi_timeouts
         )
         tot_cols_n = expd_cols_n + len(post_cols)
@@ -1078,12 +1155,12 @@ class HyperoptBacktesting(Backtesting):
         # gc.collect()
         return bts_df
 
-    def _expd_data_columns(
+    def _columns_indexes(
         self,
         df_cols: List[str],
         bought_cols: List[str],
         post_cols: List[str],
-        roi_timeouts: Dict[int, int],
+        roi_timeouts: List[int],
     ) -> Tuple:
         col = {}
         n_c = 0
@@ -1153,8 +1230,8 @@ class HyperoptBacktesting(Backtesting):
 
     def split_events(self, bts_df: DataFrame) -> Tuple[DataFrame, DataFrame]:
         ## debugging
-        # if self.debug:
-        # self.events = bts_df
+        if self.debug:
+            self.events = bts_df
 
         if self.stoploss_enabled:
             bts_ls_s1 = self._shift_paw(
@@ -1192,6 +1269,7 @@ class HyperoptBacktesting(Backtesting):
                 # and stoplosses (all candles with notna trigger_ofs should be valid)
                 | (isfinite(bts_df["trigger_ofs"].values))
             ]
+            # self._cmp_indexes(("ohlc", "close_index"), events_sell, self._load_results(), filter_fsell=False, ex=True)
         else:
             events_buy = bts_df.loc[
                 (bts_df["bought_or_sold"].values == Candle.BOUGHT)
@@ -1326,6 +1404,7 @@ class HyperoptBacktesting(Backtesting):
             "trigger_bought_ofs",
             "trigger_ofs",
             "trigger_ofs_b",
+            "stoploss_triggered",
             "stoploss_rate",
             "roi_profit",
             "roi_triggered",
