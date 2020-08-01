@@ -769,6 +769,7 @@ class HyperoptBacktesting(Backtesting):
             self.roi_timeouts, self.roi_values = self._filter_roi({}, bought)
             roi_timeouts = list(self.roi_timeouts.keys())
 
+        # order matters
         col_names = df_cols + list(bought_data.keys()) + post_cols
         expd_cols_n = df_cols_n + len(bought_data)
         col, roi_cols = self._columns_indexes(col_names, roi_timeouts)
@@ -805,17 +806,19 @@ class HyperoptBacktesting(Backtesting):
             cur_profits = self._calc_profits(
                 data[:, col.bought_open], data[:, col.high]
             )
-            for n, to in enumerate(roi_timeouts):
-                # roi rates index null overrides based on timeouts
-                # exclude indexes that exceed the maximum length of the expd array
+            # roi rates index null overrides based on timeouts
+            # exclude indexes that exceed the maximum length of the expd array
+            nan_early_roi_idx = {}
+            for to in roi_timeouts:
                 to_indexes = bought_starts + to
-                nan_early_roi_idx = to_indexes[to_indexes < data_len]
+                nan_early_roi_idx[to] = to_indexes[to_indexes < data_len]
+            for n, to in enumerate(roi_timeouts):
                 # roi triggered if candle profit are above the required ratio
                 roi_trg = cur_profits >= self.roi_values[n]
                 # null rows preceding the timeouts
                 # NOTE: strictly below, bool arrays can't be nan, use False
                 for t in filter(lambda x: x < to, roi_timeouts):
-                    roi_trg[nan_early_roi_idx] = False
+                    roi_trg[nan_early_roi_idx[t]] = False
                 roi_triggers.append(roi_trg)
             roi_triggers = array(roi_triggers).swapaxes(0, 1)
             # get the first True index where roi triggered column wise
@@ -859,7 +862,7 @@ class HyperoptBacktesting(Backtesting):
         # only where the trigger_bought_ofs is not the same as the previous
         # since we don't evaluate alternate universes
         data = data[
-            data[:, col.trigger_bought_ofs] != shift(data[:, col.trigger_bought]),
+            data[:, col.trigger_bought_ofs] != shift(data[:, col.trigger_bought_ofs]),
         ]
 
         # exclude triggers that where bought past the max index of the triggers
@@ -929,9 +932,7 @@ class HyperoptBacktesting(Backtesting):
     ) -> DataFrame:
 
         # compute all the stoplosses for the buy signals and filter out clear invalids
-        self.start_pyinst()
         trigger = self._np_calc_triggers(df, bought, bought_ranges)
-        self.stop_pyinst()
 
         # align original index
         if not self.position_stacking:
