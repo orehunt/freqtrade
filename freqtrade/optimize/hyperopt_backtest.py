@@ -110,16 +110,15 @@ def union_eq(arr: ndarray, vals: List) -> List[bool]:
     return res
 
 
-@njit
-def shift(arr: ndarray, period=1) -> ndarray:
+def shift(arr: ndarray, period=1, fill=nan) -> ndarray:
     """ shift ndarray """
     moved = ndarray(shape=arr.shape, dtype=arr.dtype)
     if period < 0:
         moved[:period] = arr[-period:]
-        moved[period:] = nan
+        moved[period:] = fill
     else:
         moved[period:] = arr[:-period]
-        moved[:period] = nan
+        moved[:period] = fill
     return moved
 
 
@@ -331,8 +330,8 @@ class HyperoptBacktesting(Backtesting):
             ofs = None
         else:
             ofs = self._diff_indexes(diff_arr.values)
-        shifted = data.shift(period, fill_value=fill_v)
-        shifted.iloc[self.shifted_offsets(ofs, period)] = null_v
+        shifted = shift(data.values, period, fill=fill_v)
+        shifted[self.shifted_offsets(ofs, period)] = null_v
         return shifted
 
     @staticmethod
@@ -342,29 +341,38 @@ class HyperoptBacktesting(Backtesting):
         if with_start:
             if with_end:
                 raise OperationalException("with_start and with_end are exclusive")
-            return where(arr != insert(arr[:-1], 0, nan))[0]
+            return where(arr != shift(arr))[0]
         elif with_end:
             if with_start:
                 raise OperationalException("with_end and with_start are exclusive")
-            return where(arr != append(arr[1:], nan))[0]
+            return where(arr != shift(arr, -1))[0]
         else:
-            return where(arr != insert(arr[:-1], 0, arr[0]))[0]
+            return where(arr != shift(arr, fill=arr[0]))[0]
 
     def advise_pair_df(self, df: DataFrame, pair: str) -> DataFrame:
         """ Execute strategy signals and return df for given pair """
         meta = {"pair": pair}
-        df["buy"] = 0
-        df["sell"] = 0
-        df["pair"] = pair
+        try:
+            df["buy"].values[:] = 0
+            print("did set buy")
+            df["sell"].values[:] = 0
+            print("did set sell")
+            df["pair"].values[:] = pair
+            print("did set pair")
+        # ignore if cols are not present
+        except KeyError:
+            df["buy"] = 0
+            df["sell"] = 0
+            df["pair"] = pair
 
         df = self.strategy.advise_buy(df, meta)
         df = self.strategy.advise_sell(df, meta)
         # strategy might be evil and nan set some  buy/sell rows
         # df.fillna({"buy": 0, "sell": 0}, inplace=True)
         # cast date as int to prevent time conversion when accessing values
-        df["date"] = df["date"].astype(int, copy=False).values
+        df["date"] = df["date"].values.astype(int)
         # only return required cols
-        return df[self.merge_cols]
+        return df.iloc[:, where(union_eq(df.columns.values, self.merge_cols))[0]]
 
     @staticmethod
     def _get_multi_index(pairs: list, idx: ndarray) -> MultiIndex:
@@ -417,27 +425,19 @@ class HyperoptBacktesting(Backtesting):
         """ Set bought_or_sold columns according to buy and sell signals """
         # set bought candles
         # skip if no valid bought candles are found
-        # df["bought_or_sold"] = (df["buy"] - df["sell"]).groupby(level=1).shift().values
         df["bought_or_sold"] = self._shift_paw(
             df["buy"] - df["sell"],
             fill_v=Candle.NOOP,
             null_v=Candle.NOOP,
             diff_arr=df["pair"],
-        ).values
-
-        df["bought_or_sold"].replace({1: Candle.BOUGHT, -1: Candle.SOLD}, inplace=True)
-        # set sold candles
-        df["bought_or_sold"] = Categorical(
-            df["bought_or_sold"].values, categories=list(map(int, Candle))
         )
+
+        # set sold candles
+        bos = df["bought_or_sold"].values
+        bos[bos == 1] = Candle.BOUGHT
+        bos[bos == -1] = Candle.SOLD
         # set END candles as the last non nan candle of each pair data
-        bos_loc = df.columns.get_loc("bought_or_sold")
-        # modify last signals to set the end
-        df.iloc[self.pairs_ofs_end, bos_loc] = Candle.END
-        # Since bought_or_sold is shifted, null the row after the last non-nan one
-        # as it doesn't have data, exclude pairs which data matches the max_len since
-        # they have no nans
-        # df.iloc[self.nan_data_ends, bos_loc] = Candle.NOOP
+        df["bought_or_sold"].values[self.pairs_ofs_end] = Candle.END
         return df, len(df.loc[df["bought_or_sold"].values == Candle.BOUGHT]) < 1
 
     def boughts_to_sold(self, df: DataFrame) -> DataFrame:
@@ -445,7 +445,7 @@ class HyperoptBacktesting(Backtesting):
         reduce df such that there are many bought interleaved by one sold candle
         NOTE: does not modify input df
         """
-        bos_df = df.loc[
+        bos_df = df[
             union_eq(
                 df["bought_or_sold"].values, [Candle.BOUGHT, Candle.SOLD, Candle.END,],
             )
@@ -455,17 +455,13 @@ class HyperoptBacktesting(Backtesting):
             ~(
                 (bos_df["bought_or_sold"].values == Candle.SOLD)
                 & (
-                    # bos_df["bought_or_sold"]
-                    # .groupby(level=1)
-                    # .shift(fill_value=Candle.SOLD)
-                    # .values
                     (
                         self._shift_paw(
                             bos_df["bought_or_sold"],
                             fill_v=Candle.SOLD,
                             null_v=Candle.NOOP,
                             diff_arr=bos_df["pair"],
-                        ).values
+                        )
                         == Candle.SOLD
                     )
                     # don't sell different pairs
@@ -685,6 +681,7 @@ class HyperoptBacktesting(Backtesting):
         trg_col, trg_roi_cols = self._columns_indexes(trg_names, roi_timeouts)
         roi_idx = tuple(roi_cols.values())
         trg_roi_idx = tuple(trg_roi_cols.values())
+        trg_roi_pos = len(trg_col)
         trg_idx = tuple(arange(trg_n_cols))
 
         # NOTE: fill with zeros as some columns are booleans,
@@ -697,7 +694,6 @@ class HyperoptBacktesting(Backtesting):
         # we check against nan/infinite for trigger ofs, so initialize it with nan
         triggers[:, col.trigger_ofs] = nan
 
-        # self.start_pyinst()
         # NOTE: replacing col. lookups would be too verbose, speed up is <0.1x
         while bought_ofs < end_ofs:
             # check trigger for the range of the current bought
@@ -764,7 +760,7 @@ class HyperoptBacktesting(Backtesting):
                     # NOTE: scale trg_first by how many preceding columns (stoploss,trailing)
                     # there are before roi columns, in order to get the offset
                     # relative to only the (ordered) roi columns
-                    triggers[b, col.roi_profit] = roi_values[trg_first - 1]
+                    triggers[b, col.roi_profit] = roi_values[trg_first - trg_roi_pos]
                 elif trg_first == col.trailing_triggered:
                     triggers[b, col.trailing_triggered] = True
                     triggers[b, col.trailing_rate] = trailing_rate[trg_ofs]
@@ -791,7 +787,6 @@ class HyperoptBacktesting(Backtesting):
                     bought_ofs = bofs[b]
                 except IndexError:
                     break
-        # self.stop_pyinst()
         # set the index to the offset and add the columns to set the stoploss
         # data points on the relevant boughts
         bts_df.set_index("ohlc_ofs", inplace=True)
@@ -1372,11 +1367,12 @@ class HyperoptBacktesting(Backtesting):
         profiler.start()
 
     @staticmethod
-    def stop_pyinst():
+    def stop_pyinst(ex=True):
         global profiler
         profiler.stop()
-        print(profiler.output_text(unicode=True, color=True))
-        exit()
+        if ex:
+            print(profiler.output_text(unicode=True, color=True))
+            exit()
 
     def _debug_opts(self):
         # import os
@@ -1557,6 +1553,9 @@ class HyperoptBacktesting(Backtesting):
             exit()
         else:
             results = self.vectorized_backtest(processed)
+            # self.start_pyinst()
+            # results = self.vectorized_backtest(processed)
+            # self.stop_pyinst()
             saved_results = self.backtest_stock(processed, **kwargs,)
         self._cmp_indexes(("open_index", "open_index"), results, saved_results)
         # print(results.iloc[:10], '\n', saved_results.iloc[:10])
