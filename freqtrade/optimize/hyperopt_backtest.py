@@ -212,8 +212,8 @@ class HyperoptBacktesting(Backtesting):
         # NOTE: using .astype(bool) converts nan to True
         if self.roi_enabled:
             roi_triggered = events_sell["roi_triggered"].values.astype(bool)
-            events_roi = events_sell.loc[roi_triggered]
-            events_sell.loc[events_roi.index, result_cols] = [
+            events_roi = events_sell[roi_triggered]
+            events_sell.loc[events_roi.index, result_cols].values[:] = [
                 self._calc_close_rate(
                     events_roi["open"].values, events_roi["roi_profit"].values
                 ),
@@ -223,8 +223,8 @@ class HyperoptBacktesting(Backtesting):
             ]
         if self.trailing_enabled:
             trailing_triggered = events_sell["trailing_triggered"].values.astype(bool)
-            events_trailing = events_sell.loc[trailing_triggered]
-            events_sell.loc[events_trailing.index, result_cols] = [
+            events_trailing = events_sell[trailing_triggered]
+            events_sell.loc[events_trailing.index, result_cols].values[:] = [
                 events_trailing["trailing_rate"].values,
                 SellType.TRAILING_STOP_LOSS,
                 events_trailing["trigger_ofs"].values,
@@ -233,12 +233,12 @@ class HyperoptBacktesting(Backtesting):
         if self.stoploss_enabled:
             stoploss_triggered = events_sell["stoploss_triggered"].values.astype(bool)
             events_stoploss = (
-                events_sell.loc[stoploss_triggered]
+                events_sell[stoploss_triggered]
                 if self.config.get("backtesting_stop_over_trail", False)
                 or not self.trailing_enabled
-                else events_sell.loc[stoploss_triggered & ~trailing_triggered]
+                else events_sell[stoploss_triggered & ~trailing_triggered]
             )
-            events_sell.loc[events_stoploss.index, result_cols] = [
+            events_sell.loc[events_stoploss.index, result_cols].values[:] = [
                 events_stoploss["stoploss_rate"].values,
                 SellType.STOP_LOSS,
                 events_stoploss["trigger_ofs"].values,
@@ -256,7 +256,9 @@ class HyperoptBacktesting(Backtesting):
             Series(events_sell["date"].values - events_buy["date"].values)
         )
         # replace trade duration of same candle trades with half the timeframe reduce to minutes
-        trade_duration.loc[trade_duration == self.td_zero] = self.td_half_timeframe
+        trade_duration[trade_duration == self.td_zero].values[
+            :
+        ] = self.td_half_timeframe
         return DataFrame(
             {
                 "pair": events_buy["pair"].values,
@@ -513,7 +515,7 @@ class HyperoptBacktesting(Backtesting):
         index of each bought
         """
         bts_df, sold = self.set_sold(df)
-        bought = bts_df.loc[bts_df["bought_or_sold"].values == Candle.BOUGHT]
+        bought = bts_df[bts_df["bought_or_sold"].values == Candle.BOUGHT]
         # get the index ranges of each bought->sold spans
         bought_ranges = bought["next_sold_ofs"].values - bought["ohlc_ofs"].values
         # Use the first version only if the expanded array would take < ~500MB per col
@@ -526,11 +528,13 @@ class HyperoptBacktesting(Backtesting):
             # intervals are too long, jump over candles
             self.calc_type = False
             args = [df, bought, bought_ranges, sold, bts_df]
+            self.start_pyinst()
             bts_df = (
                 self._pd_2_select_triggered_events(*args)
                 if not self.position_stacking
                 else self._pd_2_select_triggered_events_stack(*args)
             )
+            self.stop_pyinst()
         return bts_df
 
     def _pd_2_select_triggered_events_stack(
@@ -938,13 +942,7 @@ class HyperoptBacktesting(Backtesting):
             data[:, col.roi_profit] = roi_vals[arange(data_len), roi_trigger_max]
             # at this point valid roi should be roi_profit[roi_triggered]
             trigger_flags.append(data[:, col.roi_triggered])
-        # data = concatenate([data, roi_triggers, transpose([roi_trigger_max, cur_profits])], axis=1)
-        # cols = list(col._fields)
-        # cols.extend(self.roi_timeouts.values())
-        # cols.extend(["roi_trigger_max", "cur_profit"])
-        # df = DataFrame(data, columns=cols)
-        # print(df.iloc[1700:1800])
-        # exit()
+
         if self.trailing_enabled:
             data[:, col.trailing_rate] = ofs_cummax(data_ofs, data[:, col.high_rate])
             if sl_positive or sl_only_offset:
@@ -968,15 +966,6 @@ class HyperoptBacktesting(Backtesting):
                 data[:, col.low] <= data[:, col.stoploss_rate]
             )
             trigger_flags.append(data[:, col.stoploss_triggered])
-
-        # tor = trailing_offset_reached.reshape(trailing_offset_reached.shape[0], 1)
-        # cp = cur_profits.reshape(cur_profits.shape[0], 1)
-        # data = concatenate([data, tor, cp], axis=1)
-        # cols = list(col._fields)
-        # cols.extend(['trailing_offset_reached', 'cur_profits'])
-        # df = DataFrame(data, columns=cols)
-        # print(df.loc[df["trigger_bought_ofs"].values == 441])
-        # exit()
 
         # select only candles with trigger
         data = data[
@@ -1114,11 +1103,11 @@ class HyperoptBacktesting(Backtesting):
             # loop over the filtered boughts to determine order of execution
             boughts = bts_df["bought_or_sold"].values == Candle.BOUGHT
             bts_df.loc[boughts, "last_trigger"] = array(
-                self._last_trigger_numba(bts_df.loc[boughts])
+                self._last_trigger_numba(bts_df[boughts])
             )
             # fill the last_trigger column for non boughts
             bts_df["last_trigger"].fillna(method="pad", inplace=True)
-            bts_df.loc[
+            bts_df["trigger_ofs"].values[
                 ~(
                     # last active stoploss matches the current stoploss, otherwise it's stale
                     (bts_df["trigger_ofs"].values == bts_df["last_trigger"].values)
@@ -1129,8 +1118,7 @@ class HyperoptBacktesting(Backtesting):
                         bts_df["last_trigger"].values
                         != bts_df["last_trigger"].shift().values
                     )
-                ),
-                "trigger_ofs",
+                )
             ] = nan
             # merging doesn't include the pair column, so fill empty pair rows forward
             bts_df["pair"].fillna(method="pad", inplace=True)
@@ -1553,9 +1541,6 @@ class HyperoptBacktesting(Backtesting):
             exit()
         else:
             results = self.vectorized_backtest(processed)
-            # self.start_pyinst()
-            # results = self.vectorized_backtest(processed)
-            # self.stop_pyinst()
             saved_results = self.backtest_stock(processed, **kwargs,)
         self._cmp_indexes(("open_index", "open_index"), results, saved_results)
         # print(results.iloc[:10], '\n', saved_results.iloc[:10])
