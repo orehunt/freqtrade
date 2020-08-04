@@ -1058,7 +1058,7 @@ class Main:
     def opt_cv(self):
         # make sure the optimization was on the first timerange
         # if the first run was the optimization
-        if self.args.mode is not "cv":
+        if self.args.mode != "cv":
             assert self.timerange == OPT_TR
         # cross validate on the other two time ranges
         self.config["mode"] = "cv"

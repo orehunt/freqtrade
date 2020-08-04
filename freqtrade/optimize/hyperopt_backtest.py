@@ -1,11 +1,11 @@
 import logging
-
-from typing import Dict, List, Tuple, Union
+from typing import Dict, List, Tuple, Union, NamedTuple
 from enum import IntEnum
 from collections import namedtuple
 from functools import reduce
 
-from numba import njit, float64, int64, boolean, typeof
+from numba import jit, njit, float64, int64, boolean, typeof, types
+from numba.typed import Dict as nb_Dict
 from numpy import (
     dtype,
     repeat,
@@ -13,6 +13,7 @@ from numpy import (
     nan,
     concatenate,
     ndarray,
+    recarray,
     array,
     where,
     argwhere,
@@ -36,7 +37,13 @@ from numpy import (
     empty,
     flatnonzero,
     bincount,
+    swapaxes,
+    ravel,
+    empty_like,
+    argmax,
+    searchsorted,
 )
+from numpy import round as np_round
 from pandas import (
     Timedelta,
     Series,
@@ -52,6 +59,15 @@ from pandas import (
 )
 
 from freqtrade.optimize.backtesting import Backtesting, BacktestResult
+from freqtrade.optimize.backtest_vect import (
+    select_triggers,
+    Int64Cols,
+    Float64Cols,
+    Float64Vals,
+    Int32Vals,
+    Flags,
+    CharLists,
+)
 from freqtrade.exceptions import OperationalException
 from freqtrade.strategy.interface import SellType
 
@@ -89,7 +105,7 @@ def for_trail_idx(index, trig_idx, next_sold) -> List[int]:
     return col
 
 
-@njit
+@njit(fastmath=True)
 def ofs_cummax(data_ofs: ndarray, data: ndarray) -> ndarray:
     """ groupby like cumulative maximum """
     cumarr = empty(len(data))
@@ -112,7 +128,7 @@ def union_eq(arr: ndarray, vals: List) -> List[bool]:
 
 def shift(arr: ndarray, period=1, fill=nan) -> ndarray:
     """ shift ndarray """
-    moved = ndarray(shape=arr.shape, dtype=arr.dtype)
+    moved: ndarray = ndarray(shape=arr.shape, dtype=arr.dtype)
     if period < 0:
         moved[:period] = arr[-period:]
         moved[period:] = fill
@@ -122,10 +138,11 @@ def shift(arr: ndarray, period=1, fill=nan) -> ndarray:
     return moved
 
 
+
 class HyperoptBacktesting(Backtesting):
 
     empty_results = DataFrame.from_records([], columns=BacktestResult._fields)
-    debug = True
+    debug = False
 
     td_zero = Timedelta(0)
     td_timeframe: Timedelta
@@ -138,6 +155,7 @@ class HyperoptBacktesting(Backtesting):
     roi_col_names = []
     stoploss_col_names = []
     trailing_col_names = []
+    conf_tuple = None
 
     merge_cols = [
         "date",
@@ -527,15 +545,134 @@ class HyperoptBacktesting(Backtesting):
         else:
             # intervals are too long, jump over candles
             self.calc_type = False
-            args = [df, bought, bought_ranges, sold, bts_df]
-            self.start_pyinst()
+            args = [df, bought, bought_ranges, bts_df]
+            global counter
+            if "counter" not in globals():
+                counter = 0
+            if counter > 999:
+                self.start_pyinst()
             bts_df = (
-                self._pd_2_select_triggered_events(*args)
+                # self._pd_2_select_triggered_events(*args)
+                self._nb_select_triggered_events(*args)
                 if not self.position_stacking
                 else self._pd_2_select_triggered_events_stack(*args)
             )
-            self.stop_pyinst()
+            if counter > 999:
+                self.stop_pyinst()
+            counter += 1
         return bts_df
+
+    def _pd_2_vars(self, df: DataFrame, bought: DataFrame) -> Tuple:
+        df_dict = {col: df[col].values for col in ("low", "high", "date", "ohlc_ofs")}
+        bought_dict = {
+            col: bought[col].values for col in ("ohlc_ofs", "next_sold_ofs", "open")
+        }
+        # columns of the trigger array which stores all the calculations
+        col_names = [
+            "trigger_ofs",
+            "trigger_date",
+            "trigger_bought_ofs",
+            "last_trigger",
+        ]
+        # columns of the trg array which stores the calculation of each loop
+        trg_names = []
+        # the number of columns for the shape of the trigger range
+        trg_n_cols = 0
+        if self.roi_enabled:
+            roi_cols_names = ("roi_profit", "roi_triggered")
+            col_names.extend(roi_cols_names)
+            self.roi_timeouts, self.roi_values = self._filter_roi()
+            roi_timeouts = array(list(self.roi_timeouts.keys()))
+            # transpose roi values such that we can operate with profits ndarray
+            n_timeouts = len(roi_timeouts)
+            roi_values = array(self.roi_values).reshape(n_timeouts, 1)
+            # nan indexes are relative, so can be pre calculated
+            nan_early_idx = array(
+                [
+                    n_timeouts * f + n
+                    for n, t in enumerate(roi_timeouts)
+                    for f in range(t)
+                ],
+                dtype="int64",
+            )
+            trg_n_cols += n_timeouts
+        else:
+            roi_timeouts = array([])
+            roi_values = array([])
+            n_timeouts = 0
+            nan_early_idx = array([])
+
+        if self.stoploss_enabled:
+            stoploss_cols_names = ("stoploss_rate", "stoploss_triggered")
+            col_names.extend(stoploss_cols_names)
+            trg_names.append("stoploss_triggered")
+            trg_n_cols += 1
+
+        if self.trailing_enabled:
+            trailing_cols_names = ("trailing_rate", "trailing_triggered")
+            col_names.extend(trailing_cols_names)
+            trg_names.append("trailing_triggered")
+            trg_n_cols += 1
+        else:
+            trailing_cols_names = []
+
+        col, roi_cols = self._columns_indexes(
+            col_names, roi_timeouts, roi_as_tuple=True, col_as_dict=True
+        )
+        trg_col, trg_roi_cols = self._columns_indexes(
+            trg_names, roi_timeouts, roi_as_tuple=True, col_as_dict=True
+        )
+
+        fl_cols = Float64Cols(
+            df_low=df["low"].values,
+            df_high=df["high"].values,
+            bought_open=bought["open"].values,
+            roi_values=roi_values,
+            roi_vals=roi_values.reshape(roi_values.shape[0]),
+        )
+        it_cols = Int64Cols(
+            bought_ohlc_ofs=bought["ohlc_ofs"].values,
+            bought_next_sold_ofs=bought["next_sold_ofs"].values,
+            df_date=df["date"].values,
+            df_ohlc_ofs=df["ohlc_ofs"].values,
+        )
+        fl = Float64Vals(
+            fee=self.fee,
+            stake_amount=self.config["stake_amount"],
+            stoploss=self.strategy.stoploss,
+            sl_positive=(self.strategy.trailing_stop_positive or 0),
+            sl_offset=self.strategy.trailing_stop_positive_offset,
+        )
+        it = Int32Vals(n_timeouts=n_timeouts, trg_n_cols=trg_n_cols)
+        bl = Flags(
+            roi_enabled=self.roi_enabled,
+            stoploss_enabled=self.stoploss_enabled,
+            trailing_enabled=self.trailing_enabled,
+            sl_only_offset=self.strategy.trailing_only_offset_is_reached,
+        )
+        names = CharLists(
+            col_names=col_names,
+            trg_names=trg_names,
+            stoploss_cols_names=stoploss_cols_names,
+            trailing_cols_names=trailing_cols_names,
+        )
+
+        return (
+            fl_cols,
+            it_cols,
+            names,
+            fl,
+            it,
+            bl,
+            col,
+            trg_col,
+            roi_cols,
+            trg_roi_cols,
+            col_names,
+            trg_names,
+            nan_early_idx,
+            roi_timeouts,
+        )
 
     def _pd_2_select_triggered_events_stack(
         self,
@@ -606,7 +743,6 @@ class HyperoptBacktesting(Backtesting):
         df: DataFrame,
         bought: DataFrame,
         bought_ranges: ndarray,
-        sold: DataFrame,
         bts_df: DataFrame,
     ):
         roi_enabled = self.roi_enabled
@@ -636,7 +772,7 @@ class HyperoptBacktesting(Backtesting):
         if roi_enabled:
             roi_cols_names = ("roi_profit", "roi_triggered")
             col_names.extend(roi_cols_names)
-            self.roi_timeouts, self.roi_values = self._filter_roi({}, bought)
+            self.roi_timeouts, self.roi_values = self._filter_roi()
             roi_timeouts = array(list(self.roi_timeouts.keys()))
             # transpose roi values such that we can operate with profits ndarray
             n_timeouts = len(roi_timeouts)
@@ -697,7 +833,6 @@ class HyperoptBacktesting(Backtesting):
         triggers[:, col.last_trigger] = -1
         # we check against nan/infinite for trigger ofs, so initialize it with nan
         triggers[:, col.trigger_ofs] = nan
-
         # NOTE: replacing col. lookups would be too verbose, speed up is <0.1x
         while bought_ofs < end_ofs:
             # check trigger for the range of the current bought
@@ -791,14 +926,63 @@ class HyperoptBacktesting(Backtesting):
                     bought_ofs = bofs[b]
                 except IndexError:
                     break
+        return self._assign_triggers(bts_df, bought, triggers, col_names)
+
+    def _assign_triggers(
+        self, df: DataFrame, bought: DataFrame, triggers: ndarray, col_names: List[str]
+    ) -> DataFrame:
         # set the index to the offset and add the columns to set the stoploss
         # data points on the relevant boughts
-        bts_df.set_index("ohlc_ofs", inplace=True)
-        bts_df = bts_df.reindex(columns=[*bts_df.columns, *col_names], copy=False)
-        bts_df.loc[bought["ohlc_ofs"].values, col_names] = triggers
+        df.set_index("ohlc_ofs", inplace=True)
+        df = df.reindex(columns=[*df.columns, *col_names], copy=False)
+        # loop over col names and assign column by column because the df doesn't have the same
+        # order as the triggers ndarray
+        mask = isin(df.index.values, bought["ohlc_ofs"].values)
+        for n, c in enumerate(col_names):
+            df[c].values[mask] = triggers[:, n]
         # fill non bought candles
-        bts_df["last_trigger"].fillna(-1, inplace=True)
-        return bts_df
+        df["last_trigger"].fillna(-1, inplace=True)
+        return df
+
+    def _nb_select_triggered_events(
+        self, df, bought, bought_ranges, bts_df
+    ) -> DataFrame:
+        # d, b, c = self._pd_2_vars(df, bought)
+        (
+            fl_cols,
+            it_cols,
+            names,
+            fl,
+            it,
+            bl,
+            col,
+            trg_col,
+            roi_cols,
+            trg_roi_cols,
+            col_names,
+            trg_names,
+            nan_early_idx,
+            roi_timeouts,
+        ) = self._pd_2_vars(df, bought)
+
+        triggers = select_triggers(
+            fl_cols,
+            it_cols,
+            names,
+            fl,
+            it,
+            bl,
+            col,
+            trg_col,
+            roi_cols,
+            trg_roi_cols,
+            col_names,
+            trg_names,
+            nan_early_idx,
+            roi_timeouts,
+            bought_ranges,
+        )
+        return self._assign_triggers(bts_df, bought, triggers, col_names)
 
     def _remove_pairs_offsets(self, df: DataFrame, cols: List):
         ofs_vals = df["ofs"].values.tolist()
@@ -840,7 +1024,7 @@ class HyperoptBacktesting(Backtesting):
             self.roi_col_names.extend(["roi_profit", "roi_triggered"])
             post_cols.extend(self.roi_col_names)
             # only the filtered roi couples will be used for calculation
-            self.roi_timeouts, self.roi_values = self._filter_roi({}, bought)
+            self.roi_timeouts, self.roi_values = self._filter_roi()
             roi_timeouts = list(self.roi_timeouts.keys())
         else:
             roi_timeouts = []
@@ -1138,12 +1322,29 @@ class HyperoptBacktesting(Backtesting):
             ] = nan
         return bts_df
 
-    def _columns_indexes(self, cols: List[str], roi_timeouts: List[int],) -> Tuple:
+    def _columns_indexes(
+        self,
+        cols: List[str],
+        roi_timeouts: List[int],
+        roi_as_tuple=False,
+        col_as_dict=False,
+    ) -> Tuple:
         col = {}
         n_c = 0
         col = {c: n_c for n_c, c in enumerate(cols)}
         roi_cols = {to: n_c for n_c, to in enumerate(roi_timeouts, len(cols))}
-        return namedtuple("columns", col.keys())(**col), roi_cols
+        if col_as_dict:
+            ret_col = nb_Dict.empty(
+                key_type=types.unicode_type, value_type=types.int32,
+            )
+            for c, v in col.items():
+                ret_col[c] = v
+        else:
+            ret_col = namedtuple("columns", col.keys())(**col)
+        return (
+            ret_col,
+            roi_cols if not roi_as_tuple else tuple(roi_cols.values()),
+        )
 
     def _calc_stoploss_rate(self, df: DataFrame, stoploss: float) -> ndarray:
         return df["open"].values * (1 - abs(stoploss))
@@ -1158,9 +1359,7 @@ class HyperoptBacktesting(Backtesting):
         """ Adds a column for the stoploss rate """
         df["stoploss_rate"] = self._calc_stoploss_rate(df)
 
-    def _filter_roi(
-        self, minimal_roi: Dict, bought: DataFrame
-    ) -> Tuple[Dict[int, int], List[float]]:
+    def _filter_roi(self) -> Tuple[Dict[int, int], List[float]]:
         # ensure roi dict is sorted in order to always overwrite
         # with the latest duplicate value when rounding to timeframes
         # NOTE: make sure to sort numerically
@@ -1351,8 +1550,9 @@ class HyperoptBacktesting(Backtesting):
         from pyinstrument import Profiler
 
         global profiler
-        profiler = Profiler(interval=interval)
-        profiler.start()
+        if "profiler" not in globals():
+            profiler = Profiler(interval=interval)
+            profiler.start()
 
     @staticmethod
     def stop_pyinst(ex=True):
@@ -1361,6 +1561,12 @@ class HyperoptBacktesting(Backtesting):
         if ex:
             print(profiler.output_text(unicode=True, color=True))
             exit()
+
+    @staticmethod
+    def print_pyinst():
+        global profiler
+        print(profiler.output_text(unicode=True, color=True))
+        exit()
 
     def _debug_opts(self):
         # import os
@@ -1532,7 +1738,7 @@ class HyperoptBacktesting(Backtesting):
         if check_at and self._check_counter(check_at):
             return self.empty_results
         # if testing only one epoch use "store" once then set it to "load"
-        cache = ""
+        cache = "load"
         if cache == "load":
             results = self.vectorized_backtest(processed)
             saved_results = self._load_results()
