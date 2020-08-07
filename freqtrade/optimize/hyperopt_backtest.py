@@ -43,6 +43,7 @@ from numpy import (
     argmax,
     argmin,
     searchsorted,
+    argsort,
     reshape,
     interp,
 )
@@ -59,6 +60,7 @@ from pandas import (
     to_datetime,
     concat,
     Int64Index,
+    factorize,
 )
 
 from freqtrade.optimize.backtesting import Backtesting, BacktestResult
@@ -81,7 +83,7 @@ class Candle(IntEnum):
 class HyperoptBacktesting(Backtesting):
 
     empty_results = DataFrame.from_records([], columns=BacktestResult._fields)
-    debug = False
+    debug = True
 
     td_zero = Timedelta(0)
     td_timeframe: Timedelta
@@ -96,6 +98,7 @@ class HyperoptBacktesting(Backtesting):
     trailing_col_names = []
     conf_tuple = None
 
+    bts_df_cols = {}
     merge_cols = [
         "date",
         "open",
@@ -142,94 +145,100 @@ class HyperoptBacktesting(Backtesting):
             logger.warn("Ignoring max open trades...")
 
     def get_results(self, events_buy: DataFrame, events_sell: DataFrame) -> DataFrame:
+        buy_cols = df_cols(events_buy)
+        sell_cols = buy_cols
+        buy_vals = events_buy.values
+        sell_vals = events_sell.values
         # choose sell rate depending on sell reason and set sell_reason
-        events_sell = events_sell.reindex(
-            [*events_sell.columns, "close_rate", "sell_reason"], axis=1, copy=False
+        # add new needed columns
+        sell_vals = add_columns(sell_vals, sell_cols, ("close_rate",))
+        # boolean masks can't query by slices and return a copy, so use where
+        where_sold = where(sell_vals[:, sell_cols["bought_or_sold"]] == Candle.SOLD)[0]
+        events_sold = sell_vals[where_sold, :]
+        # use an external ndarray to store sell_type to avoid float conversion
+        sell_reason = ndarray(shape=(sell_vals.shape[0]), dtype="object")
+
+        sell_reason[where_sold] = SellType.SELL_SIGNAL
+        sell_vals[where_sold, sell_cols["close_rate"]] = events_sold[
+            :, sell_cols["open"]
+        ]
+        # adjust trigger_ofs to the startup offset, and the pairs offset
+        # to match original ohlc index
+        sell_vals[:, sell_cols["trigger_ofs"]] += (
+            self.startup_offset - sell_vals[:, sell_cols["ofs"]]
         )
-        events_sold = events_sell.loc[
-            events_sell["bought_or_sold"].values == Candle.SOLD
-        ]
-        # add new columns to allow multi col assignments of new columns
-        result_cols = ["close_rate", "sell_reason", "ohlc"]
-        # can't pass the index here because indexes are duplicated with position_stacking,
-        # would have to reindex beforehand
-        events_sell.loc[
-            events_sold.index
-            if not self.position_stacking
-            else events_sell.index.isin(unique(events_sold.index.values)),
-            result_cols,
-        ] = [
-            events_sold["open"].values,
-            SellType.SELL_SIGNAL,
-            events_sold["ohlc"].values,
-        ]
-        result_cols.append("date")
+
+        # list of columns that need data overwrite
+        result_cols = [sell_cols[c] for c in ("date", "ohlc", "close_rate")]
+        trigger_cols = [sell_cols[c] for c in ("trigger_date", "trigger_ofs")]
         # order of events is stoploss -> trailing -> roi
         # since values are set cascading, the order is inverted
         # NOTE: using .astype(bool) converts nan to True
         if self.roi_enabled:
-            roi_triggered = events_sell["roi_triggered"].values.astype(bool)
-            events_roi = events_sell[roi_triggered]
-            events_sell.loc[events_roi.index, result_cols].values[:] = [
-                self._calc_close_rate(
-                    events_roi["open"].values, events_roi["roi_profit"].values
-                ),
-                SellType.ROI,
-                events_roi["trigger_ofs"].values,
-                events_roi["trigger_date"].values,
-            ]
+            roi_triggered = sell_vals[:, sell_cols["roi_triggered"]].astype(bool)
+            where_roi = where(roi_triggered)[0]
+            events_roi = sell_vals[roi_triggered]
+            sell_reason[where_roi] = SellType.ROI
+            roi_cols = trigger_cols + [sell_cols["roi_profit"]]
+            for dst_col, src_col in zip(result_cols, roi_cols):
+                sell_vals[where_roi, dst_col] = events_roi[:, src_col]
         if self.trailing_enabled:
-            trailing_triggered = events_sell["trailing_triggered"].values.astype(bool)
-            events_trailing = events_sell[trailing_triggered]
-            events_sell.loc[events_trailing.index, result_cols].values[:] = [
-                events_trailing["trailing_rate"].values,
-                SellType.TRAILING_STOP_LOSS,
-                events_trailing["trigger_ofs"].values,
-                events_trailing["trigger_date"].values,
-            ]
+            trailing_triggered = sell_vals[:, sell_cols["trailing_triggered"]].astype(
+                bool
+            )
+            where_trailing = where(trailing_triggered)[0]
+            events_trailing = sell_vals[trailing_triggered]
+            sell_reason[where_trailing] = SellType.TRAILING_STOP_LOSS
+            trailing_cols = trigger_cols + [sell_cols["trailing_rate"]]
+            for dst_col, src_col in zip(result_cols, trailing_cols):
+                sell_vals[where_trailing, dst_col] = events_trailing[:, src_col]
         if self.stoploss_enabled:
-            stoploss_triggered = events_sell["stoploss_triggered"].values.astype(bool)
-            events_stoploss = (
-                events_sell[stoploss_triggered]
+            stoploss_triggered = sell_vals[:, sell_cols["stoploss_triggered"]].astype(
+                bool
+            )
+            where_stoploss = (
+                where(stoploss_triggered)
                 if self.config.get("backtesting_stop_over_trail", False)
                 or not self.trailing_enabled
-                else events_sell[stoploss_triggered & ~trailing_triggered]
-            )
-            events_sell.loc[events_stoploss.index, result_cols].values[:] = [
-                events_stoploss["stoploss_rate"].values,
-                SellType.STOP_LOSS,
-                events_stoploss["trigger_ofs"].values,
-                events_stoploss["trigger_date"].values,
-            ]
+                else where(stoploss_triggered & ~trailing_triggered)
+            )[0]
+            events_stoploss = sell_vals[where_stoploss, :]
+            sell_reason[where_stoploss] = SellType.STOP_LOSS
+            stoploss_cols = trigger_cols + [sell_cols["stoploss_rate"]]
+            for dst_col, src_col in zip(result_cols, stoploss_cols):
+                sell_vals[where_stoploss, dst_col] = events_stoploss[:, src_col]
 
-        open_rate = events_buy["open"].values
-        close_rate = events_sell["close_rate"].values
+        open_rate = buy_vals[:, buy_cols["open"]]
+        close_rate = sell_vals[:, sell_cols["close_rate"]]
 
         profits_abs, profits_prc = self._calc_profits(
             open_rate, close_rate, calc_abs=True
         )
 
         trade_duration = to_timedelta(
-            Series(events_sell["date"].values - events_buy["date"].values)
+            Series(sell_vals[:, sell_cols["date"]] - buy_vals[:, buy_cols["date"]])
         )
         # replace trade duration of same candle trades with half the timeframe reduce to minutes
         trade_duration[trade_duration == self.td_zero].values[
             :
         ] = self.td_half_timeframe
+
         return DataFrame(
             {
-                "pair": events_buy["pair"].values,
+                "pair": replace_values(
+                    self.pairs_idx, self.pairs_name, buy_vals[:, buy_cols["pair"]]
+                ),
                 "profit_percent": profits_prc,
                 "profit_abs": profits_abs,
-                "open_time": to_datetime(events_buy["date"].values),
-                "close_time": to_datetime(events_sell["date"].values),
-                "open_index": events_buy["ohlc"].values,
-                "close_index": events_sell["ohlc"].values,
+                "open_time": to_datetime(buy_vals[:, buy_cols["date"]]),
+                "close_time": to_datetime(sell_vals[:, sell_cols["date"]]),
+                "open_index": buy_vals[:, buy_cols["ohlc"]].astype(int),
+                "close_index": sell_vals[:, sell_cols["ohlc"]].astype(int),
                 "trade_duration": trade_duration.dt.seconds / 60,
                 "open_at_end": False,
                 "open_rate": open_rate,
                 "close_rate": close_rate,
-                "sell_reason": events_sell["sell_reason"].values,
+                "sell_reason": sell_reason,
             }
         )
 
@@ -308,7 +317,7 @@ class HyperoptBacktesting(Backtesting):
         else:
             return where(arr != shift(arr, fill=arr[0]))[0]
 
-    def advise_pair_df(self, df: DataFrame, pair: str) -> DataFrame:
+    def advise_pair_df(self, df: DataFrame, pair: str, n_pair: float) -> DataFrame:
         """ Execute strategy signals and return df for given pair """
         meta = {"pair": pair}
         try:
@@ -319,14 +328,14 @@ class HyperoptBacktesting(Backtesting):
         except KeyError:
             df["buy"] = 0
             df["sell"] = 0
-            df["pair"] = pair
+            df["pair"] = n_pair
 
         df = self.strategy.advise_buy(df, meta)
         df = self.strategy.advise_sell(df, meta)
         # strategy might be evil and nan set some  buy/sell rows
         # df.fillna({"buy": 0, "sell": 0}, inplace=True)
         # cast date as int to prevent time conversion when accessing values
-        df["date"] = df["date"].values.astype(int)
+        df["date"] = df["date"].values.astype(float)
         # only return required cols
         return df.iloc[:, where(union_eq(df.columns.values, self.merge_cols))[0]]
 
@@ -349,13 +358,16 @@ class HyperoptBacktesting(Backtesting):
         pairs = {}
 
         # get the df with the longest ohlc data since all the pairs will be padded to it
-        pair_counter = 0
+        # use float
+        pair_counter = 0.0
         for pair, df in processed.items():
             # make sure to copy the df to not clobber the source data since it is accessed globally
-            advised[pair] = self.advise_pair_df(df.copy(), pair)
+            advised[pair] = self.advise_pair_df(df.copy(), pair, pair_counter)
             pairs[pair] = pair_counter
             pair_counter += 1
         self.pairs = pairs
+        self.pairs_name = array(list(pairs.keys()))
+        self.pairs_idx = array(list(pairs.values()), dtype=float)
         # the index shouldn't change after the advise call, so we can take the pre-advised index
         # to create the multiindex where each pair is indexed with max len
         df = concat(advised.values(), copy=False)
@@ -366,7 +378,7 @@ class HyperoptBacktesting(Backtesting):
         self.pairs_ofs_end = append(self.pairs_offset[1:] - 1, len(df) - 1)
         # loop over the missing data pairs and calculate the point where data ends
         # plus the absolute offset
-        df["ofs"] = Categorical(offsets_arr, self.pairs_offset)
+        df["ofs"] = offsets_arr
         # could as easily be arange(len(df)) ...
         df["ohlc_ofs"] = df.index.values + offsets_arr - self.startup_offset
         df["ohlc"] = df.index.values
@@ -483,8 +495,8 @@ class HyperoptBacktesting(Backtesting):
             self.calc_type = False
             args = [df, bought, bought_ranges, bts_df]
             bts_df = (
-                # self._v2_select_triggered_events(*args)
-                self._nb_select_triggered_events(*args)
+                self._v2_select_triggered_events(*args)
+                # self._nb_select_triggered_events(*args)
                 if not self.position_stacking
                 else self._pd_2_select_triggered_events_stack(*args)
             )
@@ -917,6 +929,7 @@ class HyperoptBacktesting(Backtesting):
         ) = self._v2_vars(df, bought)
 
         triggers = select_triggers(
+            # triggers = iter_triggers(
             fl_cols,
             it_cols,
             names,
@@ -933,6 +946,8 @@ class HyperoptBacktesting(Backtesting):
             roi_timeouts,
             bought_ranges,
         )
+        # print(self._assign_triggers(bts_df, bought, triggers, col_names).iloc[:10][["stoploss_triggered", "roi_triggered", "trailing_triggered", "stoploss_rate", "roi_profit", "trailing_rate", "last_trigger"]])
+        # exit()
         return self._assign_triggers(bts_df, bought, triggers, col_names)
 
     def _remove_pairs_offsets(self, df: DataFrame, cols: List):
@@ -1082,7 +1097,7 @@ class HyperoptBacktesting(Backtesting):
             # (otherwise would have to offset it)
             data[:, col.roi_profit] = roi_vals[arange(data_len), roi_trigger_max]
             # at this point valid roi should be roi_profit[roi_triggered]
-            trigger_flags.append(data[:, col.roi_triggered])
+            trigger_flags.append(data[:, col.roi_triggered].astype(bool))
 
         if self.trailing_enabled:
             data[:, col.trailing_rate] = ofs_cummax(data_ofs, data[:, col.high_rate])
@@ -1101,17 +1116,15 @@ class HyperoptBacktesting(Backtesting):
             data[:, col.trailing_triggered] = (
                 data[:, col.low] <= data[:, col.trailing_rate]
             )
-            trigger_flags.append(data[:, col.trailing_triggered])
+            trigger_flags.append(data[:, col.trailing_triggered].astype(bool))
         if self.stoploss_enabled:
             data[:, col.stoploss_triggered] = (
                 data[:, col.low] <= data[:, col.stoploss_rate]
             )
-            trigger_flags.append(data[:, col.stoploss_triggered])
+            trigger_flags.append(data[:, col.stoploss_triggered].astype(bool))
 
         # select only candles with trigger
-        data = data[
-            reduce(lambda x, y: x.astype(bool) | y.astype(bool), trigger_flags), :
-        ]
+        data = data[reduce(lambda x, y: x | y, trigger_flags), :]
 
         if len(data) < 1:
             # keep shape since return value is accessed without reference
@@ -1205,6 +1218,16 @@ class HyperoptBacktesting(Backtesting):
                 *self.stoploss_col_names,
                 *self.trailing_col_names,
             ]
+            # a list of only trigger flags columns
+            trigger_types = [
+                t
+                for t, f in (
+                    ("stoploss_triggered", self.stoploss_enabled),
+                    ("trailing_triggered", self.trailing_enabled),
+                    ("roi_triggered", self.roi_enabled),
+                )
+                if f
+            ]
 
             # join from right, to not clobber indexes
             bts_df = trigger.join(bts_df, how="right")
@@ -1254,21 +1277,25 @@ class HyperoptBacktesting(Backtesting):
             # fill the last_trigger column for non boughts
             bts_df["last_trigger"].fillna(method="pad", inplace=True)
 
-            bts_df["trigger_ofs"].values[
-                ~(
-                    # last active stoploss matches the current stoploss, otherwise it's stale
-                    (bts_df["trigger_ofs"].values == bts_df["last_trigger"].values)
-                    # it must be the first bought matching that stoploss index,
-                    # in case of subsequent boughts that triggers on the same index
-                    # which wouldn't happen without position stacking
-                    & (
-                        bts_df["last_trigger"].values
-                        != bts_df["last_trigger"].shift().values
-                    )
+            self.bts_df_cols = {col: n for n, col in enumerate(bts_df.columns.values)}
+            stale_boughts = ~(
+                # last active stoploss matches the current stoploss, otherwise it's stale
+                (bts_df["trigger_ofs"].values == bts_df["last_trigger"].values)
+                # it must be the first bought matching that stoploss index,
+                # in case of subsequent boughts that triggers on the same index
+                # which wouldn't happen without position stacking
+                & (
+                    bts_df["last_trigger"].values
+                    != shift(bts_df["last_trigger"].values)
                 )
-            ] = nan
+            )
+            # pandas overloaded ndarrays don't allow multi col indexing?
+            for c in ["trigger_ofs", *trigger_types]:
+                bts_df.values[stale_boughts, self.bts_df_cols[c]] = nan
             # merging doesn't include the pair column, so fill empty pair rows forward
             bts_df["pair"].fillna(method="pad", inplace=True)
+            # fill nan bool columns to False
+            bts_df.fillna({t: 0 for t in trigger_types}, inplace=True)
         else:
             # add stoploss data to the bought/sold dataframe
             bts_df = bts_df.merge(
@@ -1377,6 +1404,10 @@ class HyperoptBacktesting(Backtesting):
                     & isin(bts_df["next_sold_ofs"].values, self.pairs_ofs_end)
                 )
             ]
+            # events_buy["ohlc"] = events_buy["ohlc"].astype(int, copy=False)
+            # self.events["ohlc"] = self.events["ohlc"].fillna(-1).astype(int)
+            # self._cmp_indexes(('ohlc', 'open_index'), events_buy, self._load_results(), filter_fsell=False)
+            # exit()
             events_sell = bts_df.loc[
                 (
                     (bts_df["bought_or_sold"].values == Candle.SOLD)
@@ -1384,8 +1415,14 @@ class HyperoptBacktesting(Backtesting):
                     & (bts_ls_s1 == -1)
                 )
                 # and stoplosses (all candles with notna trigger_ofs should be valid)
-                | (isfinite(bts_df["trigger_ofs"].values))
+                | isfinite(bts_df["trigger_ofs"].values)
             ]
+            # print(
+            #     len(events_sell),
+            #     len(events_buy),
+            #     len(bts_df.loc[isfinite(bts_df["trigger_ofs"].values)]),
+            # )
+            # exit()
         else:
             events_buy = bts_df.loc[
                 (bts_df["bought_or_sold"].values == Candle.BOUGHT)
@@ -1629,12 +1666,16 @@ class HyperoptBacktesting(Backtesting):
             ]
 
         # stock results are sorted, so align indexes
+        if results["pair"].dtype == float:
+            results["pair"] = replace_values(
+                        self.pairs_idx, self.pairs_name, results["pair"].values
+                    )
         results = results.sort_values(by=["pair", key_0])
         saved_results = saved_results.sort_values(by=["pair", key_1])
         # have to match indexes to the correct pairs, so make sets of (index, pair) tuples
         where_0 = list(
             zip(
-                results[key_0].fillna(method="pad").astype(int).values,
+                results[key_0].fillna(method="pad").astype(saved_results[key_1].dtype).values,
                 results["pair"].values,
             )
         )
@@ -1680,7 +1721,7 @@ class HyperoptBacktesting(Backtesting):
                 & (self.events["pair"].values == first[1])
             ).argmax()
             print(
-                self.events.iloc[max(0, idx - 50) : min(idx + 50, len(self.events))][
+                self.events.iloc[max(0, idx - 50) : min(idx + 100, len(self.events))][
                     self._cols(self.events)
                 ]
             )
@@ -1722,8 +1763,9 @@ class HyperoptBacktesting(Backtesting):
         else:
             results = self.vectorized_backtest(processed)
             saved_results = self.backtest_stock(processed, **kwargs,)
-        self._cmp_indexes(("open_index", "open_index"), results, saved_results)
-        # print(results.iloc[:10], '\n', saved_results.iloc[:10])
+        idx_name = "close_index"
+        # self._cmp_indexes((idx_name, idx_name), results, saved_results)
+        print(results.iloc[:10], '\n', saved_results.sort_values(by=["pair", "open_index"]).iloc[:10])
         # return saved_results
         return results
 
@@ -1776,3 +1818,26 @@ def shift(arr: ndarray, period=1, fill=nan) -> ndarray:
         moved[period:] = arr[:-period]
         moved[:period] = fill
     return moved
+
+
+def df_cols(df) -> Dict[str, int]:
+    return {col: n for n, col in enumerate(df.columns.values)}
+
+
+def add_columns(arr: ndarray, cols_dict: Dict, columns: Tuple) -> ndarray:
+    tail = len(cols_dict)
+    for c in columns:
+        cols_dict[c] = tail
+        tail += 1
+    return concatenate((arr, ndarray(shape=(arr.shape[0], len(columns)))), axis=1)
+
+
+def replace_values(v: ndarray, k: ndarray, arr: ndarray) -> ndarray:
+    """ replace values in a 1D array """
+    # searchsorted returns len(arr) where each element is the index of v
+    # make sure types match
+    idx = searchsorted(v, arr)
+    # this is not needed if we assume that no element in arr is > the values in v
+    # idx[idx == len(v)] = nan
+    mask = v[idx] == arr
+    return where(mask, k[idx], nan)

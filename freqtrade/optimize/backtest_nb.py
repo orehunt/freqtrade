@@ -5,6 +5,7 @@ import numpy as np
 from numpy import ndarray
 from typing import NamedTuple
 
+
 @njit(cache=True, nogil=True)
 def for_trail_idx(index, trig_idx, next_sold) -> int64[:]:
     last = -2
@@ -26,17 +27,19 @@ def for_trail_idx(index, trig_idx, next_sold) -> int64[:]:
         col[i] = last
     return col
 
+
 @njit(fastmath=True, cache=True, nogil=True)
 def ofs_cummax(data_ofs: ndarray, data: ndarray) -> ndarray:
     """ groupby like cumulative maximum """
-    cumarr = empty(len(data))
+    cumarr = np.empty(len(data))
     p = data_ofs[0]
     for i in data_ofs[1:]:
         cumarr[p] = data[p]
         for n, v in enumerate(data[p + 1 : i], p + 1):
-            cumarr[n] = maximum(cumarr[n - 1], v)
+            cumarr[n] = np.maximum(cumarr[n - 1], v)
         p = i
     return cumarr
+
 
 @njit(fastmath=True, nogil=True)
 def copy_ranges(
@@ -48,12 +51,10 @@ def copy_ranges(
         # these vals are repeated for each range
         data_bought[start:stop] = bought_vals[n]
 
+
 @njit(cache=True, nogil=True)
-def calc_profits(
-    open_rate: ndarray, close_rate: ndarray, stake_amount, fee
-) -> ndarray:
-    sa = stake_amount
-    am = sa / open_rate
+def calc_profits(open_rate: ndarray, close_rate: ndarray, stake_amount, fee) -> ndarray:
+    am = stake_amount / open_rate
     open_amount = am * open_rate
     close_amount = am * close_rate
     open_price = open_amount + open_amount * fee
@@ -61,6 +62,17 @@ def calc_profits(
     profits_prc = close_price / open_price - 1
     # pass profits_prc as out, https://github.com/numba/numba/issues/4439
     return np.round(profits_prc, 8, profits_prc)
+
+@njit(cache=True, nogil=True)
+def calc_candle_profit(open_rate: float, close_rate: float, stake_amount: float, fee: float) -> float:
+    am = stake_amount / open_rate
+    open_amount = am * open_rate
+    close_amount = am * close_rate
+    open_price = open_amount + open_amount * fee
+    close_price = close_amount - close_amount * fee
+    profits_prc = close_price / open_price - 1
+    # pass profits_prc as out, https://github.com/numba/numba/issues/4439
+    return np.round(profits_prc, 8)
 
 @njit(fastmath=True, cache=True, nogil=True)
 def find_first(vec, t):
@@ -271,7 +283,9 @@ def select_triggers(
         # valid_cols = [
         #     i for i, val in enumerate(trg_range[trg_first_idx, trg_idx]) if val != 0
         # ]
-        valid_cols = np.array([n for n,v in enumerate(trg_first_idx) if trg_range[v, n] != 0])
+        valid_cols = np.array(
+            [n for n, v in enumerate(trg_first_idx) if trg_range[v, n] != 0]
+        )
         # check that there is at least one valid trigger
         if len(valid_cols):
             # get the column index that triggered first row sie
@@ -318,3 +332,131 @@ def select_triggers(
                 break
     return triggers
 
+
+@njit(cache=False)
+def iter_triggers(
+    fl_cols,
+    it_cols,
+    names,
+    fl,
+    it,
+    bl,
+    col,
+    trg_col,
+    roi_cols,
+    trg_roi_cols,
+    col_names,
+    trg_names,
+    roi_timeouts,
+    bought_ranges,
+):
+
+    trg_n_cols = it.trg_n_cols
+    roi_vals = fl_cols.roi_vals
+    roi_values = fl_cols.roi_values
+    stake_amount = fl.stake_amount
+    fee = fl.fee
+    n_timeouts = it.n_timeouts
+
+    roi_enabled = bl.roi_enabled
+    stoploss_enabled = bl.stoploss_enabled
+    trailing_enabled = bl.trailing_enabled
+    roi_or_trailing = roi_enabled or trailing_enabled
+    stoploss_or_trailing = stoploss_enabled or trailing_enabled
+
+    sl_positive = abs(fl.sl_positive)
+    sl_offset = fl.sl_offset
+    sl_only_offset = bl.sl_only_offset
+    stoploss = abs(fl.stoploss)
+    calc_offset = sl_positive or sl_only_offset
+
+    # make views of each column for faster indexing
+    bofs = it_cols.bought_ohlc_ofs
+    n_bought = len(bofs)
+    bsold = it_cols.bought_next_sold_ofs
+    bopen = fl_cols.bought_open
+
+    ohlc_low = fl_cols.df_low
+    ohlc_high = fl_cols.df_high
+    ohlc_date = it_cols.df_date
+
+    b = 0
+    last_trigger = -1
+    bought_ofs = bofs[b]
+    current_ofs = bought_ofs
+    end_ofs = it_cols.df_ohlc_ofs[-1]
+
+    triggers = np.zeros(shape=(len(bofs), len(names.col_names)))
+    triggers[:, col["last_trigger"]] = -1
+    triggers[:, col["trigger_ofs"]] = np.nan
+
+    col_last_trigger = triggers[:, col["last_trigger"]]
+    col_trigger_bought_ofs = triggers[:, col["trigger_bought_ofs"]]
+    col_trigger_date = triggers[:, col["trigger_date"]]
+    col_trigger_ofs = triggers[:, col["trigger_ofs"]]
+    if trailing_enabled:
+        col_trailing_rate = triggers[:, col["trailing_rate"]]
+        col_trailing_triggered = triggers[:, col["trailing_triggered"]]
+    if roi_enabled:
+        col_roi_profit = triggers[:, col["roi_profit"]]
+        col_roi_triggered = triggers[:, col["roi_triggered"]]
+        # sort roi timeouts by roi ratio, such that the lowest roi always comes first
+        inv_roi_idx = np.argsort(roi_vals)
+        inv_roi_values = [roi_vals[r] for r in inv_roi_idx]
+        inv_roi_timeouts = [roi_timeouts[r] for r in inv_roi_idx]
+
+    if stoploss_enabled:
+        col_stoploss_rate = triggers[:, col["stoploss_rate"]]
+        col_stoploss_triggered = triggers[:, col["stoploss_triggered"]]
+
+    tf = bofs[0]
+    for n, b in enumerate(bofs):
+        if b < tf:
+            col_last_trigger[n] = tf
+            continue
+        triggered = False
+        open_rate = bopen[n]
+        stoploss_static = open_rate * (1 - stoploss)
+        stoploss_rate = stoploss_static
+        tf = b
+        for i, low in enumerate(ohlc_low[b : b + bought_ranges[n]]):
+            tf += i
+            high_profit = calc_candle_profit(open_rate, ohlc_high[tf], stake_amount, fee)
+            stoploss_rate = (
+                # trailing only increases
+                max(
+                    stoploss_rate,
+                    # use positive ratio if above positive offset (default > 0)
+                    ohlc_high[tf] * (1 - sl_positive)
+                    if sl_offset and high_profit > sl_offset
+                    # otherwise trailing with stoploss ratio
+                    else ohlc_high[tf] * (1 - stoploss),
+                )
+                # if trailing only above offset is set, only trail above offset
+                if not (sl_only_offset and high_profit < sl_offset)
+                # otherwise use static stoploss
+                else stoploss_static
+            )
+            if low <= stoploss_rate:
+                col_stoploss_rate[n] = stoploss_rate
+                col_stoploss_triggered[n] = True
+                triggered = True
+            for t, tm in enumerate(inv_roi_timeouts):
+                # tf is the duration of the current trade in timeframes
+                # tm is the timeframe count after which a roi ratio is enabled
+                # a roi with tm == 0 should be enabled at tf == 0
+                # a roi with tm 3 should not be enabled at tf 2
+                if tm <= i:
+                    if high_profit > inv_roi_values[t]:
+                        col_roi_profit[n] = inv_roi_values[t]
+                        col_roi_triggered[n] = True
+                        triggered = True
+                        break
+            if triggered:
+                col_trigger_bought_ofs[n] = b
+                col_trigger_rate[n] = ohlc_date[tf]
+                col_trigger_ofs[n] = tf
+                col_last_trigger[n] = tf
+                break
+        # return
+    return triggers
