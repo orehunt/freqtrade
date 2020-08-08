@@ -63,8 +63,11 @@ def calc_profits(open_rate: ndarray, close_rate: ndarray, stake_amount, fee) -> 
     # pass profits_prc as out, https://github.com/numba/numba/issues/4439
     return np.round(profits_prc, 8, profits_prc)
 
+
 @njit(cache=True, nogil=True)
-def calc_candle_profit(open_rate: float, close_rate: float, stake_amount: float, fee: float) -> float:
+def calc_candle_profit(
+    open_rate: float, close_rate: float, stake_amount: float, fee: float
+) -> float:
     am = stake_amount / open_rate
     open_amount = am * open_rate
     close_amount = am * close_rate
@@ -73,6 +76,7 @@ def calc_candle_profit(open_rate: float, close_rate: float, stake_amount: float,
     profits_prc = close_price / open_price - 1
     # pass profits_prc as out, https://github.com/numba/numba/issues/4439
     return np.round(profits_prc, 8)
+
 
 @njit(fastmath=True, cache=True, nogil=True)
 def find_first(vec, t):
@@ -119,6 +123,7 @@ class Flags(NamedTuple):
     stoploss_enabled: nb.types.boolean
     trailing_enabled: nb.types.boolean
     sl_only_offset: nb.types.boolean
+    stop_over_trail: nb.types.boolean
 
 
 class Int32Vals(NamedTuple):
@@ -149,6 +154,7 @@ class Float64Cols(NamedTuple):
     roi_vals: nb.float64[:]
 
 
+# @nb.jit(cache=True)
 @nb.njit(cache=True, nogil=True, nopython=True)
 def select_triggers(
     fl_cols,
@@ -180,6 +186,7 @@ def select_triggers(
     trailing_enabled = bl.trailing_enabled
     roi_or_trailing = roi_enabled or trailing_enabled
     stoploss_or_trailing = stoploss_enabled or trailing_enabled
+    not_stop_over_trail = not bl.stop_over_trail
 
     sl_positive = abs(fl.sl_positive)
     sl_offset = fl.sl_offset
@@ -204,7 +211,7 @@ def select_triggers(
     end_ofs = it_cols.df_ohlc_ofs[-1]
 
     roi_idx = roi_cols
-    trg_roi_idx = np.array(trg_roi_cols)
+    trg_roi_idx = np.array(trg_roi_cols, dtype=int64)
     trg_roi_pos = len(trg_col)
     trg_idx = np.arange(trg_n_cols)
 
@@ -240,7 +247,6 @@ def select_triggers(
         br = bought_ranges[b]
         bought_ofs_stop = bought_ofs + br
         trg_range = trg_range_max[:br]
-
         if roi_or_trailing:
             high_range = ohlc_high[bought_ofs:bought_ofs_stop]
             cur_profits = calc_profits(bopen[b], high_range, stake_amount, fee)
@@ -289,22 +295,27 @@ def select_triggers(
         # check that there is at least one valid trigger
         if len(valid_cols):
             # get the column index that triggered first row sie
-            trg_first = trg_first_idx[valid_cols].argmin()
+            trg_first = np.where(trg_first_idx[valid_cols].min() == trg_first_idx)[0]
+            trg_top = trg_first[0]
             # lastly get the trigger offset from the index of the first valid column
-            trg_ofs = trg_first_idx[valid_cols[trg_first]]
+            trg_ofs = trg_first_idx[trg_top]
             # check what trigger it is and copy related columns values
-            if trg_first == trg_col_stoploss_triggered:
+            if (
+                trailing_enabled
+                and trg_top == trg_col_trailing_triggered
+                and not_stop_over_trail
+            ):
+                col_trailing_triggered[b] = True
+                col_trailing_rate[b] = trailing_rate[trg_ofs]
+            elif stoploss_enabled and trg_top == trg_col_stoploss_triggered:
                 col_stoploss_triggered[b] = True
                 col_stoploss_rate[b] = stoploss_triggered_rate
-            elif trg_first in s_trg_roi_idx:
+            elif roi_enabled and trg_top in s_trg_roi_idx:
                 col_roi_triggered[b] = True
                 # NOTE: scale trg_first by how many preceding columns (stoploss,trailing)
                 # there are before roi columns, in order to get the offset
                 # relative to only the (ordered) roi columns
-                col_roi_profit[b] = roi_vals[trg_first - trg_roi_pos]
-            elif trg_first == idx_trailing_triggered:
-                col_trailing_triggered[b] = True
-                col_trailing_rate[b] = trailing_rate[trg_ofs]
+                col_roi_profit[b] = roi_vals[trg_first[-1] - trg_roi_pos]
             # trigger ofs is relative to the bought range, so just add it to the bought offset
             current_ofs = bought_ofs + trg_ofs
             # copy general trigger values shared by all trigger types
@@ -421,7 +432,9 @@ def iter_triggers(
         tf = b
         for i, low in enumerate(ohlc_low[b : b + bought_ranges[n]]):
             tf += i
-            high_profit = calc_candle_profit(open_rate, ohlc_high[tf], stake_amount, fee)
+            high_profit = calc_candle_profit(
+                open_rate, ohlc_high[tf], stake_amount, fee
+            )
             stoploss_rate = (
                 # trailing only increases
                 max(
