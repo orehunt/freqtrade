@@ -27,7 +27,6 @@ def for_trail_idx(index, trig_idx, next_sold) -> int64[:]:
         col[i] = last
     return col
 
-
 @njit(fastmath=True, cache=True, nogil=True)
 def ofs_cummax(data_ofs: ndarray, data: ndarray) -> ndarray:
     """ groupby like cumulative maximum """
@@ -40,8 +39,35 @@ def ofs_cummax(data_ofs: ndarray, data: ndarray) -> ndarray:
         p = i
     return cumarr
 
+@njit(nogil=True, cache=True, inline='always')
+def nan_early_roi(roi_triggers, nan_early_idx, br, n_timeouts):
+    roi_triggers[nan_early_idx[nan_early_idx <= br * n_timeouts]] = False
 
-@njit(fastmath=True, nogil=True)
+@njit(fastmath=True, nogil=True, cache=True)
+def compare_roi_triggers(cur_profits, roi_values, nan_early_idx, br, n_timeouts, trg_range, trg_roi_idx):
+    roi_triggers = np.ravel(np.transpose(cur_profits >= roi_values))
+    nan_early_roi(roi_triggers, nan_early_idx, br, n_timeouts)
+    trg_range[:, trg_roi_idx] = np.reshape(roi_triggers, (br, n_timeouts))
+    # return np.ravel(np.transpose(cur_profits >= roi_values))
+
+@njit(fastmath=True, nogil=True, cache=True)
+def get_valid_cols(trg_first_idx, trg_range):
+    return np.array(
+            [n for n, v in enumerate(trg_first_idx) if trg_range[v, n] != 0]
+    )
+
+@njit(fastmath=True, nogil=True, cache=True)
+def get_first_triggers(trg_first_idx, trg_range):
+    # valid_cols = np.array(
+    #         [n for n, v in enumerate(trg_first_idx) if trg_range[v, n] != 0]
+    # )
+    valid_cols = get_valid_cols(trg_first_idx, trg_range)
+    if len(valid_cols):
+        return np.where(trg_first_idx[valid_cols].min() == trg_first_idx)[0]
+    else:
+        return valid_cols
+
+@njit(fastmath=True, nogil=True, cache=True)
 def copy_ranges(
     range_vals, data_ofs, data_df, data_bought, ohlc_vals, bought_vals, bought_ranges
 ):
@@ -78,7 +104,7 @@ def calc_candle_profit(
     return np.round(profits_prc, 8)
 
 
-@njit(fastmath=True, cache=True, nogil=True)
+@njit(fastmath=True, cache=True, nogil=True, nopython=True)
 def find_first(vec, t):
     """return the index of the first occurence of item in vec"""
     for n, v in enumerate(vec):
