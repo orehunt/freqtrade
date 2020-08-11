@@ -1,6 +1,7 @@
 import logging
 import os
 from typing import Dict, List, Tuple, Union
+from types import SimpleNamespace
 from enum import IntEnum
 from collections import namedtuple
 from functools import reduce
@@ -72,7 +73,7 @@ from pandas import (
 from freqtrade.optimize.backtesting import Backtesting, BacktestResult
 from freqtrade.optimize.backtest_nb import *  # noqa ignore=F405
 from freqtrade.optimize.backtest_utils import *  # noqa ignore=F405
-from freqtrade.optimize.backtest_constants import * # noqa ignore=F405
+from freqtrade.optimize.backtest_constants import *  # noqa ignore=F405
 from freqtrade.optimize.debug import dbg  # noqa ignore=F405
 from freqtrade.exceptions import OperationalException
 from freqtrade.strategy.interface import SellType
@@ -88,12 +89,14 @@ class Candle(IntEnum):
     END = 7  # references the last candle of a pair
     # STOPLOSS = 12
 
+
 # class TriggersVars:
 
 
 class HyperoptBacktesting(Backtesting):
 
     empty_results = DataFrame.from_records([], columns=BacktestResult._fields)
+    events = None
 
     td_zero = Timedelta(0)
     td_timeframe: Timedelta
@@ -110,14 +113,6 @@ class HyperoptBacktesting(Backtesting):
 
     bts_df_cols = {}
     trigger_types = []
-    sold_cols = [
-        "bought_or_sold",
-        "trigger_ofs",
-        "trigger_bought_ofs",
-        "last_trigger",
-        "next_sold_ofs",
-        "pair",
-    ]
 
     # expressions
     profits_prc_expr = ""
@@ -538,190 +533,221 @@ class HyperoptBacktesting(Backtesting):
             # intervals are too long, jump over candles
             self.calc_type = False
             args = [df, bought, bought_ranges, bts_df]
+            if dbg:
+                dbg.start_pyinst(interval=0.01)
             bts_df = (
                 self._v2_select_triggered_events(*args)
                 # self._nb_select_triggered_events(*args)
                 # if not self.position_stacking
                 # else self._pd_2_select_triggered_events_stack(*args)
             )
+            if dbg:
+                dbg.stop_pyinst(keep=10)
         return bts_df
 
-    def _v2_vars(self, df: DataFrame, bought: DataFrame) -> Tuple:
-        # columns of the trigger array which stores all the calculations
-        col_names = [
-            "trigger_ofs",
-            "trigger_date",
-            "trigger_bought_ofs",
-            "last_trigger",
-        ]
-        # columns of the trg array which stores the calculation of each loop
-        trg_names = []
-        # the number of columns for the shape of the trigger range
-        trg_n_cols = 0
+    def _v2_vars(self, df: DataFrame, bought: DataFrame, bought_ranges) -> Dict:
+        v = {
+            "roi_enabled": self.roi_enabled,
+            "stoploss_enabled": self.stoploss_enabled,
+            "trailing_enabled": self.trailing_enabled,
+            "roi_or_trailing": self.roi_enabled or self.trailing_enabled,
+            "stoploss_or_trailing": self.stoploss_enabled or self.trailing_enabled,
+            "not_stop_over_trail": not self.config.get(
+                "backtesting_stop_over_trail", False
+            ),
+            "not_position_stacking": not self.position_stacking,
+            "sl_positive": self.strategy.trailing_stop_positive,
+            "sl_offset": self.strategy.trailing_stop_positive_offset,
+            "sl_only_offset": self.strategy.trailing_only_offset_is_reached,
+            "stoploss": abs(self.strategy.stoploss),
+            "stake_amount": self.config["stake_amount"],
+            "fee": self.fee,
+            # columns of the trigger array which stores all the calculations
+            "col_names": ["trigger_ofs", "trigger_date", "trigger_bought_ofs",],
+            # columns of the trg array which stores the calculation of each loop
+            "trg_names": [],
+            # the number of columns for the shape of the trigger range
+            "trg_n_cols": 0,
+            "bought_ranges": bought_ranges,
+        }
+        v["calc_offset"] = (v["sl_positive"] or v["sl_only_offset"],)
+
         if self.roi_enabled:
-            roi_cols_names = ("roi_profit", "roi_triggered")
-            col_names.extend(roi_cols_names)
+            v["roi_cols_names"] = ("roi_profit", "roi_triggered")
+            v["col_names"].extend(v["roi_cols_names"])
             self.roi_timeouts, self.roi_values = self._filter_roi()
-            roi_timeouts = array(list(self.roi_timeouts.keys()))
+            v["roi_timeouts"] = array(list(self.roi_timeouts.keys()), dtype="int32")
             # transpose roi values such that we can operate with profits ndarray
-            n_timeouts = len(roi_timeouts)
-            roi_values = array(self.roi_values).reshape(n_timeouts, 1)
+            v["n_timeouts"] = len(v["roi_timeouts"])
+            v["roi_values"] = array(self.roi_values, dtype="float64").reshape(
+                (v["n_timeouts"], 1)
+            )
+            v["roi_vals"] = v["roi_values"].reshape(v["roi_values"].shape[0])
             # nan indexes are relative, so can be pre calculated
-            nan_early_idx = array(
+            v["nan_early_idx"] = array(
                 [
-                    n_timeouts * f + n
-                    for n, t in enumerate(roi_timeouts)
+                    v["n_timeouts"] * f + n
+                    for n, t in enumerate(v["roi_timeouts"])
                     for f in range(t)
                 ],
                 dtype="int64",
             )
-            trg_n_cols += n_timeouts
+            v["trg_n_cols"] += v["n_timeouts"]
         else:
-            roi_timeouts = array([])
-            roi_values = array([])
-            n_timeouts = 0
-            nan_early_idx = array([], dtype=int)
+            v["roi_timeouts"] = []
 
         if self.stoploss_enabled:
-            stoploss_cols_names = ("stoploss_rate", "stoploss_triggered")
-            col_names.extend(stoploss_cols_names)
-            trg_names.append("stoploss_triggered")
-            trg_n_cols += 1
+            v["stoploss_cols_names"] = ("stoploss_rate", "stoploss_triggered")
+            v["col_names"].extend(v["stoploss_cols_names"])
+            v["trg_names"].append("stoploss_triggered")
+            v["trg_n_cols"] += 1
 
         if self.trailing_enabled:
-            trailing_cols_names = ("trailing_rate", "trailing_triggered")
-            col_names.extend(trailing_cols_names)
-            trg_names.append("trailing_triggered")
-            trg_n_cols += 1
+            v["trailing_cols_names"] = ("trailing_rate", "trailing_triggered")
+            v["col_names"].extend(v["trailing_cols_names"])
+            v["trg_names"].append("trailing_triggered")
+            v["trg_n_cols"] += 1
+        if v["not_position_stacking"]:
+            v["col_names"].append("last_trigger")
+            v["last_trigger"] = -1
+
+        v.update(
+            {
+                # make views of each column for faster indexing
+                "bofs": bought["ohlc_ofs"].values,
+                "bsold": bought["next_sold_ofs"].values,
+                "bopen": bought["open"].values,
+                "ohlc_low": df["low"].values,
+                "ohlc_high": df["high"].values,
+                "ohlc_date": df["date"].values.astype("int64"),
+                "b": 0,
+                "end_ofs": df["ohlc_ofs"].values[-1],
+            }
+        )
+        v["bought_ofs"] = v["bofs"][v["b"]]
+        v["current_ofs"] = v["bought_ofs"]
+
+        v["col"], _ = self._columns_indexes(v["col_names"], v["roi_timeouts"])
+        v["trg_col"], v["trg_roi_cols"] = self._columns_indexes(
+            v["trg_names"], v["roi_timeouts"], roi_as_array=True
+        )
+        v["trg_roi_idx"] = array([tp[1] for tp in v["trg_roi_cols"]])
+        v["trg_roi_pos"] = len(v["trg_col"])
+
+        # NOTE: fill with zeros as some columns are booleans,
+        # which would default to True if left empty or with nan
+        triggers = zeros(shape=(len(bought), len(v["col_names"])))
+        v["triggers"] = triggers
+        # NOTE: this initializations are done because when splitting events we use ternary logic
+        # to avoid edge cases where 0 would be considered an index
+        # we check against -1 for last_trigger so initialize it to -1
+        col = v["col"]
+        if v["not_position_stacking"]:
+            triggers[:, col.last_trigger] = -1
+            v["col_last_trigger"] = triggers[:, col.last_trigger]
+        # we check against nan/infinite for trigger ofs, so initialize it with nan
+        triggers[:, col.trigger_ofs] = nan
+
+        v["col_trigger_bought_ofs"] = triggers[:, col.trigger_bought_ofs]
+        v["col_trigger_date"] = triggers[:, col.trigger_date]
+        v["col_trigger_ofs"] = triggers[:, col.trigger_ofs]
+
+        if self.trailing_enabled:
+            v["col_trailing_rate"] = triggers[:, col.trailing_rate]
+            v["idx_trailing_triggered"] = col.trailing_triggered
+            v["col_trailing_triggered"] = triggers[:, col.trailing_triggered]
+        if self.roi_enabled:
+            v["col_roi_profit"] = triggers[:, col.roi_profit]
+            v["col_roi_triggered"] = triggers[:, col.roi_triggered]
+            v["s_trg_roi_idx"] = set(v["trg_roi_idx"])
         else:
-            trailing_cols_names = []
+            v["s_trg_roi_idx"] = set([])
+        if self.stoploss_enabled:
+            v["col_stoploss_rate"] = triggers[:, col.stoploss_rate]
+            v["col_stoploss_triggered"] = triggers[:, col.stoploss_triggered]
 
-        col, roi_cols = self._columns_indexes(
-            col_names, roi_timeouts, roi_as_tuple=True, col_as_dict=True
-        )
-        trg_col, trg_roi_cols = self._columns_indexes(
-            trg_names, roi_timeouts, roi_as_tuple=True, col_as_dict=True
-        )
+        # user the same arr at every iteration by slicing a subset of the max
+        v["trg_range_max"] = ndarray(shape=(bought_ranges.max(), v["trg_n_cols"]))
+        return v
 
-        fl_cols = Float64Cols(
-            df_low=df["low"].values,
-            df_high=df["high"].values,
-            bought_open=bought["open"].values,
-            roi_values=roi_values,
-            roi_vals=roi_values.reshape(roi_values.shape[0]),
+    def _nb_vars(self, v: Dict) -> Tuple:
+        # columns of the trigger array which stores all the calculations
+
+        fl_dict = {k: v[k] for k in ("ohlc_low", "ohlc_high", "bopen", "roi_vals")}
+        fl_dict.update(
+            {f"col_{k}": v["triggers"][:, n] for k, n in v["col"]._asdict().items()}
         )
-        it_cols = Int64Cols(
-            bought_ohlc_ofs=bought["ohlc_ofs"].values,
-            bought_next_sold_ofs=bought["next_sold_ofs"].values,
-            df_date=df["date"].values,
-            df_ohlc_ofs=df["ohlc_ofs"].values,
-        )
-        fl = Float64Vals(
-            fee=float(self.fee),
-            stake_amount=float(self.config["stake_amount"]),
-            stoploss=self.strategy.stoploss,
-            sl_positive=(self.strategy.trailing_stop_positive or 0),
-            sl_offset=self.strategy.trailing_stop_positive_offset,
-        )
-        it = Int32Vals(n_timeouts=n_timeouts, trg_n_cols=trg_n_cols)
-        bl = Flags(
-            roi_enabled=self.roi_enabled,
-            stoploss_enabled=self.stoploss_enabled,
-            trailing_enabled=self.trailing_enabled,
-            sl_only_offset=self.strategy.trailing_only_offset_is_reached,
-            stop_over_trail=self.config.get("backtesting_stop_over_trail", False),
-        )
-        col_names = tuple(col_names)
-        trg_names = tuple(trg_names)
-        stoploss_cols_names = tuple(stoploss_cols_names)
-        trailing_cols_names = tuple(trailing_cols_names)
-        names = CharLists(
-            col_names=col_names,
-            trg_names=trg_names,
-            stoploss_cols_names=stoploss_cols_names,
-            trailing_cols_names=trailing_cols_names,
-        )
+        update_tpdict(fl_dict.keys(), fl_dict.values(), Float64Cols)
+
+        it_dict = {
+            k: v[k]
+            for k in ("bofs", "bsold", "ohlc_date", "bought_ranges", "trg_roi_idx")
+        }
+        update_tpdict(it_dict.keys(), it_dict.values(), Int64Cols)
+
+        fl = {
+            k: v[k]
+            for k in ("fee", "stake_amount", "stoploss", "sl_positive", "sl_offset")
+        }
+        update_tpdict(fl.keys(), fl.values(), Float64Vals)
+
+        it = {
+            k: v[k]
+            for k in (
+                "n_timeouts",
+                "trg_n_cols",
+                "trg_roi_pos",
+                "bought_ofs",
+                "end_ofs",
+            )
+        }
+        update_tpdict(it.keys(), it.values(), Int64Vals)
+
+        bl = {
+            k: v[k]
+            for k in (
+                "roi_enabled",
+                "stoploss_enabled",
+                "trailing_enabled",
+                "sl_only_offset",
+                "not_stop_over_trail",
+                "roi_or_trailing",
+                "stoploss_or_trailing",
+                "calc_offset",
+                "not_position_stacking",
+            )
+        }
+        update_tpdict(bl.keys(), bl.values(), Flags)
+
+        names = {
+            k: array(v[k], dtype="20U")
+            for k in (
+                "col_names",
+                "trg_names",
+                "stoploss_cols_names",
+                "trailing_cols_names",
+            )
+        }
+        update_tpdict(names.keys(), names.values(), NamesLists)
+
+        trg_col = {f"trg_col_{c}": n for c, n in v["trg_col"]._asdict().items()}
+        update_tpdict(trg_col.keys(), trg_col.values(), Int64Vals)
+
+        update_tpdict(("trg_roi_cols",), (v["trg_roi_cols"],), ColsMap)
 
         return (
-            fl_cols,
-            it_cols,
-            names,
-            fl,
-            it,
-            bl,
-            col,
-            trg_col,
-            roi_cols,
-            trg_roi_cols,
-            col_names,
-            trg_names,
-            nan_early_idx,
-            roi_timeouts,
+            Float64Cols,
+            Int64Cols,
+            NamesLists,
+            Float64Vals,
+            Int64Vals,
+            Flags,
+            ColsMap,
+            v["nan_early_idx"],
+            v["roi_timeouts"],
+            v["roi_values"],
+            v["trg_range_max"],
         )
-
-    def _v2_select_triggered_events_stack(
-        self,
-        df: DataFrame,
-        bought: DataFrame,
-        bought_ranges: ndarray,
-        sold: DataFrame,
-        bts_df: DataFrame,
-    ):
-        """ loop version of stoploss selection for position stacking, simply loops
-        over all the bought candles of the bts dataframe """
-        stoploss_index = []
-        stoploss_rate = []
-        trigger_date = []
-        bought_trigger_ofs = []
-        # copy cols for faster index accessing
-        bofs = bought["ohlc_ofs"].values
-        bopen = bought["open"].values
-        b = 0
-        trigger_bought_ofs = bofs[b]
-
-        ohlc_low = df["low"].values
-        ohlc_ofs = df["ohlc_ofs"].values
-        ohlc_date = df["date"].values
-        ofs_start = 0
-        ohlc_idx = df.index.get_level_values(0)
-        end_ofs = ohlc_ofs[-1]
-
-        while trigger_bought_ofs < end_ofs:
-            # calculate the rate from the bought candle
-            stoploss_triggered_rate = e("bopen[b] * (1 - stoploss)")
-            # check trigger for the range of the current bought
-            ofs_start += ohlc_ofs[ofs_start:].searchsorted(trigger_bought_ofs, "left")
-            stoploss_triggered = (
-                ohlc_low[ofs_start : ofs_start + bought_ranges[b]]
-                <= stoploss_triggered_rate
-            )
-            # get the position where stoploss triggered relative to the current bought slice
-            stop_max_idx = stoploss_triggered.argmax()
-            # check that the index returned by argmax is True
-            if stoploss_triggered[stop_max_idx]:
-                # set the offset of the triggered stoploss index
-                current_ofs = trigger_bought_ofs + stop_max_idx
-                stoploss_index.append(ohlc_idx[current_ofs])
-                trigger_date.append(ohlc_date[current_ofs])
-                stoploss_rate.append(stoploss_triggered_rate)
-                bought_trigger_ofs.append(trigger_bought_ofs)
-            try:
-                b += 1
-                trigger_bought_ofs = bofs[b]
-            except IndexError:
-                break
-        # set the index to the offset and add the columns to set the stoploss
-        # data points on the relevant boughts
-        bts_df.set_index("ohlc_ofs", inplace=True)
-        stoploss_cols = ["trigger_ofs", "stoploss_rate", "trigger_date"]
-        bts_df.assign(**{c: nan for c in stoploss_cols})
-        bts_df = bts_df.reindex(columns=[*bts_df.columns, *stoploss_cols], copy=False)
-        bts_df.loc[bought_trigger_ofs, stoploss_cols] = [
-            [stoploss_index],
-            [stoploss_rate],
-            [trigger_date],
-        ]
-        return bts_df
 
     def _v2_select_triggered_events(
         self,
@@ -730,181 +756,69 @@ class HyperoptBacktesting(Backtesting):
         bought_ranges: ndarray,
         bts_df: DataFrame,
     ):
-        roi_enabled = self.roi_enabled
-        stoploss_enabled = self.stoploss_enabled
-        trailing_enabled = self.trailing_enabled
-        roi_or_trailing = roi_enabled or trailing_enabled
-        stoploss_or_trailing = stoploss_enabled or trailing_enabled
-        not_stop_over_trail = not self.config.get("backtesting_stop_over_trail", False)
-        not_position_stacking = not self.position_stacking
+        v = self._v2_vars(df, bought, bought_ranges)
+        sn = SimpleNamespace(**v)
 
-        sl_positive = self.strategy.trailing_stop_positive
-        sl_offset = self.strategy.trailing_stop_positive_offset
-        sl_only_offset = self.strategy.trailing_only_offset_is_reached
-        stoploss = abs(self.strategy.stoploss)
-        calc_offset = sl_positive or sl_only_offset
-        stake_amount = self.config["stake_amount"]
-        fee = self.fee
-
-        # columns of the trigger array which stores all the calculations
-        col_names = [
-            "trigger_ofs",
-            "trigger_date",
-            "trigger_bought_ofs",
-        ]
-        # columns of the trg array which stores the calculation of each loop
-        trg_names = []
-        # the number of columns for the shape of the trigger range
-        trg_n_cols = 0
-
-        if roi_enabled:
-            roi_cols_names = ("roi_profit", "roi_triggered")
-            col_names.extend(roi_cols_names)
-            self.roi_timeouts, self.roi_values = self._filter_roi()
-            roi_timeouts = array(list(self.roi_timeouts.keys()))
-            # transpose roi values such that we can operate with profits ndarray
-            n_timeouts = len(roi_timeouts)
-            roi_values = array(self.roi_values).reshape(n_timeouts, 1)
-            # nan indexes are relative, so can be pre calculated
-            nan_early_idx = array(
-                [
-                    n_timeouts * f + n
-                    for n, t in enumerate(roi_timeouts)
-                    for f in range(t)
-                ],
-                dtype="int64",
-            )
-            trg_n_cols += n_timeouts
-        else:
-            roi_timeouts = []
-
-        if stoploss_enabled:
-            stoploss_cols_names = ("stoploss_rate", "stoploss_triggered")
-            col_names.extend(stoploss_cols_names)
-            trg_names.append("stoploss_triggered")
-            trg_n_cols += 1
-
-        if trailing_enabled:
-            trailing_cols_names = ("trailing_rate", "trailing_triggered")
-            col_names.extend(trailing_cols_names)
-            trg_names.append("trailing_triggered")
-            trg_n_cols += 1
-        if not_position_stacking:
-            col_names.append("last_trigger")
-            last_trigger = -1
-
-        # make views of each column for faster indexing
-        bofs = bought["ohlc_ofs"].values
-        bsold = bought["next_sold_ofs"].values
-        bopen = bought["open"].values
-
-        ohlc_low = df["low"].values
-        ohlc_high = df["high"].values
-        ohlc_date = df["date"].values
-
-        b = 0
-        bought_ofs = bofs[b]
+        bought_ofs = sn.bought_ofs
         current_ofs = bought_ofs
-        end_ofs = df["ohlc_ofs"].values[-1]
+        b = sn.b
 
-        col, roi_cols = self._columns_indexes(col_names, roi_timeouts)
-        col_dict = col._asdict()
-        trg_col, trg_roi_cols = self._columns_indexes(trg_names, roi_timeouts)
-        roi_idx = array(list(roi_cols.values()))
-        trg_roi_idx = array(list(trg_roi_cols.values()))
-        trg_roi_pos = len(trg_col)
-        trg_idx = arange(trg_n_cols)
-
-        # NOTE: fill with zeros as some columns are booleans,
-        # which would default to True if left empty or with nan
-        triggers = zeros(shape=(len(bought), len(col_names)))
-        # NOTE: this initializations are done because when splitting events we use ternary logic
-        # to avoid edge cases where 0 would be considered an index
-        # we check against -1 for last_trigger so initialize it to -1
-        if not_position_stacking:
-            triggers[:, col.last_trigger] = -1
-            col_last_trigger = triggers[:, col.last_trigger]
-        # we check against nan/infinite for trigger ofs, so initialize it with nan
-        triggers[:, col.trigger_ofs] = nan
-
-        col_trigger_bought_ofs = triggers[:, col.trigger_bought_ofs]
-        col_trigger_date = triggers[:, col.trigger_date]
-        col_trigger_ofs = triggers[:, col.trigger_ofs]
-
-        if trailing_enabled:
-            col_trailing_rate = triggers[:, col.trailing_rate]
-            idx_trailing_triggered = col.trailing_triggered
-            col_trailing_triggered = triggers[:, idx_trailing_triggered]
-        if roi_enabled:
-            col_roi_profit = triggers[:, col.roi_profit]
-            col_roi_triggered = triggers[:, col.roi_triggered]
-            s_trg_roi_idx = set(trg_roi_idx)
-        else:
-            s_trg_roi_idx = set([])
-        if stoploss_enabled:
-            col_stoploss_rate = triggers[:, col.stoploss_rate]
-            col_stoploss_triggered = triggers[:, col.stoploss_triggered]
-
-        # user the same arr at every iteration by slicing a subset of the max
-        trg_range_max = ndarray(shape=(bought_ranges.max(), trg_n_cols))
-        while bought_ofs < end_ofs:
+        while bought_ofs < sn.end_ofs:
             # check trigger for the range of the current bought
             triggered = False
-            br = bought_ranges[b]
+            br = sn.bought_ranges[b]
             bought_ofs_stop = bought_ofs + br
-            trg_range = trg_range_max[:br]
-            open_rate = bopen[b]
+            trg_range = sn.trg_range_max[:br, :]
+            open_rate = sn.bopen[b]
 
-            if roi_or_trailing:
-                high_range = ohlc_high[bought_ofs:bought_ofs_stop]
-                cur_profits = calc_profits(open_rate, high_range, stake_amount, fee)
-            if stoploss_or_trailing:
-                low_range = ohlc_low[bought_ofs:bought_ofs_stop]
-            if roi_enabled:
+            if sn.roi_or_trailing:
+                high_range = sn.ohlc_high[bought_ofs:bought_ofs_stop]
+                cur_profits = calc_profits(
+                    open_rate, high_range, sn.stake_amount, sn.fee
+                )
+            if sn.stoploss_or_trailing:
+                low_range = sn.ohlc_low[bought_ofs:bought_ofs_stop]
+            if sn.roi_enabled:
                 # get a view of the roi triggers because we need to nan indexes
                 # relative to (flattened) roi triggers only (flatten is faster than ravel here)
-                # roi_triggers = (cur_profits >= roi_values).swapaxes(0, 1).flatten()
-                compare_roi_triggers(
-                    cur_profits,
-                    roi_values,
-                    nan_early_idx,
-                    br,
-                    n_timeouts,
-                    trg_range,
-                    trg_roi_idx,
-                )
                 # NOTE: clip nan_early_idx to the length of the bought_range
                 # NOTE: use False, not nan, since bool(nan) == True
-                # roi_triggers[nan_early_idx[nan_early_idx <= br * n_timeouts]] = False
-                # roi_triggers.shape = (br, n_timeouts)
-                # trg_range[:, trg_roi_idx] = roi_triggers
-            if stoploss_enabled:
-                # calculate the rate from the bought candle
-                stoploss_triggered_rate = open_rate * (1 - stoploss)
-                trg_range[:, trg_col.stoploss_triggered] = (
-                    low_range <= stoploss_triggered_rate
+                compare_roi_triggers(
+                    cur_profits,
+                    sn.roi_values,
+                    sn.nan_early_idx,
+                    br,
+                    sn.n_timeouts,
+                    trg_range,
+                    sn.trg_roi_idx,
                 )
-            if trailing_enabled:
-                trailing_rate = cummax(high_range * (1 - stoploss))
-                if calc_offset:
-                    trailing_offset_reached = cummax(cur_profits) >= sl_offset
-                if sl_positive:
-                    trailing_rate[trailing_offset_reached] = cummax(
-                        high_range[trailing_offset_reached] * (1 - sl_positive)
-                    )
-                if sl_only_offset:
-                    trailing_rate[~trailing_offset_reached] = nan
-                trg_range[:, trg_col.trailing_triggered] = low_range <= trailing_rate
+
+            if sn.stoploss_enabled:
+                # calculate the rate from the bought candle
+                stoploss_triggered_rate = calc_stoploss_rate(
+                    open_rate,
+                    low_range,
+                    sn.stoploss,
+                    trg_range,
+                    sn.trg_col.stoploss_triggered,
+                )
+            if sn.trailing_enabled:
+                trailing_rate = calc_trailing_rate(
+                    sn.calc_offset,
+                    sn.sl_positive,
+                    sn.sl_only_offset,
+                    sn.sl_offset,
+                    cur_profits,
+                    high_range,
+                    sn.stoploss,
+                    trg_range,
+                    low_range,
+                    sn.trg_col.trailing_triggered,
+                )
             # apply argmax over axis 0, such that we get the first timeframe
             # where a trigger happened (argmax of each column)
             trg_first_idx = rowargmax(trg_range)
             # filter out columns that have no true trigger
-            # NOTE: the list is very small here (<10) so it might make sense to use python
-            # but the big speed up seen here does not match outside testing of same lists lengths..
-            # valid_cols = flatnonzero(trg_range[trg_first_idx, trg_idx])
-            # valid_cols = array([
-            #     i for i, val in enumerate(trg_range[trg_first_idx, trg_idx]) if val != 0
-            # ], dtype=int)
             trg_first = get_first_triggers(trg_first_idx, trg_range)
             # check that there is at least one valid trigger
             if len(trg_first):
@@ -918,56 +832,58 @@ class HyperoptBacktesting(Backtesting):
                 # check what trigger it is and copy related columns values
                 # from left they are ordered stoploss, trailing, roi
                 if (
-                    trailing_enabled
-                    and trg_top == trg_col.trailing_triggered
-                    and not_stop_over_trail
+                    sn.trailing_enabled
+                    and trg_top == sn.trg_col.trailing_triggered
+                    and sn.not_stop_over_trail
                 ):
-                    col_trailing_triggered[b] = True
-                    col_trailing_rate[b] = trailing_rate[trg_ofs]
-                elif stoploss_enabled and trg_top == trg_col.stoploss_triggered:
-                    col_stoploss_triggered[b] = True
-                    col_stoploss_rate[b] = stoploss_triggered_rate
-                elif roi_enabled and trg_top in s_trg_roi_idx:
-                    col_roi_triggered[b] = True
+                    sn.col_trailing_triggered[b] = True
+                    sn.col_trailing_rate[b] = trailing_rate[trg_ofs]
+                elif sn.stoploss_enabled and trg_top == sn.trg_col.stoploss_triggered:
+                    sn.col_stoploss_triggered[b] = True
+                    sn.col_stoploss_rate[b] = stoploss_triggered_rate
+                elif sn.roi_enabled and trg_top in sn.s_trg_roi_idx:
+                    sn.col_roi_triggered[b] = True
                     # NOTE: scale trg_first by how many preceding columns (stoploss,trailing)
                     # there are before roi columns, in order to get the offset
                     # relative to only the (ordered) roi columns
-                    # and pick the minimum value from the right (roi_values have to be pre ordered desc)
-                    col_roi_profit[b] = roi_values[trg_first[-1] - trg_roi_pos]
+                    # and pick the minimum value from the right (roi_values have to be pre osn.rdered desc)
+                    sn.col_roi_profit[b] = sn.roi_vals[trg_first[-1] - sn.trg_roi_pos]
+
                 # trigger ofs is relative to the bought range, so just add it to the bought offset
                 current_ofs = bought_ofs + trg_ofs
-                # copy general trigger values shared by all trigger types
-                # if trigg:
-                col_trigger_ofs[b] = current_ofs
-                col_trigger_date[b] = ohlc_date[current_ofs]
-                col_trigger_bought_ofs[b] = bought_ofs
+                # copy general trigger values shared by asn.ll trigger types
+                sn.col_trigger_ofs[b] = current_ofs
+                sn.col_trigger_date[b] = sn.ohlc_date[current_ofs]
+                sn.col_trigger_bought_ofs[b] = bought_ofs
+
                 triggered = True
-            if not_position_stacking:
+            if sn.not_position_stacking:
                 if triggered:
                     try:
                         last_trigger = b
                         # get the first row where the bought index is
-                        # higher than the current stoploss index
-                        b += bofs[b:].searchsorted(current_ofs, "right")
-                        # repeat the trigger index for the boughts in between the trigger
-                        # and the bought with higher idx
-                        col_last_trigger[last_trigger:b] = current_ofs
-                        bought_ofs = bofs[b]
+                        # higher than the current stoploss insn.dex
+                        b = next_bought(b, sn.bofs, current_ofs)
+                        # repeat  trigger index for the boughts in between the trigger
+                        # and  bought with higher idx
+                        sn.col_last_trigger[last_trigger:b] = current_ofs
+                        bought_ofs = sn.bofs[b]
                     except IndexError:
                         break
-                else:  # if no triggers executed, jump to the first bought after next sold idx
+                else:  # if no trigg executed, jump to the first bought after next sold idx
                     try:
-                        b += bofs[b:].searchsorted(bsold[b], "right")
-                        bought_ofs = bofs[b]
+                        b = next_bought(b, sn.bofs, sn.bsold)
+                        bought_ofs = sn.bofs[b]
                     except IndexError:
                         break
             else:
                 try:
                     b += 1
-                    bought_ofs = bofs[b]
+                    bought_ofs = sn.bofs[b]
                 except IndexError:
                     break
-        return self._assign_triggers(bts_df, bought, triggers, col_names)
+
+        return self._assign_triggers(bts_df, bought, sn.triggers, sn.col_names)
 
     def _assign_triggers(
         self, df: DataFrame, bought: DataFrame, triggers: ndarray, col_names: List[str]
@@ -991,6 +907,7 @@ class HyperoptBacktesting(Backtesting):
     def _nb_select_triggered_events(
         self, df, bought, bought_ranges, bts_df
     ) -> DataFrame:
+        v = self._v2_vars(df, bought, bought_ranges)
         (
             fl_cols,
             it_cols,
@@ -998,17 +915,14 @@ class HyperoptBacktesting(Backtesting):
             fl,
             it,
             bl,
-            col,
-            trg_col,
-            roi_cols,
-            trg_roi_cols,
-            col_names,
-            trg_names,
+            cmap,
             nan_early_idx,
             roi_timeouts,
-        ) = self._v2_vars(df, bought)
+            roi_values,
+            trg_range_max,
+        ) = self._nb_vars(v)
 
-        triggers = select_triggers(
+        select_triggers(
             # triggers = iter_triggers(
             fl_cols,
             it_cols,
@@ -1016,19 +930,13 @@ class HyperoptBacktesting(Backtesting):
             fl,
             it,
             bl,
-            col,
-            trg_col,
-            roi_cols,
-            trg_roi_cols,
-            col_names,
-            trg_names,
+            cmap,
             nan_early_idx,
             roi_timeouts,
-            bought_ranges,
+            roi_values,
+            trg_range_max,
         )
-        # print(self._assign_triggers(bts_df, bought, triggers, col_names).iloc[:10][["stoploss_triggered", "roi_triggered", "trailing_triggered", "stoploss_rate", "roi_profit", "trailing_rate", "last_trigger"]])
-        # exit()
-        return self._assign_triggers(bts_df, bought, triggers, col_names)
+        return self._assign_triggers(bts_df, bought, v["triggers"], v["col_names"])
 
     def _remove_pairs_offsets(self, df: DataFrame, cols: List):
         ofs_vals = df["ofs"].values.tolist()
@@ -1386,7 +1294,7 @@ class HyperoptBacktesting(Backtesting):
         self,
         cols: List[str],
         roi_timeouts: List[int],
-        roi_as_tuple=False,
+        roi_as_array=False,
         col_as_dict=False,
     ) -> Tuple:
         col = {}
@@ -1403,7 +1311,9 @@ class HyperoptBacktesting(Backtesting):
             ret_col = namedtuple("columns", col.keys())(**col)
         return (
             ret_col,
-            roi_cols if not roi_as_tuple else tuple(roi_cols.values()),
+            roi_cols
+            if not roi_as_array
+            else array(tuple(zip(roi_cols.keys(), roi_cols.values()))),
         )
 
     def _calc_stoploss_rate(self, open_rate: ndarray, stoploss: float) -> ndarray:
@@ -1450,9 +1360,6 @@ class HyperoptBacktesting(Backtesting):
         return e("max(roi_rate, axis=1)")
 
     def split_events(self, bts_df: DataFrame) -> Tuple[DataFrame, DataFrame]:
-        ## debugging
-        if dbg:
-            dbg.events = bts_df
 
         if self.any_trigger:
             bts_ls_s1 = self._shift_paw(
@@ -1580,12 +1487,15 @@ class HyperoptBacktesting(Backtesting):
         if len(bts_df) < 1:
             return self.empty_results
 
+        if dbg:
+            self.events = bts_df
+
         events_buy, events_sell = (
             self.split_events(bts_df)
             if not self.position_stacking
             else self.split_events_stack(bts_df)
         )
 
-        dbg._validate_events(events_buy, events_sell)
+        if dbg:
+            dbg._validate_events(events_buy, events_sell)
         return self.get_results(events_buy, events_sell, df)
-

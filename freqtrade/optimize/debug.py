@@ -151,14 +151,16 @@ class BacktestDebug:
         key_1 = where[1]
         key_pair_0 = f"pair_{key_0}"
         key_pair_1 = f"pair_{key_1}"
+        events = self.backtesting.events if "events" in dir(self.backtesting) else None
+
 
         if len(results) == 0 and len(saved_results) == 0:
             return
         # we don't consider missing force sells as wrong
         if filter_fsell:
-            if "events" in dir(self):
-                end_candles = self.events.loc[
-                    self.events["next_sold_ofs"].isin(self.backtesting.pairs_ofs_end)
+            if events is not None:
+                end_candles = events[
+                    events["next_sold_ofs"].isin(self.backtesting.pairs_ofs_end)
                 ]["ohlc"].values
             else:
                 end_candles = []
@@ -175,6 +177,9 @@ class BacktestDebug:
         if results["pair"].dtype == float:
             results["pair"] = replace_values(
                 self.backtesting.pairs_idx, self.backtesting.pairs_name, results["pair"].values
+            )
+        events["pair"] = replace_values(
+                self.backtesting.pairs_idx, self.backtesting.pairs_name, events["pair"].values
             )
         results = results.sort_values(by=["pair", key_0])
         saved_results = saved_results.sort_values(by=["pair", key_1])
@@ -216,7 +221,7 @@ class BacktestDebug:
                 f"({len(to_exc)})",
             )
         # print the first event that is wrong and the range of the
-        # boughts_to_sold df (saved in self.events) that includes it
+        # boughts_to_sold df (saved in events) that includes it
         if to_inc and print_inc:
             first = to_inc[0]
         elif to_exc:
@@ -226,12 +231,12 @@ class BacktestDebug:
 
         if first is not None:
             idx = (
-                (self.events["ohlc"].values == int(first[0]))
-                & (self.events["pair"].values == first[1])
+                (events["ohlc"].values == int(first[0]))
+                & (events["pair"].values == first[1])
             ).argmax()
             print(
-                self.events.iloc[max(0, idx - 50) : min(idx + 100, len(self.events))][
-                    self._cols(self.events)
+                events.iloc[max(0, idx - 50) : min(idx + 100, len(events))][
+                    self._cols(events)
                 ]
             )
             s_idx = (
@@ -263,18 +268,21 @@ class BacktestDebug:
         if check_at and self._check_counter(check_at):
             return cls.empty_results
         # if testing only one epoch use "store" once then set it to "load"
-        cache = ""
+        cache = os.getenv("FQT_DEBUG", "")
         if cache == "load":
             results = cls.vectorized_backtest(processed)
             saved_results = self._load_results()
         elif cache == "store":
             self._dump_results(cls.backtest_stock(processed, **kwargs,))
             exit()
+        elif cache == "1":
+            results = cls.vectorized_backtest(processed)
         else:
             results = cls.vectorized_backtest(processed)
             saved_results = cls.backtest_stock(processed, **kwargs,)
-        idx_name = "open_index"
-        self._cmp_indexes((idx_name, idx_name), results, saved_results)
+        if cache != "1":
+            idx_name = "open_index"
+            self._cmp_indexes((idx_name, idx_name), results, saved_results)
         # print(
         #     results.iloc[:10],
         #     "\n",
