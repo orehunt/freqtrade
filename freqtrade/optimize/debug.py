@@ -9,7 +9,7 @@ import numpy as np
 
 
 class BacktestDebug:
-    bts_cols: Dict
+    bts_loc: Dict
     backtesting: object
     events: pd.DataFrame
     ref = {}
@@ -19,18 +19,18 @@ class BacktestDebug:
             assert len(events_buy) == len(events_sell)
         except AssertionError:
             # find locations where a sell is after two or more buys
-            flcols = self._cols(self.bts_cols)
+            flcols = self._cols(self.bts_loc)
             if isinstance(events_buy, pd.DataFrame):
                 events_buy, events_sell = events_buy.values, events_sell.values
             events_buy = pd.DataFrame(
                 events_buy,
-                columns=self.bts_cols,
-                index=events_buy[:, self.bts_cols["ohlc_ofs"]],
+                columns=self.bts_loc,
+                index=events_buy[:, self.bts_loc["ohlc_ofs"]],
             )
             events_sell = pd.DataFrame(
                 events_sell,
-                columns=self.bts_cols,
-                index=events_sell[:, self.bts_cols["ohlc_ofs"]],
+                columns=self.bts_loc,
+                index=events_sell[:, self.bts_loc["ohlc_ofs"]],
             )
             leb = len(events_buy)
             les = len(events_sell)
@@ -279,16 +279,16 @@ class BacktestDebug:
             if ex:
                 exit()
 
-    def _print_events(self, events_buy, events_sell, bts_df, bts_cols, pos):
+    def _print_events(self, events_buy, events_sell, bts_df, bts_loc, pos):
         cols = self._cols(bts_df)
         if not isinstance(events_buy, pd.DataFrame):
             events_buy = pd.DataFrame(
-                events_buy, columns=bts_cols, index=events_buy[:, bts_cols["ohlc_ofs"]]
+                events_buy, columns=bts_loc, index=events_buy[:, bts_loc["ohlc_ofs"]]
             )
             events_sell = pd.DataFrame(
                 events_sell,
-                columns=bts_cols,
-                index=events_sell[:, bts_cols["ohlc_ofs"]],
+                columns=bts_loc,
+                index=events_sell[:, bts_loc["ohlc_ofs"]],
             )
         s_res = dbg._load_results().sort_values(by=["pair", "open_index"])
         print(events_buy.iloc[pos][cols])

@@ -1,5 +1,6 @@
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Union
 from numpy import (ndarray, flatnonzero, nan, concatenate, where, searchsorted, isnan, interp)
+from pandas import DataFrame
 
 def padfill(arr: ndarray):
     mask = isnan(arr)
@@ -29,8 +30,11 @@ def shift(arr: ndarray, period=1, fill=nan) -> ndarray:
 def df_cols(df) -> Dict[str, int]:
     return {col: n for n, col in enumerate(df.columns.values)}
 
+def as_df(vals, cols, idx=None):
+    return DataFrame(vals, columns=cols, index=idx, copy=False)
 
-def add_columns(arr: ndarray, cols_dict: Dict, columns: Tuple) -> ndarray:
+def add_columns(arr: ndarray, cols_dict: Dict, columns: Union[List, Tuple]) -> ndarray:
+    # NOTE: arrays are empty, not filled with nan
     tail = len(cols_dict)
     for c in columns:
         cols_dict[c] = tail
