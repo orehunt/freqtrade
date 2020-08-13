@@ -292,10 +292,9 @@ class Edge:
         # Then every value more than (standard deviation + 2*average) is out (pump)
         #
         # Removing Pumps
-        if self.edge_config.get("remove_pumps", False):
-            results = results.groupby(["pair", "stoploss"]).apply(
-                lambda x: x[x["profit_abs"] < 2 * x["profit_abs"].std() + x["profit_abs"].mean()]
-            )
+        if self.edge_config.get('remove_pumps', False):
+            results = results[results['profit_abs'] < 2 * results['profit_abs'].std()
+                              + results['profit_abs'].mean()]
         ##########################################################################
 
         # Removing trades having a duration more than X minutes (set in config)

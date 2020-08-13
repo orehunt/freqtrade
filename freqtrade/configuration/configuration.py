@@ -307,109 +307,73 @@ class Configuration:
             logger.info("Parameter --no-color detected ...")
             config.update({"print_colorized": False})
         else:
-            config.update({"print_colorized": True})
+            config.update({'print_colorized': True})
 
-        self._args_to_config(
-            config, argname="print_json", logstring="Parameter --print-json detected ..."
-        )
+        self._args_to_config(config, argname='print_json',
+                             logstring='Parameter --print-json detected ...')
 
-        self._args_to_config(
-            config, argname="export_csv", logstring="Parameter --export-csv detected: {}"
-        )
+        self._args_to_config(config, argname='export_csv',
+                             logstring='Parameter --export-csv detected: {}')
 
-        self._args_to_config(
-            config, argname="hyperopt_jobs", logstring="Parameter -j/--job-workers detected: {}"
-        )
+        self._args_to_config(config, argname='hyperopt_jobs',
+                             logstring='Parameter -j/--job-workers detected: {}')
 
-        self._args_to_config(
-            config,
-            argname="hyperopt_random_state",
-            logstring="Parameter --random-state detected: {}",
-        )
+        self._args_to_config(config, argname='hyperopt_random_state',
+                             logstring='Parameter --random-state detected: {}')
 
-        self._args_to_config(
-            config, argname="hyperopt_min_trades", logstring="Parameter --min-trades detected: {}"
-        )
+        self._args_to_config(config, argname='hyperopt_min_trades',
+                             logstring='Parameter --min-trades detected: {}')
 
-        self._args_to_config(config, argname="hyperopt_clear", logstring="Hyperopt clear: {}")
+        self._args_to_config(config, argname='hyperopt_continue',
+                             logstring='Hyperopt continue: {}')
 
-        self._args_to_config(
-            config, argname="hyperopt_loss", logstring="Using Hyperopt loss class name: {}"
-        )
+        self._args_to_config(config, argname='hyperopt_loss',
+                             logstring='Using Hyperopt loss class name: {}')
 
-        self._args_to_config(
-            config, argname="hyperopt_show_index", logstring="Parameter -n/--index detected: {}"
-        )
+        self._args_to_config(config, argname='hyperopt_show_index',
+                             logstring='Parameter -n/--index detected: {}')
 
-        self._args_to_config(
-            config, argname="hyperopt_list_best", logstring="Parameter --best detected: {}"
-        )
+        self._args_to_config(config, argname='hyperopt_list_best',
+                             logstring='Parameter --best detected: {}')
 
-        self._args_to_config(
-            config,
-            argname="hyperopt_list_profitable",
-            logstring="Parameter --profitable detected: {}",
-        )
+        self._args_to_config(config, argname='hyperopt_list_profitable',
+                             logstring='Parameter --profitable detected: {}')
 
-        self._args_to_config(
-            config,
-            argname="hyperopt_list_min_trades",
-            logstring="Parameter --min-trades detected: {}",
-        )
+        self._args_to_config(config, argname='hyperopt_list_min_trades',
+                             logstring='Parameter --min-trades detected: {}')
 
-        self._args_to_config(
-            config,
-            argname="hyperopt_list_max_trades",
-            logstring="Parameter --max-trades detected: {}",
-        )
+        self._args_to_config(config, argname='hyperopt_list_max_trades',
+                             logstring='Parameter --max-trades detected: {}')
 
-        self._args_to_config(
-            config,
-            argname="hyperopt_list_min_avg_time",
-            logstring="Parameter --min-avg-time detected: {}",
-        )
+        self._args_to_config(config, argname='hyperopt_list_min_avg_time',
+                             logstring='Parameter --min-avg-time detected: {}')
 
-        self._args_to_config(
-            config,
-            argname="hyperopt_list_max_avg_time",
-            logstring="Parameter --max-avg-time detected: {}",
-        )
+        self._args_to_config(config, argname='hyperopt_list_max_avg_time',
+                             logstring='Parameter --max-avg-time detected: {}')
 
-        self._args_to_config(
-            config,
-            argname="hyperopt_list_min_avg_profit",
-            logstring="Parameter --min-avg-profit detected: {}",
-        )
+        self._args_to_config(config, argname='hyperopt_list_min_avg_profit',
+                             logstring='Parameter --min-avg-profit detected: {}')
 
-        self._args_to_config(
-            config,
-            argname="hyperopt_list_max_avg_profit",
-            logstring="Parameter --max-avg-profit detected: {}",
-        )
+        self._args_to_config(config, argname='hyperopt_list_max_avg_profit',
+                             logstring='Parameter --max-avg-profit detected: {}')
 
-        self._args_to_config(
-            config,
-            argname="hyperopt_list_min_total_profit",
-            logstring="Parameter --min-total-profit detected: {}",
-        )
+        self._args_to_config(config, argname='hyperopt_list_min_total_profit',
+                             logstring='Parameter --min-total-profit detected: {}')
 
-        self._args_to_config(
-            config,
-            argname="hyperopt_list_max_total_profit",
-            logstring="Parameter --max-total-profit detected: {}",
-        )
+        self._args_to_config(config, argname='hyperopt_list_max_total_profit',
+                             logstring='Parameter --max-total-profit detected: {}')
 
-        self._args_to_config(
-            config,
-            argname="hyperopt_list_no_details",
-            logstring="Parameter --no-details detected: {}",
-        )
+        self._args_to_config(config, argname='hyperopt_list_min_objective',
+                             logstring='Parameter --min-objective detected: {}')
 
-        self._args_to_config(
-            config,
-            argname="hyperopt_show_no_header",
-            logstring="Parameter --no-header detected: {}",
-        )
+        self._args_to_config(config, argname='hyperopt_list_max_objective',
+                             logstring='Parameter --max-objective detected: {}')
+
+        self._args_to_config(config, argname='hyperopt_list_no_details',
+                             logstring='Parameter --no-details detected: {}')
+
+        self._args_to_config(config, argname='hyperopt_show_no_header',
+                             logstring='Parameter --no-header detected: {}')
 
     def _process_plot_options(self, config: Dict[str, Any]) -> None:
 

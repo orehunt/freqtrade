@@ -28,6 +28,7 @@ from sqlalchemy.orm.session import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from freqtrade.exceptions import OperationalException
+from freqtrade.misc import safe_value_fallback
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +98,7 @@ def check_migrate(engine) -> None:
         logger.debug(f"trying {table_back_name}")
 
     # Check for latest column
-    if not has_column(cols, 'timeframe'):
+    if not has_column(cols, 'amount_requested'):
         logger.info(f'Running database migration - backup available as {table_back_name}')
 
         fee_open = get_column_def(cols, 'fee_open', 'fee')
@@ -130,6 +131,7 @@ def check_migrate(engine) -> None:
             cols, 'close_profit_abs',
             f"(amount * close_rate * (1 - {fee_close})) - {open_trade_price}")
         sell_order_status = get_column_def(cols, 'sell_order_status', 'null')
+        amount_requested = get_column_def(cols, 'amount_requested', 'amount')
 
         # Schema migration necessary
         engine.execute(f"alter table trades rename to {table_back_name}")
@@ -145,7 +147,7 @@ def check_migrate(engine) -> None:
                 fee_open, fee_open_cost, fee_open_currency,
                 fee_close, fee_close_cost, fee_open_currency, open_rate,
                 open_rate_requested, close_rate, close_rate_requested, close_profit,
-                stake_amount, amount, open_date, close_date, open_order_id,
+                stake_amount, amount, amount_requested, open_date, close_date, open_order_id,
                 stop_loss, stop_loss_pct, initial_stop_loss, initial_stop_loss_pct,
                 stoploss_order_id, stoploss_last_update,
                 max_rate, min_rate, sell_reason, sell_order_status, strategy,
@@ -164,7 +166,7 @@ def check_migrate(engine) -> None:
                 {fee_close_cost} fee_close_cost, {fee_close_currency} fee_close_currency,
                 open_rate, {open_rate_requested} open_rate_requested, close_rate,
                 {close_rate_requested} close_rate_requested, close_profit,
-                stake_amount, amount, open_date, close_date, open_order_id,
+                stake_amount, amount, {amount_requested}, open_date, close_date, open_order_id,
                 {stop_loss} stop_loss, {stop_loss_pct} stop_loss_pct,
                 {initial_stop_loss} initial_stop_loss,
                 {initial_stop_loss_pct} initial_stop_loss_pct,
@@ -228,6 +230,7 @@ class Trade(_DECL_BASE):
     close_profit_abs = Column(Float)
     stake_amount = Column(Float, nullable=False)
     amount = Column(Float)
+    amount_requested = Column(Float)
     open_date = Column(DateTime, nullable=False, default=datetime.utcnow)
     close_date = Column(DateTime)
     open_order_id = Column(String)
@@ -271,6 +274,7 @@ class Trade(_DECL_BASE):
             'is_open': self.is_open,
             'exchange': self.exchange,
             'amount': round(self.amount, 8),
+            'amount_requested': round(self.amount_requested, 8) if self.amount_requested else None,
             'stake_amount': round(self.stake_amount, 8),
             'strategy': self.strategy,
             'ticker_interval': self.timeframe,  # DEPRECATED
@@ -288,7 +292,7 @@ class Trade(_DECL_BASE):
             'open_timestamp': int(self.open_date.timestamp() * 1000),
             'open_rate': self.open_rate,
             'open_rate_requested': self.open_rate_requested,
-            'open_trade_price': self.open_trade_price,
+            'open_trade_price': round(self.open_trade_price, 8),
 
             'close_date_hum': (arrow.get(self.close_date).humanize()
                                if self.close_date else None),
@@ -382,20 +386,20 @@ class Trade(_DECL_BASE):
         """
         order_type = order["type"]
         # Ignore open and cancelled orders
-        if order["status"] == "open" or order["price"] is None:
+        if order['status'] == 'open' or safe_value_fallback(order, 'average', 'price') is None:
             return
 
         logger.info("Updating trade (id=%s) ...", self.id)
 
         if order_type in ("market", "limit") and order["side"] == "buy":
             # Update open rate and actual amount
-            self.open_rate = Decimal(order["price"])
-            self.amount = Decimal(order.get("filled", order["amount"]))
+            self.open_rate = Decimal(safe_value_fallback(order, 'average', 'price'))
+            self.amount = Decimal(safe_value_fallback(order, 'filled', 'amount'))
             self.recalc_open_trade_price()
             logger.info("%s_BUY has been fulfilled for %s.", order_type.upper(), self)
             self.open_order_id = None
         elif order_type in ('market', 'limit') and order['side'] == 'sell':
-            self.close(order['price'])
+            self.close(safe_value_fallback(order, 'average', 'price'))
             logger.info('%s_SELL has been fulfilled for %s.', order_type.upper(), self)
         elif order_type in ('stop_loss_limit', 'stop-loss', 'stop'):
             self.stoploss_order_id = None

@@ -29,7 +29,7 @@ from freqtrade.exceptions import (DDosProtection, ExchangeError,
                                   InvalidOrderException, OperationalException,
                                   RetryableOrderError, TemporaryError)
 from freqtrade.exchange.common import BAD_EXCHANGES, retrier, retrier_async
-from freqtrade.misc import deep_merge_dicts, safe_value_fallback
+from freqtrade.misc import deep_merge_dicts, safe_value_fallback2
 
 CcxtModuleType = Any
 
@@ -276,9 +276,8 @@ class Exchange:
                 logger.info("Enabled Sandbox API on %s", name)
             else:
                 logger.warning(
-                    name, "No Sandbox URL in CCXT, exiting. " "Please check your config.json"
-                )
-                raise OperationalException(f"Exchange {name} does not provide a sandbox api")
+                    f"No Sandbox URL in CCXT for {name}, exiting. Please check your config.json")
+                raise OperationalException(f'Exchange {name} does not provide a sandbox api')
 
     def _load_async_markets(self, reload: bool = False) -> None:
         try:
@@ -515,6 +514,7 @@ class Exchange:
             "id": order_id,
             'pair': pair,
             'price': rate,
+            'average': rate,
             'amount': _amount,
             'cost': _amount * rate,
             'type': ordertype,
@@ -1057,7 +1057,7 @@ class Exchange:
             if self.is_cancel_order_result_suitable(corder):
                 return corder
         except InvalidOrderException:
-            logger.warning(f"Could not cancel order {order_id}.")
+            logger.warning(f"Could not cancel order {order_id} for {pair}.")
         try:
             order = self.fetch_order(order_id, pair)
         except InvalidOrderException:
@@ -1066,7 +1066,7 @@ class Exchange:
 
         return order
 
-    @retrier
+    @retrier(retries=5)
     def fetch_order(self, order_id: str, pair: str) -> Dict:
         if self._config['dry_run']:
             try:
@@ -1081,10 +1081,10 @@ class Exchange:
             return self._api.fetch_order(order_id, pair)
         except ccxt.OrderNotFound as e:
             raise RetryableOrderError(
-                f'Order not found (id: {order_id}). Message: {e}') from e
+                f'Order not found (pair: {pair} id: {order_id}). Message: {e}') from e
         except ccxt.InvalidOrder as e:
             raise InvalidOrderException(
-                f'Tried to get an invalid order (id: {order_id}). Message: {e}') from e
+                f'Tried to get an invalid order (pair: {pair} id: {order_id}). Message: {e}') from e
         except ccxt.DDoSProtection as e:
             raise DDosProtection(e) from e
         except (ccxt.NetworkError, ccxt.ExchangeError) as e:
@@ -1214,7 +1214,7 @@ class Exchange:
         if fee_curr in self.get_pair_base_currency(order['symbol']):
             # Base currency - divide by amount
             return round(
-                order['fee']['cost'] / safe_value_fallback(order, order, 'filled', 'amount'), 8)
+                order['fee']['cost'] / safe_value_fallback2(order, order, 'filled', 'amount'), 8)
         elif fee_curr in self.get_pair_quote_currency(order['symbol']):
             # Quote currency - divide by cost
             return round(order['fee']['cost'] / order['cost'], 8) if order['cost'] else None
@@ -1227,7 +1227,7 @@ class Exchange:
                 comb = self.get_valid_pair_combination(fee_curr, self._config['stake_currency'])
                 tick = self.fetch_ticker(comb)
 
-                fee_to_quote_rate = safe_value_fallback(tick, tick, 'last', 'ask')
+                fee_to_quote_rate = safe_value_fallback2(tick, tick, 'last', 'ask')
                 return round((order['fee']['cost'] * fee_to_quote_rate) / order['cost'], 8)
             except ExchangeError:
                 return None
@@ -1242,7 +1242,6 @@ class Exchange:
         return (order['fee']['cost'],
                 order['fee']['currency'],
                 self.calculate_fee_rate(order))
-        # calculate rate ? (order['fee']['cost'] / (order['amount'] * order['price']))
 
 
 def is_exchange_bad(exchange_name: str) -> bool:

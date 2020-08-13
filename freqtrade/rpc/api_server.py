@@ -55,7 +55,8 @@ def require_login(func: Callable[[Any, Any], Any]):
 
 
 # Type should really be Callable[[ApiServer], Any], but that will create a circular dependency
-def rpc_catch_errors(func: Callable[[Any], Any]):
+def rpc_catch_errors(func: Callable[..., Any]):
+
     def func_wrapper(obj, *args, **kwargs):
 
         try:
@@ -183,31 +184,27 @@ class ApiServer(RPC):
         self.app.add_url_rule(f'{BASE_URI}/reload_config', 'reload_config',
                               view_func=self._reload_config, methods=['POST'])
         # Info commands
-        self.app.add_url_rule(
-            f"{BASE_URI}/balance", "balance", view_func=self._balance, methods=["GET"]
-        )
-        self.app.add_url_rule(f"{BASE_URI}/count", "count", view_func=self._count, methods=["GET"])
-        self.app.add_url_rule(f"{BASE_URI}/daily", "daily", view_func=self._daily, methods=["GET"])
-        self.app.add_url_rule(f"{BASE_URI}/edge", "edge", view_func=self._edge, methods=["GET"])
-        self.app.add_url_rule(
-            f"{BASE_URI}/profit", "profit", view_func=self._profit, methods=["GET"]
-        )
-        self.app.add_url_rule(
-            f"{BASE_URI}/performance", "performance", view_func=self._performance, methods=["GET"]
-        )
-        self.app.add_url_rule(
-            f"{BASE_URI}/status", "status", view_func=self._status, methods=["GET"]
-        )
-        self.app.add_url_rule(
-            f"{BASE_URI}/version", "version", view_func=self._version, methods=["GET"]
-        )
-        self.app.add_url_rule(
-            f"{BASE_URI}/show_config", "show_config", view_func=self._show_config, methods=["GET"]
-        )
-        self.app.add_url_rule(f"{BASE_URI}/ping", "ping", view_func=self._ping, methods=["GET"])
-        self.app.add_url_rule(
-            f"{BASE_URI}/trades", "trades", view_func=self._trades, methods=["GET"]
-        )
+        self.app.add_url_rule(f'{BASE_URI}/balance', 'balance',
+                              view_func=self._balance, methods=['GET'])
+        self.app.add_url_rule(f'{BASE_URI}/count', 'count', view_func=self._count, methods=['GET'])
+        self.app.add_url_rule(f'{BASE_URI}/daily', 'daily', view_func=self._daily, methods=['GET'])
+        self.app.add_url_rule(f'{BASE_URI}/edge', 'edge', view_func=self._edge, methods=['GET'])
+        self.app.add_url_rule(f'{BASE_URI}/profit', 'profit',
+                              view_func=self._profit, methods=['GET'])
+        self.app.add_url_rule(f'{BASE_URI}/performance', 'performance',
+                              view_func=self._performance, methods=['GET'])
+        self.app.add_url_rule(f'{BASE_URI}/status', 'status',
+                              view_func=self._status, methods=['GET'])
+        self.app.add_url_rule(f'{BASE_URI}/version', 'version',
+                              view_func=self._version, methods=['GET'])
+        self.app.add_url_rule(f'{BASE_URI}/show_config', 'show_config',
+                              view_func=self._show_config, methods=['GET'])
+        self.app.add_url_rule(f'{BASE_URI}/ping', 'ping',
+                              view_func=self._ping, methods=['GET'])
+        self.app.add_url_rule(f'{BASE_URI}/trades', 'trades',
+                              view_func=self._trades, methods=['GET'])
+        self.app.add_url_rule(f'{BASE_URI}/trades/<int:tradeid>', 'trades_delete',
+                              view_func=self._trades_delete, methods=['DELETE'])
         # Combined actions and infos
         self.app.add_url_rule(
             f"{BASE_URI}/blacklist", "blacklist", view_func=self._blacklist, methods=["GET", "POST"]
@@ -440,6 +437,19 @@ class ApiServer(RPC):
         limit = int(request.args.get("limit", 0))
         results = self._rpc_trade_history(limit)
         return self.rest_dump(results)
+
+    @require_login
+    @rpc_catch_errors
+    def _trades_delete(self, tradeid):
+        """
+        Handler for DELETE /trades/<tradeid> endpoint.
+        Removes the trade from the database (tries to cancel open orders first!)
+        get:
+          param:
+            tradeid: Numeric trade-id assigned to the trade.
+        """
+        result = self._rpc_delete(tradeid)
+        return self.rest_dump(result)
 
     @require_login
     @rpc_catch_errors

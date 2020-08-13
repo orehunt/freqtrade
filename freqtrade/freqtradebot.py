@@ -20,7 +20,7 @@ from freqtrade.edge import Edge
 from freqtrade.exceptions import (DependencyException, ExchangeError,
                                   InvalidOrderException, PricingError)
 from freqtrade.exchange import timeframe_to_minutes, timeframe_to_next_date
-from freqtrade.misc import safe_value_fallback
+from freqtrade.misc import safe_value_fallback, safe_value_fallback2
 from freqtrade.pairlist.pairlistmanager import PairListManager
 from freqtrade.persistence import Trade
 from freqtrade.resolvers import ExchangeResolver, StrategyResolver
@@ -533,7 +533,7 @@ class FreqtradeBot:
                 time_in_force=time_in_force):
             logger.info(f"User requested abortion of buying {pair}")
             return False
-
+        amount = self.exchange.amount_to_precision(pair, amount)
         order = self.exchange.buy(pair=pair, ordertype=order_type,
                                   amount=amount, rate=buy_limit_requested,
                                   time_in_force=time_in_force)
@@ -542,6 +542,7 @@ class FreqtradeBot:
 
         # we assume the order is executed at the price requested
         buy_limit_filled_price = buy_limit_requested
+        amount_requested = amount
 
         if order_status == "expired" or order_status == "rejected":
             order_tif = self.strategy.order_time_in_force["buy"]
@@ -562,28 +563,21 @@ class FreqtradeBot:
                 # the order is partially fulfilled
                 # in case of IOC orders we can check immediately
                 # if the order is fulfilled fully or partially
-                logger.warning(
-                    "Buy %s order with time in force %s for %s is %s by %s."
-                    " %s amount fulfilled out of %s (%s remaining which is canceled).",
-                    order_tif,
-                    order_type,
-                    pair,
-                    order_status,
-                    self.exchange.name,
-                    order["filled"],
-                    order["amount"],
-                    order["remaining"],
-                )
-                stake_amount = order["cost"]
-                amount = order["amount"]
-                buy_limit_filled_price = order["price"]
+                logger.warning('Buy %s order with time in force %s for %s is %s by %s.'
+                               ' %s amount fulfilled out of %s (%s remaining which is canceled).',
+                               order_tif, order_type, pair, order_status, self.exchange.name,
+                               order['filled'], order['amount'], order['remaining']
+                               )
+                stake_amount = order['cost']
+                amount = safe_value_fallback(order, 'filled', 'amount')
+                buy_limit_filled_price = safe_value_fallback(order, 'average', 'price')
                 order_id = None
 
         # in case of FOK the order may be filled immediately and fully
-        elif order_status == "closed":
-            stake_amount = order["cost"]
-            amount = order["amount"]
-            buy_limit_filled_price = order["price"]
+        elif order_status == 'closed':
+            stake_amount = order['cost']
+            amount = safe_value_fallback(order, 'filled', 'amount')
+            buy_limit_filled_price = safe_value_fallback(order, 'average', 'price')
 
         # Fee is applied twice because we make a LIMIT_BUY and LIMIT_SELL
         fee = self.exchange.get_fee(symbol=pair, taker_or_maker="maker")
@@ -591,6 +585,7 @@ class FreqtradeBot:
             pair=pair,
             stake_amount=stake_amount,
             amount=amount,
+            amount_requested=amount_requested,
             fee_open=fee,
             fee_close=fee,
             open_rate=buy_limit_filled_price,
@@ -684,7 +679,7 @@ class FreqtradeBot:
                     trades_closed += 1
 
             except DependencyException as exception:
-                logger.warning("Unable to sell trade: %s", exception)
+                logger.warning('Unable to sell trade %s: %s', trade.pair, exception)
 
         # Updating wallets if any trade occured
         if trades_closed:
@@ -1018,6 +1013,12 @@ class FreqtradeBot:
             reason = constants.CANCEL_REASON['TIMEOUT']
             corder = self.exchange.cancel_order_with_result(trade.open_order_id, trade.pair,
                                                             trade.amount)
+            # Avoid race condition where the order could not be cancelled coz its already filled.
+            # Simply bailing here is the only safe way - as this order will then be
+            # handled in the next iteration.
+            if corder.get('status') not in ('canceled', 'closed'):
+                logger.warning(f"Order {trade.open_order_id} for {trade.pair} not cancelled.")
+                return False
         else:
             # Order was cancelled already, so we can reuse the existing dict
             corder = order
@@ -1026,7 +1027,7 @@ class FreqtradeBot:
         logger.info("Buy order %s for %s.", reason, trade)
 
         # Using filled to determine the filled amount
-        filled_amount = safe_value_fallback(corder, order, 'filled', 'filled')
+        filled_amount = safe_value_fallback2(corder, order, 'filled', 'filled')
 
         if isclose(filled_amount, 0.0, abs_tol=constants.MATH_CLOSE_PREC):
             logger.info('Buy order fully cancelled. Removing %s from database.', trade)
@@ -1295,7 +1296,8 @@ class FreqtradeBot:
         # Try update amount (binance-fix)
         try:
             new_amount = self.get_real_amount(trade, order, order_amount)
-            if not isclose(order['amount'], new_amount, abs_tol=constants.MATH_CLOSE_PREC):
+            if not isclose(safe_value_fallback(order, 'filled', 'amount'), new_amount,
+                           abs_tol=constants.MATH_CLOSE_PREC):
                 order['amount'] = new_amount
                 order.pop('filled', None)
                 trade.recalc_open_trade_price()
@@ -1341,7 +1343,7 @@ class FreqtradeBot:
         """
         # Init variables
         if order_amount is None:
-            order_amount = order["amount"]
+            order_amount = safe_value_fallback(order, 'filled', 'amount')
         # Only run for closed orders
         if trade.fee_updated(order.get('side', '')) or order['status'] == 'open':
             return order_amount
