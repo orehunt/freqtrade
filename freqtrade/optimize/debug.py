@@ -67,7 +67,7 @@ class BacktestDebug:
         if skip:
             if "counter" not in globals():
                 counter = 0
-            if counter > skip:
+            if counter >= skip:
                 skip = 0
                 counter = -1
             else:
@@ -333,11 +333,12 @@ class BacktestDebug:
         if cache not in  ("0", "1"):
             idx_name = os.getenv("FQT_CMP_IDX", "open_index")
             self._cmp_indexes((idx_name, idx_name), results, saved_results)
-        # print(
-        #     results.iloc[:10],
-        #     "\n",
-        #     saved_results.sort_values(by=["pair", "open_index"]).iloc[:10],
-        # )
+        if os.getenv("FQT_SHOW_RES", ""):
+            print(
+                results.iloc[:10],
+                "\n",
+                saved_results.sort_values(by=["pair", "open_index"]).iloc[:10],
+            )
         # return saved_results
         return results
 

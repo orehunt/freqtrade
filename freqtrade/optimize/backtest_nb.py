@@ -102,6 +102,12 @@ def calc_profits(open_rate: ndarray, close_rate: ndarray, stake_amount, fee) -> 
     # pass profits_prc as out, https://github.com/numba/numba/issues/4439
     return np.round(profits_prc, 8, profits_prc)
 
+@njit(cache=True, nogil=True)
+def calc_roi_close_rate(open_rate: ndarray, min_rate: ndarray, roi: ndarray, fee: float):
+    roi_rate  = -(open_rate * roi + open_rate * (1 + fee)) / (fee - 1)
+    return np.fmax(roi_rate, min_rate)
+
+
 
 @njit(cache=True, nogil=True)
 def calc_candle_profit(

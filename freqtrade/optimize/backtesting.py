@@ -203,7 +203,6 @@ class Backtesting:
                 close_rate = -(trade.open_rate * roi + trade.open_rate * (1 + trade.fee_open)) / (
                     trade.fee_close - 1
                 )
-
                 if (
                     trade_dur > 0
                     and trade_dur == roi_entry

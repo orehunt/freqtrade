@@ -6,7 +6,6 @@ from enum import IntEnum
 from collections import namedtuple
 from functools import reduce
 
-from numexpr import evaluate as e
 from numba import types
 from numba.typed import Dict as nb_Dict
 from numpy import (
@@ -203,10 +202,11 @@ class HyperoptBacktesting(Backtesting):
                 # cast as int since using as indexer
                 roi_ofs = sell_vals[where_roi, sell_cols["trigger_ofs"]].astype(int)
                 roi_low = ohlc_vals[roi_ofs, ohlc_cols["low"]]
-                sell_vals[
-                    where_roi, sell_cols["close_rate"]
-                ] = self._calc_roi_close_rate(
-                    roi_open_rate, roi_low, events_roi[:, sell_cols["roi_profit"]]
+                sell_vals[where_roi, sell_cols["close_rate"]] = calc_roi_close_rate(
+                    roi_open_rate,
+                    roi_low,
+                    events_roi[:, sell_cols["roi_profit"]],
+                    self.fee,
                 )
         if self.trailing_enabled:
             trailing_triggered = sell_vals[:, sell_cols["trailing_triggered"]].astype(
@@ -250,7 +250,6 @@ class HyperoptBacktesting(Backtesting):
         trade_duration[trade_duration == self.td_zero].values[
             :
         ] = self.td_half_timeframe
-
         return DataFrame(
             {
                 "pair": replace_values(
@@ -282,14 +281,9 @@ class HyperoptBacktesting(Backtesting):
             sa, fee = Decimal(self.config["stake_amount"]), Decimal(self.fee)
             open_rate = array([Decimal(n) for n in open_rate], dtype=Decimal)
             close_rate = array([Decimal(n) for n in close_rate], dtype=Decimal)
-            profits_abs, profits_prc = self._calc_profits_np(
-                sa, fee, open_rate, close_rate
-            )
         else:
             sa, fee = self.config["stake_amount"], self.fee
-            profits_abs, profits_prc = self._calc_profits_expr(
-                sa, fee, open_rate, close_rate, calc_abs
-            )
+        profits_abs, profits_prc = self._calc_profits_np(sa, fee, open_rate, close_rate, calc_abs)
         if dec:
             profits_abs = profits_abs.astype(float) if profits_abs else None
             profits_prc = profits_prc.astype(float)
@@ -307,18 +301,6 @@ class HyperoptBacktesting(Backtesting):
         profits_prc = (close_price / open_price - 1).round(8)
         profits_abs = (close_price - open_price).round(8) if calc_abs else None
         return profits_abs, profits_prc
-
-    def _calc_profits_expr(self, sa, fee, open_rate, close_rate, calc_abs) -> Tuple:
-        if not self.profits_prc_expr:
-            am = "(sa / open_rate)"
-            open_amount = f"({am} * open_rate)"
-            close_amount = f"({am} * close_rate)"
-            open_price = f"({open_amount} + {open_amount} * fee)"
-            close_price = f"({close_amount} - {close_amount} * fee)"
-            self.profits_prc_expr = f"({close_price} / {open_price} - 1)"
-            self.profits_abs_expr = f"({close_price} - {open_price})"
-
-        return e(self.profits_abs_expr) if calc_abs else None, e(self.profits_prc_expr)
 
     def shifted_offsets(self, ofs: ndarray, period: int):
         s = sign(period)
@@ -566,7 +548,7 @@ class HyperoptBacktesting(Backtesting):
                 "backtesting_stop_over_trail", False
             ),
             "not_position_stacking": not self.position_stacking,
-            "sl_positive": self.strategy.trailing_stop_positive or 0.,
+            "sl_positive": self.strategy.trailing_stop_positive or 0.0,
             "sl_positive_not_null": self.strategy.trailing_stop_positive is not None,
             "sl_offset": self.strategy.trailing_stop_positive_offset,
             "sl_only_offset": self.strategy.trailing_only_offset_is_reached,
@@ -1367,17 +1349,6 @@ class HyperoptBacktesting(Backtesting):
                 array(timeouts).astype(int),
             ),
         )
-
-    def _calc_roi_close_rate(
-        self, open_rate: ndarray, min_rate: ndarray, roi: ndarray
-    ) -> ndarray:
-        roi_rate = ndarray(shape=(open_rate.shape[0], 2))
-        roi_rate[:, 0] = e(
-            "-(open_rate * roi + open_rate * (1 + fee)) / (fee - 1)",
-            global_dict=self.__dict__,
-        )
-        roi_rate[:, 1] = min_rate
-        return e("max(roi_rate, axis=1)")
 
     def split_events(self, bts_df: DataFrame) -> Tuple[DataFrame, DataFrame]:
         bts_vals = bts_df.values
