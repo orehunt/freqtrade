@@ -1,22 +1,27 @@
 from freqtrade.exceptions import OperationalException
-from freqtrade.optimize.backtest_constants import * # noqa ignore=F405
+from freqtrade.optimize.backtest_constants import *  # noqa ignore=F405
 from freqtrade.optimize.backtest_utils import replace_values
 from freqtrade.strategy.interface import SellType
-from typing import Tuple, Dict
+from typing import Tuple, Dict, Any
 import os
 import pandas as pd
 import numpy as np
 
+
 class BacktestDebug:
     bts_cols: Dict
-    events: pd.DataFrame
     backtesting: object
+    events: pd.DataFrame
+    ref = {}
 
     def _validate_events(self, events_buy: pd.DataFrame, events_sell: pd.DataFrame):
         try:
             assert len(events_buy) == len(events_sell)
         except AssertionError:
             # find locations where a sell is after two or more buys
+            flcols = self._cols(self.bts_cols)
+            if isinstance(events_buy, pd.DataFrame):
+                events_buy, events_sell = events_buy.values, events_sell.values
             events_buy = pd.DataFrame(
                 events_buy,
                 columns=self.bts_cols,
@@ -27,24 +32,32 @@ class BacktestDebug:
                 columns=self.bts_cols,
                 index=events_sell[:, self.bts_cols["ohlc_ofs"]],
             )
-            print("buy:", len(events_buy), "sell:", len(events_sell))
-            for n, i in enumerate(events_buy.index.values[1:], 1):
+            leb = len(events_buy)
+            les = len(events_sell)
+            nxt = True
+            for n, i in enumerate(events_buy.index.values[1 : min(leb, les)], 1):
                 nxt = (events_sell.iloc[n].name >= i) & (
                     events_sell.iloc[n - 1].name < i
-                )
+                ) & (events_buy.iloc[n].name <= events_sell.iloc[n].name)
                 if not nxt:
                     print(events_buy.iloc[n])
-                    print(events_buy.iloc[n - 1 : n + 1])
-                    print(events_sell.iloc[n - 1 : n + 1], end="\n")
-                    raise OperationalException("Buy and sell events not matching")
-                    return
-            events_buy, events_sell = (
-                events_buy[MERGE_COLS],
-                events_sell[MERGE_COLS],
-            )
-            print(events_buy.iloc[:3], "\n", events_sell.iloc[:3])
-            print(events_buy.iloc[-3:], "\n", events_sell.iloc[-3:])
-            raise OperationalException("Buy and sell events not matching")
+                    print(events_buy.iloc[n - 1 : min(leb, n + 1)])
+                    print(events_sell.iloc[n - 1 : min(les, n + 1)], end="\n")
+                    print("buy:", len(events_buy), "sell:", len(events_sell))
+                    raise OperationalException(
+                        f"Buy and sell events not matching at {n}"
+                    )
+            if nxt:
+                events_buy, events_sell = (
+                    events_buy[flcols],
+                    events_sell[flcols],
+                )
+                print("\nHEAD\n")
+                print(events_buy.iloc[:10], "\n", events_sell.iloc[:10])
+                print("\nTAIL\n")
+                print(events_buy.iloc[-10:], "\n", events_sell.iloc[-10:])
+                print("buy:", len(events_buy), "sell:", len(events_sell))
+                raise OperationalException("Buy and sell events not matching")
 
     @staticmethod
     def start_pyinst(interval=0.001, skip=0):
@@ -110,17 +123,21 @@ class BacktestDebug:
             "date_trigger",
             "trigger_ofs_max",
             "last_trigger",
+            "last_trigger_diff",
             "ohlc_ofs",
         ]
         self.counter = 0
 
-    def _cols(self, df: pd.DataFrame):
-        columns = df.columns.values
+    def _cols(self, src: Any):
+        columns = src.columns.values if isinstance(src, pd.DataFrame) else src
         flt_cols = []
         for col in self.cols:
             if col in columns:
                 flt_cols.append(col)
         return flt_cols
+
+    def _asdf(self, arr, df):
+        return pd.DataFrame(arr, columns=df.columns, index=arr[:, df.columns.get_loc(df.index.name or df.columns[0]) or 0])
 
     def _load_results(self) -> pd.DataFrame:
         import pickle
@@ -143,6 +160,7 @@ class BacktestDebug:
         print_data=False,
         filter_fsell=True,
         print_inc=True,
+            cols=None,
     ):
         """ find all the non matching indexes between results, differentiate between not present (to include)
         and invalid (to exclude) """
@@ -151,8 +169,13 @@ class BacktestDebug:
         key_1 = where[1]
         key_pair_0 = f"pair_{key_0}"
         key_pair_1 = f"pair_{key_1}"
-        events = self.backtesting.events if "events" in dir(self.backtesting) else None
-
+        events = self.backtesting.events if "events" in dir(self.backtesting) else self.events
+        if not isinstance(results, pd.DataFrame):
+            results = pd.DataFrame(
+                results,
+                columns=cols,
+                index=results[:, cols["ohlc_ofs"]],
+            )
 
         if len(results) == 0 and len(saved_results) == 0:
             return
@@ -176,10 +199,14 @@ class BacktestDebug:
         # stock results are sorted, so align indexes
         if results["pair"].dtype == float:
             results["pair"] = replace_values(
-                self.backtesting.pairs_idx, self.backtesting.pairs_name, results["pair"].values
+                self.backtesting.pairs_idx,
+                self.backtesting.pairs_name,
+                results["pair"].values,
             )
-        events["pair"] = replace_values(
-                self.backtesting.pairs_idx, self.backtesting.pairs_name, events["pair"].values
+            events["pair"] = replace_values(
+                self.backtesting.pairs_idx,
+                self.backtesting.pairs_name,
+                events["pair"].values,
             )
         results = results.sort_values(by=["pair", key_0])
         saved_results = saved_results.sort_values(by=["pair", key_1])
@@ -252,11 +279,32 @@ class BacktestDebug:
             if ex:
                 exit()
 
+    def _print_events(self, events_buy, events_sell, bts_df, bts_cols, pos):
+        cols = self._cols(bts_df)
+        if not isinstance(events_buy, pd.DataFrame):
+            events_buy = pd.DataFrame(
+                events_buy, columns=bts_cols, index=events_buy[:, bts_cols["ohlc_ofs"]]
+            )
+            events_sell = pd.DataFrame(
+                events_sell,
+                columns=bts_cols,
+                index=events_sell[:, bts_cols["ohlc_ofs"]],
+            )
+        s_res = dbg._load_results().sort_values(by=["pair", "open_index"])
+        print(events_buy.iloc[pos][cols])
+        print(events_sell.iloc[pos][cols])
+        print(bts_df.iloc[pos][cols])
+        print(s_res.iloc[pos])
+        print(len(events_buy), len(events_sell))
+        exit()
+
     def _check_counter(self, at=0) -> bool:
         self.counter += 1
         return self.counter < at
 
-    def _wrap_backtest(self, processed: Dict[str, pd.DataFrame], **kwargs,) -> pd.DataFrame:
+    def _wrap_backtest(
+        self, processed: Dict[str, pd.DataFrame], **kwargs,
+    ) -> pd.DataFrame:
         """ debugging """
         # results to debug
         cls = self.backtesting
@@ -264,7 +312,7 @@ class BacktestDebug:
         # results to compare against
         saved_results = None
         # if some epoch far down the (reproducible) iteration needs debugging set it here
-        check_at = 0
+        check_at = int(os.getenv("FQT_CHECKAT", "0"))
         if check_at and self._check_counter(check_at):
             return cls.empty_results
         # if testing only one epoch use "store" once then set it to "load"
@@ -277,11 +325,13 @@ class BacktestDebug:
             exit()
         elif cache == "1":
             results = cls.vectorized_backtest(processed)
+        elif cache == "0":
+            results = cls.backtest_stock(processed, **kwargs)
         else:
             results = cls.vectorized_backtest(processed)
             saved_results = cls.backtest_stock(processed, **kwargs,)
-        if cache != "1":
-            idx_name = "open_index"
+        if cache not in  ("0", "1"):
+            idx_name = os.getenv("FQT_CMP_IDX", "open_index")
             self._cmp_indexes((idx_name, idx_name), results, saved_results)
         # print(
         #     results.iloc[:10],
@@ -290,5 +340,6 @@ class BacktestDebug:
         # )
         # return saved_results
         return results
+
 
 dbg = BacktestDebug() if os.getenv("FQT_DEBUG", False) else None

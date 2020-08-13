@@ -4,6 +4,7 @@ This module contains the class to persist trades into SQLite
 import logging
 from datetime import datetime
 from decimal import Decimal
+
 from typing import Any, Dict, List, Optional
 
 import arrow
@@ -479,7 +480,6 @@ class Trade(_DECL_BASE):
         """
         if rate is None and not self.close_rate:
             return 0.0
-
         sell_trade = Decimal(self.amount) * Decimal(rate or self.close_rate)
         fees = sell_trade * Decimal(fee or self.fee_close)
         return float(sell_trade - fees)

@@ -1,5 +1,5 @@
 from typing import NamedTuple, TypedDict
-from numba import types, int32, int64, float64, from_dtype
+from numba import types, int32, int64, float64, from_dtype, optional
 from numba.typed import Dict as nb_Dict, List as nb_List
 from numpy import ndarray, dtype
 
