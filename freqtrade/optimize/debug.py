@@ -321,15 +321,15 @@ class BacktestDebug:
             results = cls.vectorized_backtest(processed)
             saved_results = self._load_results()
         elif cache == "store":
-            self._dump_results(cls.backtest_stock(processed, **kwargs,))
+            self._dump_results(cls.backtest_vanilla(processed, **kwargs,))
             exit()
         elif cache == "1":
             results = cls.vectorized_backtest(processed)
         elif cache == "0":
-            results = cls.backtest_stock(processed, **kwargs)
+            results = cls.backtest_vanilla(processed, **kwargs)
         else:
             results = cls.vectorized_backtest(processed)
-            saved_results = cls.backtest_stock(processed, **kwargs,)
+            saved_results = cls.backtest_vanilla(processed, **kwargs,)
         if cache not in  ("0", "1"):
             idx_name = os.getenv("FQT_CMP_IDX", "open_index")
             self._cmp_indexes((idx_name, idx_name), results, saved_results)

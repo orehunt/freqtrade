@@ -119,7 +119,7 @@ class HyperoptBacktesting(Backtesting):
 
     def __init__(self, config):
         if config.get("backtesting_engine") == "vectorized":
-            self.backtest_stock = self.backtest
+            self.backtest_vanilla = self.backtest
             if dbg:
                 dbg._debug_opts()
                 dbg.backtesting = self
@@ -129,13 +129,12 @@ class HyperoptBacktesting(Backtesting):
             self.beacktesting_engine = "vectorized"
             self.td_timeframe = Timedelta(config["timeframe"])
             self.td_half_timeframe = self.td_timeframe / 2
-        super().__init__(config)
 
-        backtesting_amounts = self.config.get("backtesting_amounts", {})
+        backtesting_amounts = config.get("backtesting_amounts", {})
         self.stoploss_enabled = backtesting_amounts.get("stoploss", False)
         self.trailing_enabled = backtesting_amounts.get(
             "trailing", False
-        ) and self.config.get("trailing_stop", False)
+        ) and config.get("trailing_stop", False)
         self.roi_enabled = backtesting_amounts.get("roi", False)
         self.any_trigger = (
             self.stoploss_enabled or self.trailing_enabled or self.roi_enabled
@@ -149,6 +148,14 @@ class HyperoptBacktesting(Backtesting):
             )
             if f
         ]
+        # null all config amounts (to compare against vanilla backtesting)
+        if not self.any_trigger:
+            config['stoploss'] = -10
+            config['minimal_roi'] = {"0": 10}
+            config['trailing_stop'] = False
+
+        # parent init after config overrides
+        super().__init__(config)
 
         self.position_stacking = self.config.get("position_stacking", False)
         if self.config.get("max_open_trades", 0) > 0:
@@ -177,15 +184,16 @@ class HyperoptBacktesting(Backtesting):
 
         # adjust trigger_ofs to the startup offset, and the pairs offset
         # to match original ohlc index
-        sell_vals[:, sell_cols["trigger_ohlc"]] = (
-            sell_vals[:, sell_cols["trigger_ofs"]]
-            + self.startup_offset
-            - sell_vals[:, sell_cols["ofs"]]
-        )
+        if self.any_trigger:
+            sell_vals[:, sell_cols["trigger_ohlc"]] = (
+                sell_vals[:, sell_cols["trigger_ofs"]]
+                + self.startup_offset
+                - sell_vals[:, sell_cols["ofs"]]
+            )
+            # list of columns that need data overwrite
+            result_cols = [sell_cols[c] for c in ("date", "ohlc", "close_rate")]
+            trigger_cols = [sell_cols[c] for c in ("trigger_date", "trigger_ohlc")]
 
-        # list of columns that need data overwrite
-        result_cols = [sell_cols[c] for c in ("date", "ohlc", "close_rate")]
-        trigger_cols = [sell_cols[c] for c in ("trigger_date", "trigger_ohlc")]
         # order of events is stoploss -> trailing -> roi
         # since values are set cascading, the order is inverted
         # NOTE: using .astype(bool) converts nan to True
@@ -1363,10 +1371,6 @@ class HyperoptBacktesting(Backtesting):
             events_buy = bts_vals[
                 (bts_df["bought_or_sold"].values == Candle.BOUGHT)
                 & (
-                    # (
-                    #     bts_df["bought_or_sold"].shift(fill=Candle.SOLD)
-                    #     == Candle.SOLD
-                    # )
                     (
                         shift(bts_vals[:, bts_cols["bought_or_sold"]], fill=Candle.SOLD)
                         == Candle.SOLD
@@ -1374,9 +1378,7 @@ class HyperoptBacktesting(Backtesting):
                     # last_trigger is only valid if == shift(1)
                     # if the previous candle is SOLD it is covered by the previous case
                     # this also covers the case the previous candle == Candle.END
-                    # | (bts_df["last_trigger"].values != bts_ls_s1)
                     | (bts_vals[:, bts_cols["last_trigger"]] != bts_ls_s1)
-                    # | (bts_df["pair"].values != bts_df["pair"].shift().values)
                     | (
                         bts_vals[:, bts_cols["pair"]]
                         != shift(bts_vals[:, bts_cols["pair"]])
@@ -1385,27 +1387,23 @@ class HyperoptBacktesting(Backtesting):
                 # exclude the last boughts that are not stoploss and which next sold is
                 # END sold candle
                 & ~(
-                    # (isnan(bts_df["trigger_ofs"].values))
-                    # & isin(bts_df["next_sold_ofs"].values, self.pairs_ofs_end)
                     isnan(bts_vals[:, bts_cols["trigger_ofs"]])
                     & isin(bts_vals[:, bts_cols["next_sold_ofs"]], self.pairs_ofs_end)
                 )
             ]
             events_sell = bts_vals[
                 (
-                    # (bts_df["bought_or_sold"].values == Candle.SOLD)
                     (bts_vals[:, bts_cols["bought_or_sold"]] == Candle.SOLD)
                     # select only sold candles that are not preceded by a trigger
                     & (bts_ls_s1 == -1)
                 )
                 # and stoplosses (all candles with notna trigger_ofs should be valid)
-                # | isfinite(bts_df["trigger_ofs"].values)
                 | isfinite(bts_vals[:, bts_cols["trigger_ofs"]])
             ]
 
         else:
             events_buy = bts_vals[
-                (bts_df[:, bts_cols["bought_or_sold"]] == Candle.BOUGHT)
+                (bts_vals[:, bts_cols["bought_or_sold"]] == Candle.BOUGHT)
                 & (
                     union_eq(
                         shift(
@@ -1479,7 +1477,7 @@ class HyperoptBacktesting(Backtesting):
                     invert=True,
                 )
             ]
-            events_sell = bts_vals[:, bts_cols["bought_or_sold"] == Candle.SOLD]
+            events_sell = bts_vals[bts_vals[:, bts_cols["bought_or_sold"]] == Candle.SOLD]
             _, sold_repeats = unique(
                 events_buy[:, bts_cols["next_sold_ofs"]], return_counts=True
             )
