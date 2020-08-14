@@ -57,30 +57,6 @@ def nan_early_roi(roi_triggers, nan_early_idx, br, n_timeouts, roi_timeouts):
 def check_profits(cur_profits, roi_vals):
     return cur_profits >= roi_vals
 
-
-@njit(fastmath=False, nogil=True, cache=True)
-def compare_roi_triggers(cur_profits, roi_vals, roi_timeouts, trg_range, trg_roi_idx):
-    for n, rt in enumerate(roi_timeouts):
-        trg_range[rt:, trg_roi_idx[n]] = cur_profits[rt:] >= roi_vals[n]
-
-
-@njit(fastmath=True, nogil=True, cache=True)
-def get_valid_cols(trg_first_idx, trg_range):
-    return np.array([n for n, v in enumerate(trg_first_idx) if trg_range[v, n] != 0])
-
-
-@njit(fastmath=True, nogil=True, cache=True)
-def get_first_triggers(trg_first_idx, trg_range):
-    # valid_cols = np.array(
-    #         [n for n, v in enumerate(trg_first_idx) if trg_range[v, n] != 0]
-    # )
-    valid_cols = get_valid_cols(trg_first_idx, trg_range)
-    if len(valid_cols):
-        return np.where(trg_first_idx[valid_cols].min() == trg_first_idx)[0]
-    else:
-        return valid_cols
-
-
 @njit(fastmath=True, nogil=True, cache=True)
 def copy_ranges(
     range_vals, data_ofs, data_df, data_bought, ohlc_vals, bought_vals, bought_ranges
@@ -103,6 +79,85 @@ def calc_profits(open_rate: ndarray, close_rate: ndarray, stake_amount, fee) -> 
     # pass profits_prc as out, https://github.com/numba/numba/issues/4439
     return np.round(profits_prc, 8, profits_prc)
 
+@njit(cache=True, nogil=True)
+def compare_stoploss_rate(
+        open_rate, low_range, stoploss, trg_range, trg_col_stoploss_triggered,
+):
+    # calculate the rate from the bought candle
+    stoploss_triggered_rate = open_rate * (1 - stoploss)
+    trg_range[:, trg_col_stoploss_triggered] = low_range <= stoploss_triggered_rate
+    return stoploss_triggered_rate
+
+@njit(cache=True, nogil=True)
+def compare_roi_triggers(
+        cur_profits, roi_vals, roi_timeouts, trg_range, trg_roi_idx
+    ):
+    # reset values in case timeouts (parameters) changed
+    # so that the arr doesn't hold old truths (since we are partially filling)
+    trg_range[:, trg_roi_idx] = 0
+    # NOTE: only compare each roi from the start of its timeout
+    for n, rt in enumerate(roi_timeouts):
+        trg_range[rt:, trg_roi_idx[n]] = cur_profits[rt:] >= roi_vals[n]
+
+@njit(cache=True, nogil=True)
+def compare_trailing_rate(
+        calc_offset,
+        sl_positive,
+        sl_only_offset,
+        sl_offset,
+        cur_profits,
+        high_range,
+        stoploss,
+        trg_range,
+        low_range,
+        trg_col_trailing_triggered,
+    ):
+        if calc_offset:
+            # use cummax since once offset is reached it is set for the trade
+            trailing_offset_reached = cummax(cur_profits) >= sl_offset
+            trailing_rate = (
+                (
+                    np.where(
+                        trailing_offset_reached,
+                        cummax(high_range * (1 - sl_positive)),
+                        cummax(high_range * (1 - stoploss))
+                        # where the offset is not reached, and the offset flag
+                        # is set, trailing stop is not applied at all
+                        if not sl_only_offset
+                        else np.full(cur_profits.shape, np.nan),
+                    )
+                )
+                if sl_positive
+                else (
+                    np.where(
+                        trailing_offset_reached,
+                        cummax(high_range * (1 - stoploss)),
+                        np.nan,
+                    )
+                )
+            )
+        else:
+            trailing_rate = cummax(high_range * (1 - stoploss))
+        trg_range[:, trg_col_trailing_triggered] = low_range <= trailing_rate
+        return trailing_rate
+
+@njit(cache=True, nogil=True)
+def first_flat_true(arr: ndarray):
+    n_cols = arr.shape[1]
+    # each row
+    for rn, r in enumerate(arr[:, :]):
+        # col 1 is trailing, before stoploss
+        if r[1]:
+            return rn, 1
+        # col 0 is stoploss
+        if r[0]:
+            return rn, 0
+        # remaining cols are roi, iterate in reverse
+        # so that always the latest interrupts
+        for cn, e in zip(range(n_cols - 3, -1, -1), r[:1:-1]):
+            if e:
+                return rn, cn
+    return -1, -1
 
 @njit(cache=True, nogil=True)
 def calc_roi_close_rate(
@@ -110,54 +165,6 @@ def calc_roi_close_rate(
 ):
     roi_rate = -(open_rate * roi + open_rate * (1 + fee)) / (fee - 1)
     return np.fmax(roi_rate, min_rate)
-
-
-@njit(cache=True, nogil=True)
-def calc_stoploss_rate(
-    open_rate, low_range, stoploss, trg_range, trg_col_stoploss_triggered,
-):
-    # calculate the rate from the bought candle
-    stoploss_triggered_rate = open_rate * (1 - stoploss)
-    trg_range[:, trg_col_stoploss_triggered] = low_range <= stoploss_triggered_rate
-    return stoploss_triggered_rate
-
-
-@njit(cache=True, nogil=True)
-def calc_trailing_rate(
-    calc_offset,
-    sl_positive,
-    sl_only_offset,
-    sl_offset,
-    cur_profits,
-    high_range,
-    stoploss,
-    trg_range,
-    low_range,
-    trg_col_trailing_triggered,
-):
-    if calc_offset:
-        trailing_offset_reached = cummax(cur_profits) >= sl_offset
-        trailing_rate = (
-            (
-                np.where(
-                    trailing_offset_reached,
-                    cummax(high_range * (1 - sl_positive)),
-                    cummax(high_range * (1 - stoploss))
-                    if not sl_only_offset
-                    else np.full(cur_profits.shape, np.nan),
-                )
-            )
-            if sl_positive
-            else (
-                np.where(
-                    trailing_offset_reached, cummax(high_range * (1 - stoploss)), np.nan
-                )
-            )
-        )
-    else:
-        trailing_rate = cummax(high_range * (1 - stoploss))
-    trg_range[:, trg_col_trailing_triggered] = low_range <= trailing_rate
-    return trailing_rate
 
 
 @njit(fastmath=True, cache=True, nogil=True)
@@ -274,22 +281,6 @@ def rowargmax(arr) -> ndarray:
     cols = arr.shape[1]
     return range_cols(zero_arr(cols, nb.int64), cols, arr)
 
-
-@njit(fastmath=True, cache=False, nogil=True)
-def first_flat_true(arr):
-    n_cols = arr.shape[1]
-    for rn, r in enumerate(arr[:, :]):
-        if r[1] == True:
-            return rn, 1
-        if r[0] == True:
-            return rn, 0
-        # for roi iterate in reverse
-        for cn, e in zip(range(n_cols - 3, -1, -1), r[:1:-1]):
-            if e == True:
-                return rn, cn
-    return -1, -1
-
-
 def update_tpdict(keys, values, tpdict):
     [set_tpdict_item(v, k, tpdict) for k, v in zip(keys, values)]
 
@@ -312,6 +303,7 @@ def select_triggers(
     roi_timeouts,
     roi_values,
     trg_range_max,
+        feat,
 ):
     b = 0
     n_bought = len(it_cols["bought_ranges"])
@@ -335,15 +327,7 @@ def select_triggers(
         if bl["stoploss_or_trailing"]:
             low_range = fl_cols["ohlc_low"][bought_ofs:bought_ofs_stop]
         if bl["roi_enabled"]:
-            # get a view of the roi triggers because we need to nan indexes
-            # relative to (flattened) roi triggers only
-            # roi_triggers = (cur_profits >= roi_values).swapaxes(0, 1).flatten()
-            roi_triggers = np.ravel(np.transpose(cur_profits >= roi_values))
-            # NOTE: clip nan_early_idx to the length of the bought_range
-            # NOTE: use False, not nan, since bool(nan) == True
-            roi_triggers[nan_early_idx[nan_early_idx <= br * it["n_timeouts"]]] = False
-            # roi_triggers.shape = (br, n_timeouts)
-            # trg_range[:, it_cols["trg_roi_idx"]] = np.reshape(roi_triggers, (br, it["n_timeouts"]))
+            # set flags for each roi timeout/value
             compare_roi_triggers(
                 cur_profits,
                 fl_cols["roi_vals"],
@@ -353,19 +337,15 @@ def select_triggers(
             )
         if bl["stoploss_enabled"]:
             # calculate the rate from the bought candle
-            stoploss_triggered_rate = calc_stoploss_rate(
+            stoploss_triggered_rate = compare_stoploss_rate(
                 open_rate,
                 low_range,
                 fl["stoploss"],
                 trg_range,
                 it["trg_col_stoploss_triggered"],
             )
-            # stoploss_triggered_rate = open_rate * (1 - fl["stoploss"])
-            # trg_range[:, it["trg_col_stoploss_triggered"]] = (
-            # low_range <= stoploss_triggered_rate
-            # )
         if bl["trailing_enabled"]:
-            trailing_rate = calc_trailing_rate(
+            trailing_rate = compare_trailing_rate(
                 bl["calc_offset"],
                 fl["sl_positive"],
                 bl["sl_only_offset"],
@@ -377,35 +357,13 @@ def select_triggers(
                 low_range,
                 it["trg_col_trailing_triggered"],
             )
-            # trailing_rate = cummax(high_range * (1 - fl["stoploss"]))
-            #     trailing_offset_reached = cummax(cur_profits) >=
-            # if fl["sl_positive"]:
-            #     trailing_rate[trailing_offset_reached] = cummax(
-            #         high_range[trailing_offset_reached] * (1 - fl["sl_positive"])
-            #     )
-            # if bl["sl_only_offset"]:
-            #     trailing_rate[~trailing_offset_reached] = np.nan
-            # trg_range[:, it["trg_col_trailing_triggered"]] = low_range <= trailing_rate
-        # apply argmax over axis 0, such that we get the first timeframe
-        # where a trigger happened (argmax of each column)
-        trg_first_idx = rowargmax(trg_range)
-        # filter out columns that have no true trigger
-        # NOTE: the list is very small here (<10) so it might make sense to use python
-        # but the big speed up seen here does not match outside testing of same lists lengths..
-        # valid_cols = flatnonzero(trg_range[trg_first_idx, trg_idx])
-        # valid_cols = [
-        #     i for i, val in enumerate(trg_range[trg_first_idx, trg_idx]) if val != 0
-        # ]
-        # valid_cols = np.array(
-        #     [n for n, v in enumerate(trg_first_idx) if trg_range[v, n] != 0]
-        # )
-        trg_first = get_first_triggers(trg_first_idx, trg_range)
+        fft = first_flat_true(trg_range)
         # check that there is at least one valid trigger
-        if len(trg_first):
+        if fft[1] != -1:
             # get the column index that triggered first row sie
-            trg_top = trg_first[0]
+            trg_top = fft[1]
             # lastly get the trigger offset from the index of the first valid column
-            trg_ofs = trg_first_idx[trg_top]
+            trg_ofs = fft[0]
             # check what trigger it is and copy related columns values
             if (
                 bl["trailing_enabled"]
@@ -424,7 +382,7 @@ def select_triggers(
                 # there are before roi columns, in order to get the offset
                 # relative to only the (ordered) roi columns
                 fl_cols["col_roi_profit"][b] = fl_cols["roi_vals"][
-                    trg_first[-1] - it["trg_roi_pos"]
+                    trg_top
                 ]
             # trigger ofs is relative to the bought range, so just add it to the bought offset
             current_ofs = bought_ofs + trg_ofs
@@ -530,7 +488,6 @@ def roi_is_triggered_op(n, i, high_profit, inv_roi_timeouts, inv_roi_values, fl_
                 fl_cols["col_roi_profit"][n] = inv_roi_values[t]
                 fl_cols["col_roi_triggered"][n] = True
                 return True
-                break
     return False
 
 
