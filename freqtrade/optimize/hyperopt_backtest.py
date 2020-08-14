@@ -1081,7 +1081,6 @@ class HyperoptBacktesting(Backtesting):
         define_callbacks(feat_dict)
         feat = Features(**feat_dict)
 
-        # select_triggers(
         iter_triggers(
             fl_cols,
             it_cols,
