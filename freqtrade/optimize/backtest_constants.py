@@ -1,7 +1,7 @@
-from typing import NamedTuple, TypedDict
-from numba import types, int32, int64, float64, from_dtype, optional
-from numba.typed import Dict as nb_Dict, List as nb_List
-from numpy import ndarray, dtype
+from typing import NamedTuple, Union
+from numba import float64, from_dtype, int64, types
+from numba.typed import Dict as nb_Dict
+from numpy import dtype
 
 MERGE_COLS = [
         "date",
@@ -40,6 +40,8 @@ Int64Cols = nb_Dict.empty(key_type=types.unicode_type, value_type=int64[:])
 
 Float64Cols = nb_Dict.empty(key_type=types.unicode_type, value_type=float64[:])
 
+ColsMap = nb_Dict.empty(key_type=types.unicode_type, value_type=types.Array(from_dtype(dtype('int64')), 2, 'A'))
+
 class DictArr(NamedTuple):
     fl_cols: nb_Dict
     it_cols: nb_Dict
@@ -49,7 +51,10 @@ class DictArr(NamedTuple):
     bl: nb_Dict
     cmap: nb_Dict
 
-ColsMap = nb_Dict.empty(key_type=types.unicode_type, value_type=types.Array(from_dtype(dtype('int64')), 2, 'A'))
-
+class Features(NamedTuple):
+    roi_enabled: Union[bool, None]
+    stoploss_enabled: Union[bool, None]
+    trailing_enabled: Union[bool, None]
+    not_position_stacking: Union[bool, None]
 
 

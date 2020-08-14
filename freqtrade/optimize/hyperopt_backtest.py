@@ -1000,6 +1000,23 @@ class HyperoptBacktesting(Backtesting):
             trg_range_max,
         ) = self._nb_vars(v)
 
+        # NOTE: functions are cached based on signatures, signatures are based on types
+        # to load the correct cache when enabling or disabling features, we have to pass
+        # True or None, (not False) such that the type of the tuple changes and and the sig/cache does too
+        feat_dict = {
+            k: v[k] or None
+            for k in (
+                "roi_enabled",
+                "stoploss_enabled",
+                "trailing_enabled",
+                "not_position_stacking",
+            )
+        }
+        define_callbacks(feat_dict)
+        feat = Features(**feat_dict)
+
+        if dbg:
+            dbg.start_pyinst(interval=0.000001, skip=8)
         # select_triggers(
         iter_triggers(
             fl_cols,
@@ -1013,7 +1030,10 @@ class HyperoptBacktesting(Backtesting):
             roi_timeouts,
             roi_values,
             trg_range_max,
+            feat,
         )
+        if dbg:
+            dbg.stop_pyinst()
         return self._assign_triggers_vals(
             bts_vals, bought, v["triggers"], v["col_names"]
         )

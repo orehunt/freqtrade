@@ -91,6 +91,7 @@ def copy_ranges(
         # these vals are repeated for each range
         data_bought[start:stop] = bought_vals[n]
 
+
 @njit(cache=True, nogil=True)
 def calc_profits(open_rate: ndarray, close_rate: ndarray, stake_amount, fee) -> ndarray:
     am = stake_amount / open_rate
@@ -102,25 +103,13 @@ def calc_profits(open_rate: ndarray, close_rate: ndarray, stake_amount, fee) -> 
     # pass profits_prc as out, https://github.com/numba/numba/issues/4439
     return np.round(profits_prc, 8, profits_prc)
 
+
 @njit(cache=True, nogil=True)
-def calc_roi_close_rate(open_rate: ndarray, min_rate: ndarray, roi: ndarray, fee: float):
-    roi_rate  = -(open_rate * roi + open_rate * (1 + fee)) / (fee - 1)
+def calc_roi_close_rate(
+    open_rate: ndarray, min_rate: ndarray, roi: ndarray, fee: float
+):
+    roi_rate = -(open_rate * roi + open_rate * (1 + fee)) / (fee - 1)
     return np.fmax(roi_rate, min_rate)
-
-
-
-@njit(cache=True, nogil=True)
-def calc_candle_profit(
-        open_rate: float, close_rate: float, stake_amount: float, fee: float
-) -> float:
-    am = stake_amount / open_rate
-    open_amount = am * open_rate
-    close_amount = am * close_rate
-    open_price = open_amount + open_amount * fee
-    close_price = close_amount - close_amount * fee
-    profits_prc = close_price / open_price - 1
-    # pass profits_prc as out, https://github.com/numba/numba/issues/4439
-    return np.round(profits_prc, 8)
 
 
 @njit(cache=True, nogil=True)
@@ -477,6 +466,151 @@ def select_triggers(
 
 
 @njit(cache=True, nogil=True)
+def calc_high_profit(*args):
+    pass
+
+
+@njit(cache=True, nogil=True)
+def calc_high_profit_op(
+    open_rate: float, close_rate: float, stake_amount: float, fee: float
+) -> float:
+    am = stake_amount / open_rate
+    open_amount = am * open_rate
+    close_amount = am * close_rate
+    open_price = open_amount + open_amount * fee
+    close_price = close_amount - close_amount * fee
+    profits_prc = close_price / open_price - 1
+    # pass profits_prc as out, https://github.com/numba/numba/issues/4439
+    return np.round(profits_prc, 8)
+
+
+@njit(cache=True, nogil=True)
+def calc_stoploss_static(*args):
+    return 0.0, 0.0
+
+
+@njit(cache=True, nogil=True)
+def calc_stoploss_static_op(open_rate, stoploss):
+    stoploss_static = open_rate * (1 - stoploss)
+    return stoploss_static, stoploss_static
+
+
+@njit(cache=True, nogil=True)
+def stoploss_is_triggered(*args):
+    return False
+
+
+@njit(cache=True, nogil=True)
+def stoploss_is_triggered_op(n, low, stoploss_rate, stoploss_static, fl_cols):
+    if low <= stoploss_rate:
+        if stoploss_rate != stoploss_static:
+            fl_cols["col_trailing_rate"][n] = stoploss_rate
+            fl_cols["col_trailing_triggered"][n] = True
+        else:
+            fl_cols["col_stoploss_rate"][n] = stoploss_rate
+            fl_cols["col_stoploss_triggered"][n] = True
+        return True
+    return False
+
+
+@njit(cache=True, nogil=True)
+def roi_is_triggered(*args):
+    return False
+
+
+@njit(cache=True, nogil=True)
+def roi_is_triggered_op(n, i, high_profit, inv_roi_timeouts, inv_roi_values, fl_cols):
+    for t, tm in enumerate(inv_roi_timeouts):
+        # tf is the duration of the current trade in timeframes
+        # tm is the timeframe count after which a roi ratio is enabled
+        # a roi with tm == 0 should be enabled at tf == 0
+        # a roi with tm 3 should not be enabled at tf 2
+        if tm <= i:
+            if high_profit > inv_roi_values[t]:
+                fl_cols["col_roi_profit"][n] = inv_roi_values[t]
+                fl_cols["col_roi_triggered"][n] = True
+                return True
+                break
+    return False
+
+
+@njit(cache=True, nogil=True)
+def calc_trailing_rate(stoploss_rate, *args):
+    return stoploss_rate
+
+
+@njit(cache=True, nogil=True)
+def calc_trailing_rate_op(stoploss_rate, tf, bl, high_profit, fl_cols, fl):
+    # if not (bl["sl_only_offset"] and high_profit < fl["sl_offset"]):
+    if not (bl["sl_only_offset"] and high_profit < fl["sl_offset"]):
+        return max(
+            # trailing only increases
+            stoploss_rate,
+            # use positive ratio if above positive offset (default > 0)
+            fl_cols["ohlc_high"][tf] * (1 - fl["sl_positive"])
+            if bl["sl_positive_not_null"] and high_profit > fl["sl_offset"]
+            # otherwise trailing with stoploss ratio
+            else fl_cols["ohlc_high"][tf] * (1 - fl["stoploss"]),
+        )
+    return stoploss_rate
+
+
+@njit(cache=True, nogil=True)
+def get_last_trigger(*args):
+    pass
+
+
+@njit(cache=True, nogil=True)
+def get_last_trigger_op(n):
+    return n
+
+
+@njit(cache=True, nogil=True)
+def set_last_trigger(*args):
+    pass
+
+
+@njit(cache=True, nogil=True)
+def set_last_trigger_op(n, tf, last_trigger, fl_cols):
+    fl_cols["col_last_trigger"][last_trigger:n] = tf
+
+
+@njit(cache=True, nogil=True)
+def trade_is_overlap(*args):
+    return False
+
+
+@njit(cache=True, nogil=True)
+def trade_is_overlap_op(bl, b, tf):
+    return bl["not_position_stacking"] and b <= tf
+
+
+def define_callbacks(feat):
+    global calc_stoploss_static, stoploss_is_triggered
+    if feat["stoploss_enabled"] or not feat["trailing_enabled"]:
+        calc_stoploss_static = calc_stoploss_static_op
+        stoploss_is_triggered = stoploss_is_triggered_op
+
+    global calc_trailing_rate
+    if feat["trailing_enabled"]:
+        calc_trailing_rate = calc_trailing_rate_op
+
+    global calc_high_profit
+    if feat["trailing_enabled"] or feat["roi_enabled"]:
+        calc_high_profit = calc_high_profit_op
+
+    global roi_is_triggered
+    if feat["roi_enabled"]:
+        roi_is_triggered = roi_is_triggered_op
+
+    global get_last_trigger, set_last_trigger, trade_is_overlap
+    if feat["not_position_stacking"]:
+        get_last_trigger = get_last_trigger_op
+        set_last_trigger = set_last_trigger_op
+        trade_is_overlap = trade_is_overlap_op
+
+
+@njit(cache=True, nogil=True)
 def iter_triggers(
     fl_cols,
     it_cols,
@@ -489,6 +623,8 @@ def iter_triggers(
     roi_timeouts,
     roi_values,
     trg_range_max,
+    # NOTE: used to invalidate cache among different configs
+    feat,
 ):
 
     b = 0
@@ -504,62 +640,36 @@ def iter_triggers(
 
     tf = it_cols["bofs"][0] - 1
     for n, b in enumerate(it_cols["bofs"]):
-        if bl["not_position_stacking"] and b <= tf:
+        # if bl["not_position_stacking"] and b <= tf:
+        if trade_is_overlap(bl, b, tf):
             continue
         if triggered:
-            fl_cols["col_last_trigger"][last_trigger:n] = tf
-        triggered = False
+            set_last_trigger(n, tf, last_trigger, fl_cols)
+            triggered = False
         open_rate = fl_cols["bopen"][n]
-        stoploss_static = open_rate * (1 - fl["stoploss"])
-        stoploss_rate = stoploss_static
+        stoploss_static, stoploss_rate = calc_stoploss_static(open_rate, fl["stoploss"])
         tf = b
         for i, low in enumerate(
             fl_cols["ohlc_low"][b : b + it_cols["bought_ranges"][n]]
         ):
-            high_profit = calc_candle_profit(
+            high_profit = calc_high_profit(
                 open_rate, fl_cols["ohlc_high"][tf], fl["stake_amount"], fl["fee"]
             )
-            if bl["trailing_enabled"] and (
-                not (bl["sl_only_offset"] and high_profit < fl["sl_offset"])
+            stoploss_rate = calc_trailing_rate(
+                stoploss_rate, tf, bl, high_profit, fl_cols, fl
+            )
+            if triggered := stoploss_is_triggered(
+                n, low, stoploss_rate, stoploss_static, fl_cols
+            ) or roi_is_triggered(
+                n, i, high_profit, inv_roi_timeouts, inv_roi_values, fl_cols
             ):
-                stoploss_rate = max(
-                    # trailing only increases
-                    stoploss_rate,
-                    # use positive ratio if above positive offset (default > 0)
-                    fl_cols["ohlc_high"][tf] * (1 - fl["sl_positive"])
-                    if bl["sl_positive_not_null"] and high_profit > fl["sl_offset"]
-                    # otherwise trailing with stoploss ratio
-                    else fl_cols["ohlc_high"][tf] * (1 - fl["stoploss"]),
-                )
-            if low <= stoploss_rate:
-                if stoploss_rate != stoploss_static:
-                    fl_cols["col_trailing_rate"][n] = stoploss_rate
-                    fl_cols["col_trailing_triggered"][n] = True
-                else:
-                    fl_cols["col_stoploss_rate"][n] = stoploss_rate
-                    fl_cols["col_stoploss_triggered"][n] = True
-                triggered = True
-            else:
-                for t, tm in enumerate(inv_roi_timeouts):
-                    # tf is the duration of the current trade in timeframes
-                    # tm is the timeframe count after which a roi ratio is enabled
-                    # a roi with tm == 0 should be enabled at tf == 0
-                    # a roi with tm 3 should not be enabled at tf 2
-                    if tm <= i:
-                        if high_profit > inv_roi_values[t]:
-                            fl_cols["col_roi_profit"][n] = inv_roi_values[t]
-                            fl_cols["col_roi_triggered"][n] = True
-                            triggered = True
-                            break
-            if triggered:
                 fl_cols["col_trigger_bought_ofs"][n] = b
                 fl_cols["col_trigger_date"][n] = it_cols["ohlc_date"][tf]
                 fl_cols["col_trigger_ofs"][n] = tf
-                if bl["not_position_stacking"]:
-                    last_trigger = n
+                last_trigger = get_last_trigger(n)
                 break
             tf += 1
     # update the last last_trigger slice if the last bought is sold with trigger
-    if triggered:
+    if triggered and bl["not_position_stacking"]:
         fl_cols["col_last_trigger"][last_trigger:n_bought] = tf
     return
