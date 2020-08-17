@@ -60,6 +60,31 @@ class BacktestDebug:
                 raise OperationalException("Buy and sell events not matching")
 
     @staticmethod
+    def start_time():
+        import timeit
+        global timer_start
+        timer_start = timeit.default_timer()
+
+    @staticmethod
+    def stop_time():
+        import timeit
+        global timer_start
+        print(timeit.default_timer() - timer_start)
+        exit()
+
+    @staticmethod
+    def run_cprof(func: callable, args: list, glo, lo):
+        import cProfile
+        from functools import partial
+        import pstats
+        from pstats import SortKey
+        lo.update(locals())
+        stats_file = '/tmp/prf'
+        cProfile.runctx('func(*args)', glo, lo, stats_file)
+        p = pstats.Stats(stats_file)
+        p.strip_dirs().sort_stats(-1).print_stats()
+
+    @staticmethod
     def start_pyinst(interval=0.001, skip=0):
         from pyinstrument import Profiler
 

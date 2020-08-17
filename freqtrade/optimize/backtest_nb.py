@@ -44,28 +44,64 @@ def ofs_cummax(data_ofs: ndarray, data: ndarray) -> ndarray:
         p = i
     return cumarr
 
+@njit(fastmath=True, cache=True, nogil=True)
+def iter_trg_cols(start, arr, trg):
+    for rn, r in enumerate(arr):
+        # each trigger
+        for cn, e in enumerate(r):
+            if e:
+                trg[start+rn] = cn
+                return
+
+@njit(fastmath=True, cache=True, nogil=True)
+def ofs_first_flat_true(data_ofs: ndarray, arr: ndarray):
+    trg = np.full(arr.shape[0], -1)
+    # each bought
+    for start, stop in zip(data_ofs[::], data_ofs[1::]):
+        iter_trg_cols(start, arr[start:stop, :], trg)
+    return trg
+
 
 @njit(fastmath=True, nogil=True, cache=True)
 def copy_ranges(
-    range_vals, data_ofs, data_df, data_bought, ohlc_vals, bought_vals, bought_ranges
+    bought_ofs, data_ofs, data_df, data_bought, ohlc_vals, bought_vals, bought_ranges
 ):
-    for n, i in enumerate(range_vals):
+    for n, i in enumerate(bought_ofs):
         start, stop = data_ofs[n], data_ofs[n + 1]
         data_df[start:stop] = ohlc_vals[i : i + bought_ranges[n]]
         # these vals are repeated for each range
         data_bought[start:stop] = bought_vals[n]
 
+@njit(cache=True, nogil=True)
+def round_8(arr):
+    # pass profits_prc as out, https://github.com/numba/numba/issues/4439
+    return np.round(arr, 8, arr)
+
 
 @njit(cache=True, nogil=True)
 def calc_profits(open_rate: ndarray, close_rate: ndarray, stake_amount, fee) -> ndarray:
-    am = stake_amount / open_rate
-    open_amount = am * open_rate
-    close_amount = am * close_rate
-    open_price = open_amount + open_amount * fee
-    close_price = close_amount - close_amount * fee
-    profits_prc = close_price / open_price - 1
-    # pass profits_prc as out, https://github.com/numba/numba/issues/4439
-    return np.round(profits_prc, 8, profits_prc)
+    # am = stake_amount / open_rate
+    # open_amount = am * open_rate
+    # close_amount = am * close_rate
+    # open_price = open_amount + open_amount * fee
+    # close_price = close_amount - close_amount * fee
+    # profits_prc = close_price / open_price - 1
+    return round_8(
+        (
+            (
+                ((stake_amount / open_rate) * close_rate)
+                - ((stake_amount / open_rate) * close_rate) * fee
+            )
+            / (
+                ((stake_amount / open_rate) * open_rate)
+                + ((stake_amount / open_rate) * open_rate) * fee
+            )
+            - 1
+        )
+    )
+@njit(cache=True, nogil=True)
+def stoploss_triggered_col(data, low, rate):
+    return data[:, low] <= data[:, rate]
 
 @njit(cache=True, nogil=True)
 def calc_roi_close_rate(
@@ -73,6 +109,7 @@ def calc_roi_close_rate(
 ):
     roi_rate = -(open_rate * roi + open_rate * (1 + fee)) / (fee - 1)
     return np.fmax(roi_rate, min_rate)
+
 
 @njit(fastmath=True, cache=True, nogil=True)
 def find_first(vec, t):
@@ -93,9 +130,11 @@ def cummax(arr) -> ndarray:
         cumarr[i] = cmax
     return cumarr
 
+
 @njit(fastmath=True, cache=True, nogil=True)
 def next_bought(b, bofs, current_ofs):
     return b + np.searchsorted(bofs, current_ofs, "right")
+
 
 def update_tpdict(keys, values, tpdict):
     [set_tpdict_item(v, k, tpdict) for k, v in zip(keys, values)]

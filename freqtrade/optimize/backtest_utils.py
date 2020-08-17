@@ -1,4 +1,5 @@
 from typing import Dict, List, Tuple, Union
+from types import SimpleNamespace
 from numpy import (ndarray, flatnonzero, nan, concatenate, where, searchsorted, isnan, interp)
 from pandas import DataFrame
 
