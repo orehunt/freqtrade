@@ -119,6 +119,30 @@ def find_first(vec, t):
             return n
     return n + 1
 
+@njit(fastmath=True, cache=True, nogil=True)
+def find_with_dups(haystack, needles):
+    pos = np.full(needles.shape[0], -1)
+    found = set()
+    for i, d in enumerate(needles):
+        for n, h in enumerate(haystack):
+            if h == d and n not in found:
+                pos[i] = n
+                found.add(n)
+                break
+    return pos
+
+@njit(fastmath=True, cache=True, nogil=True)
+def increase(arr):
+    out = np.empty(arr.shape[0], nb.int64)
+    inc = 0
+    for n, e in enumerate(arr):
+        if e != arr[n-1]:
+            out[n] = e
+            inc = 0
+        else:
+            inc += 1
+            out[n] = e + inc
+    return out
 
 @njit(fastmath=True, cache=True, nogil=True)
 def cummax(arr) -> ndarray:

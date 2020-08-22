@@ -44,6 +44,7 @@ from numpy import (
     empty,
     nan_to_num,
     tile,
+    sort,
     greater_equal,
     flatnonzero,
     bincount,
@@ -54,6 +55,8 @@ from numpy import (
     argmin,
     amin,
     searchsorted,
+    argsort,
+    argpartition,
     argsort,
     reshape,
     interp,
@@ -570,13 +573,13 @@ class HyperoptBacktesting(Backtesting):
         if True:
             self.calc_type = True
             # intervals are short compute everything in one round
-            if dbg:
-                dbg.start_pyinst(interval=0.01)
+            # if dbg:
+            # dbg.start_pyinst(interval=0.01)
             bts_vals = self._v1_select_triggered_events(
                 df_vals, bought, bought_ranges, bts_vals
             )
-            if dbg:
-                dbg.stop_pyinst(keep=10)
+            # if dbg:
+            # dbg.stop_pyinst(keep=10)
         else:
             # intervals are too long, jump over candles
             self.calc_type = False
@@ -584,8 +587,8 @@ class HyperoptBacktesting(Backtesting):
             if dbg:
                 dbg.start_pyinst(interval=0.01)
             bts_vals = (
-                # self._v2_select_triggered_events(*args)
-                self._nb_select_triggered_events(*args)
+                self._v2_select_triggered_events(*args)
+                # self._nb_select_triggered_events(*args)
             )
             if dbg:
                 dbg.stop_pyinst(keep=10)
@@ -1125,7 +1128,7 @@ class HyperoptBacktesting(Backtesting):
 
     def _np_calc_triggers(
         self, df_vals: ndarray, bought: ndarray, bought_ranges: ndarray,
-    ) -> Tuple[ndarray, Tuple]:
+    ) -> DataFrame:
         """ expand bought ranges into ohlc processed
          prefetch the columns of interest to avoid querying
          the index over the loop (avoid nd indexes) """
@@ -1392,7 +1395,10 @@ class HyperoptBacktesting(Backtesting):
 
         # compute all the stoplosses for the buy signals and filter out clear invalids
         trigger = self._np_calc_triggers(df_vals, bought, bought_ranges)
-        bts_df = as_df(bts_vals, self.bts_loc, bts_vals[:, self.bts_loc["index"]])
+        bts_df = as_df(bts_vals, self.bts_loc, bts_vals[:, self.bts_loc["index"]], int_idx=True)
+
+        trg_vals = trigger.values
+        trg_loc = df_cols(trigger)
 
         # align original index
         if not self.position_stacking:
@@ -1413,10 +1419,25 @@ class HyperoptBacktesting(Backtesting):
             ]
 
             # join from right, to not clobber indexes
-            bts_df = trigger.join(bts_df, how="right")
-            # drop bought_ofs because is outer merged afterwards
-            bts_df.drop(columns="trigger_bought_ofs", inplace=True)
+            # bts_df = trigger.join(bts_df, how="right")
+            bts_loc = self.bts_loc
+            bts_vals = np_left_join(
+                bts_vals,
+                trg_vals,
+                bts_loc,
+                trg_loc,
+                "ohlc_ofs",
+                "trigger_bought_ofs",
+                fill_value=nan,
+            )
+            bts_df = as_df(
+                bts_vals, list(bts_loc.keys()), bts_vals[:, bts_loc["ohlc_ofs"]]
+            )
 
+            # drop bought_ofs because is outer merged afterwards
+            # bts_df.drop(columns="trigger_bought_ofs", inplace=True)
+
+            # dbg.start_pyinst()
             # now add the trigger new rows with an outer join
             trigger.set_index("trigger_ofs", inplace=True, drop=False)
             bts_df = bts_df.merge(
@@ -1427,12 +1448,43 @@ class HyperoptBacktesting(Backtesting):
                 suffixes=("", "_b"),
                 copy=False,
             )
+            dbg.start_pyinst()
+            outer_cols_names = ("trigger_ofs_b", "trigger_bought_ofs")
+            outer_cols = [trg_loc[c] for c in outer_cols]
+
+            merged = merge_2d(
+                bts_vals,
+                trg_vals[:, outer_cols],
+                bts_loc["ohlc_ofs"],
+                trg_loc["trigger_ofs"],
+            )
+            for n, c in enumerate(outer_cols_names, len(bts_loc)):
+                bts_loc[c] = n
+
+            dbg.stop_pyinst()
+            mrg_idx = merged[:, bts_loc["ohlc_ofs"]].copy()
+
+            bts_df_new = as_df(merged, bts_loc, mrg_idx)
+            col = "trigger_bought_ofs"
+            # # col = "trigger_bought_ofs"
+            for n, (v, v1) in enumerate(
+                zip(bts_df[col].values, bts_df_new[col].values)
+            ):
+                if v != v1 and (isfinite(v) or isfinite(v1)):
+                    print(
+                        bts_df[col].iloc[max(n - 10, 0) : n + 10],
+                        "\n",
+                        bts_df_new[col].iloc[max(n - 10, 0) : n + 10],
+                    )
+                    print(n, v, v1)
+                    exit()
+            bts_df = bts_df_new
+
             # both trigger_ofs_b and trigger_bought_ofs are on the correct
             # index where the stoploss is triggered, and backfill backwards
             bts_df["trigger_ofs_b"].fillna(method="backfill", inplace=True)
             bts_df["trigger_bought_ofs"].fillna(method="backfill", inplace=True)
             # this is a filter to remove obvious invalids
-            # self.start_pyinst()
             bts_df = bts_df[
                 ~(
                     (bts_df["bought_or_sold"].values == Candle.BOUGHT)
