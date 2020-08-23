@@ -64,13 +64,27 @@ def ofs_first_flat_true(data_ofs: ndarray, arr: ndarray):
 
 @njit(fastmath=True, nogil=True, cache=True)
 def copy_ranges(
-    bought_ofs, data_ofs, data_df, data_bought, ohlc_vals, bought_vals, bought_ranges
+        chunk_start, chunk_stop,
+    bought_ofs, data_df, data_bought, ohlc_vals, bought_vals, bought_ranges
 ):
-    for n, i in enumerate(bought_ofs):
-        start, stop = data_ofs[n], data_ofs[n + 1]
-        data_df[start:stop] = ohlc_vals[i : i + bought_ranges[n]]
+    ofs = 0
+    for n, i in enumerate(bought_ofs[chunk_start:chunk_stop], chunk_start):
+        rn = bought_ranges[n]
+        data_df[ofs:ofs + rn] = ohlc_vals[i : i + rn]
         # these vals are repeated for each range
-        data_bought[start:stop] = bought_vals[n]
+        data_bought[ofs:ofs + rn] = bought_vals[n]
+        ofs += rn
+
+@njit(fastmath=True, nogil=True, cache=True)
+def split_cumsum(max_size, arr):
+    cumsum = 0
+    splits = []
+    for i, e in enumerate(arr):
+        cumsum += e
+        if cumsum > max_size:
+            splits.append(i)
+            cumsum = e
+    return splits
 
 @njit(cache=True, nogil=True)
 def round_8(arr):

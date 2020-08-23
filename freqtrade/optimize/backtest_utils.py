@@ -51,7 +51,10 @@ def shift(arr: ndarray, period=1, fill=nan) -> ndarray:
 
 
 def df_cols(df) -> Dict[str, int]:
-    return {col: n for n, col in enumerate(df.columns.values)}
+    col_dict = {}
+    for n, col in enumerate(df.columns.values):
+        col_dict[col] = n
+    return col_dict
 
 
 def as_df(vals, cols, idx=None, int_idx=False, dtype=np.float64):
@@ -75,6 +78,11 @@ def add_columns(
         axis=1,
     )
 
+def without_cols(cols_dict: Dict, exclude: List) -> List:
+    without = cols_dict.copy()
+    for e in exclude:
+        del without[e]
+    return list(without.keys())
 
 def replace_values(v: ndarray, k: ndarray, arr: ndarray) -> ndarray:
     """ replace values in a 1D array """
@@ -118,15 +126,30 @@ def np_left_join(
 
 
 # https://stackoverflow.com/q/41190852/2229761
-def np_fill(arr, replace_value=None, backfill=False):
+def np_fill(arr_src, replace_value=None, fill_value=None, backfill=False, inplace=False):
     """ forward fill array with nans or value """
-    if backfill:
-        arr = arr[::-1]
+    # NOTE: last value wraps to beginning value if nan
+    if replace_value is not None:
+        compare = lambda a: a == replace_value
+    else:
+        compare = lambda a: np.isnan(a)
+    if fill_value is not None:
+        if inplace:
+            arr_src[compare(arr_src)] = fill_value
+            return
+        return np.where(compare(arr_src), fill_value, arr_src)
+    arr = arr_src[::-1] if backfill else arr_src.view()
     prev = np.arange(len(arr))
-    prev[arr == replace_value if replace_value else np.isnan(arr)] = -1
+    prev[compare(arr)] = -1
     prev = np.maximum.accumulate(prev)
-    return arr[prev][::-1] if backfill else arr[prev]
-
+    if inplace and backfill:
+        arr_src[:] = arr[prev][::-1]
+    elif inplace:
+        arr_src[:] = arr[prev]
+    elif backfill:
+        return arr[prev][::-1]
+    else:
+        return arr[prev]
 
 # https://stackoverflow.com/a/54136635/2229761
 def count_in1d(arr1, arr2):
