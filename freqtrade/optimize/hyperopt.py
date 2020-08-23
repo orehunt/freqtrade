@@ -27,6 +27,7 @@ from multiprocessing.managers import Namespace
 from pandas import DataFrame, HDFStore, json_normalize, read_hdf, Timedelta
 from numpy import isfinite
 
+from freqtrade.constants import DATETIME_PRINT_FORMAT
 from freqtrade.data.converter import trim_dataframe
 from freqtrade.data.history import get_timerange
 from freqtrade.optimize.backtesting import Backtesting
@@ -51,6 +52,7 @@ from freqtrade.optimize.hyperopt_constants import (
 from freqtrade.optimize.hyperopt_interface import IHyperOpt  # noqa: F401
 from freqtrade.optimize.hyperopt_loss_interface import IHyperOptLoss  # noqa: F401
 from freqtrade.resolvers.hyperopt_resolver import HyperOptLossResolver, HyperOptResolver
+from freqtrade.strategy.interface import IStrategy
 
 # Suppress scikit-learn FutureWarnings from skopt
 with warnings.catch_warnings():
@@ -338,6 +340,9 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         }
 
     def _calculate_results_metrics(self, backtesting_results: DataFrame) -> Dict:
+        wins = len(backtesting_results[backtesting_results.profit_percent > 0])
+        draws = len(backtesting_results[backtesting_results.profit_percent == 0])
+        losses = len(backtesting_results[backtesting_results.profit_percent < 0])
         return {
             "trade_count": len(backtesting_results.index),
             "avg_profit": backtesting_results.profit_percent.mean() * 100.0,
@@ -990,17 +995,17 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             )
         min_date, max_date = get_timerange(preprocessed)
 
-        logger.info(
-            "Hyperopting with data from %s up to %s (%s days)..",
-            min_date.isoformat(),
-            max_date.isoformat(),
-            (max_date - min_date).days,
-        )
+        logger.info(f'Hyperopting with data from {min_date.strftime(DATETIME_PRINT_FORMAT)} '
+                    f'up to {max_date.strftime(DATETIME_PRINT_FORMAT)} '
+                    f'({(max_date - min_date).days} days)..')
+
         dump(preprocessed, self.data_pickle_file)
 
         # We don't need exchange instance anymore while running hyperopt
         self.backtesting.exchange = None  # type: ignore
         self.backtesting.pairlists = None  # type: ignore
+        self.backtesting.strategy.dp = None  # type: ignore
+        IStrategy.dp = None  # type: ignore
 
         # Set dimensions, trials instance and paths and load from storage
         self.setup_trials()

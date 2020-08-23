@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import arrow
 from numpy import NAN, mean
 
-from freqtrade.exceptions import (ExchangeError, InvalidOrderException,
+from freqtrade.exceptions import (ExchangeError,
                                   PricingError)
 from freqtrade.exchange import timeframe_to_minutes, timeframe_to_msecs
 from freqtrade.misc import shorten_date
@@ -236,20 +236,21 @@ class RPC:
                 .all()
             )
             curdayprofit = sum(trade.close_profit_abs for trade in trades)
-            profit_days[profitday] = {"amount": f"{curdayprofit:.8f}", "trades": len(trades)}
+            profit_days[profitday] = {
+                'amount': curdayprofit,
+                'trades': len(trades)
+            }
 
         data = [
             {
                 'date': key,
-                'abs_profit': f'{float(value["amount"]):.8f}',
-                'fiat_value': '{value:.3f}'.format(
-                    value=self._fiat_converter.convert_amount(
+                'abs_profit': value["amount"],
+                'fiat_value': self._fiat_converter.convert_amount(
                         value['amount'],
                         stake_currency,
                         fiat_display_currency
                     ) if self._fiat_converter else 0,
-                ),
-                'trade_count': f'{value["trades"]}',
+                'trade_count': value["trades"],
             }
             for key, value in profit_days.items()
         ]
@@ -575,7 +576,7 @@ class RPC:
                 try:
                     self._freqtrade.exchange.cancel_order(trade.open_order_id, trade.pair)
                     c_count += 1
-                except (ExchangeError, InvalidOrderException):
+                except (ExchangeError):
                     pass
 
             # cancel stoploss on exchange ...
@@ -585,7 +586,7 @@ class RPC:
                     self._freqtrade.exchange.cancel_stoploss_order(trade.stoploss_order_id,
                                                                    trade.pair)
                     c_count += 1
-                except (ExchangeError, InvalidOrderException):
+                except (ExchangeError):
                     pass
 
             Trade.session.delete(trade)

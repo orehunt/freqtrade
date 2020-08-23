@@ -5,13 +5,11 @@ from typing import Any, Dict, List
 import pandas as pd
 
 from freqtrade.configuration import TimeRange
-from freqtrade.data.btanalysis import (
-    calculate_max_drawdown,
-    combine_dataframes_with_mean,
-    create_cum_profit,
-    extract_trades_of_period,
-    load_trades,
-)
+from freqtrade.data.btanalysis import (calculate_max_drawdown,
+                                       combine_dataframes_with_mean,
+                                       create_cum_profit,
+                                       extract_trades_of_period,
+                                       load_trades)
 from freqtrade.data.converter import trim_dataframe
 from freqtrade.data.dataprovider import DataProvider
 from freqtrade.data.history import load_data
@@ -56,19 +54,22 @@ def init_plotscript(config):
     )
 
     no_trades = False
-    if config.get("no_trades", False):
+    filename = config.get('exportfilename')
+    if config.get('no_trades', False):
         no_trades = True
-    elif not config["exportfilename"].is_file() and config["trade_source"] == "file":
-        logger.warning("Backtest file is missing skipping trades.")
-        no_trades = True
+    elif config['trade_source'] == 'file':
+        if not filename.is_dir() and not filename.is_file():
+            logger.warning("Backtest file is missing skipping trades.")
+            no_trades = True
 
     trades = load_trades(
-        config["trade_source"],
-        db_url=config.get("db_url"),
-        exportfilename=config.get("exportfilename"),
+        config['trade_source'],
+        db_url=config.get('db_url'),
+        exportfilename=filename,
         no_trades=no_trades,
+        strategy=config.get("strategy"),
     )
-    trades = trim_dataframe(trades, timerange, "open_time")
+    trades = trim_dataframe(trades, timerange, 'open_date')
 
     return {
         "ohlcv": data,
@@ -162,10 +163,11 @@ def plot_trades(fig, trades: pd.DataFrame) -> make_subplots:
     if trades is not None and len(trades) > 0:
         # Create description for sell summarizing the trade
         trades['desc'] = trades.apply(lambda row: f"{round(row['profit_percent'] * 100, 1)}%, "
-                                                  f"{row['sell_reason']}, {row['duration']} min",
+                                                  f"{row['sell_reason']}, "
+                                                  f"{row['trade_duration']} min",
                                                   axis=1)
         trade_buys = go.Scatter(
-            x=trades["open_time"],
+            x=trades["open_date"],
             y=trades["open_rate"],
             mode="markers",
             name="Trade buy",
@@ -174,7 +176,7 @@ def plot_trades(fig, trades: pd.DataFrame) -> make_subplots:
         )
 
         trade_sells = go.Scatter(
-            x=trades.loc[trades['profit_percent'] > 0, "close_time"],
+            x=trades.loc[trades['profit_percent'] > 0, "close_date"],
             y=trades.loc[trades['profit_percent'] > 0, "close_rate"],
             text=trades.loc[trades['profit_percent'] > 0, "desc"],
             mode='markers',
@@ -187,7 +189,7 @@ def plot_trades(fig, trades: pd.DataFrame) -> make_subplots:
             )
         )
         trade_sells_loss = go.Scatter(
-            x=trades.loc[trades['profit_percent'] <= 0, "close_time"],
+            x=trades.loc[trades['profit_percent'] <= 0, "close_date"],
             y=trades.loc[trades['profit_percent'] <= 0, "close_rate"],
             text=trades.loc[trades['profit_percent'] <= 0, "desc"],
             mode='markers',
@@ -500,7 +502,7 @@ def plot_profit(config: Dict[str, Any]) -> None:
     # Remove open pairs - we don't know the profit yet so can't calculate profit for these.
     # Also, If only one open pair is left, then the profit-generation would fail.
     trades = trades[(trades['pair'].isin(plot_elements["pairs"]))
-                    & (~trades['close_time'].isnull())
+                    & (~trades['close_date'].isnull())
                     ]
     if len(trades) == 0:
         raise OperationalException("No trades found, cannot generate Profit-plot without "

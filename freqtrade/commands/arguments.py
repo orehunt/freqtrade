@@ -383,7 +383,9 @@ class Arguments:
 
         # Plot profit
         plot_profit_cmd = subparsers.add_parser(
-            "plot-profit", help="Generate plot showing profits.", parents=[_common_parser],
+            'plot-profit',
+            help='Generate plot showing profits.',
+            parents=[_common_parser, _strategy_parser],
         )
         plot_profit_cmd.set_defaults(func=start_plot_profit)
         self._build_args(optionlist=ARGS_PLOT_PROFIT, parser=plot_profit_cmd)

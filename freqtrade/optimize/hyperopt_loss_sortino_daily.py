@@ -50,10 +50,8 @@ class SortinoHyperOptLossDaily(IHyperOptLoss):
         t_index = date_range(start=min_date, end=max_date, freq=resample_freq, normalize=True)
 
         sum_daily = (
-            results.resample(resample_freq, on="close_time")
-            .agg({"profit_percent_after_slippage": sum})
-            .reindex(t_index)
-            .fillna(0)
+            results.resample(resample_freq, on='close_date').agg(
+                {"profit_percent_after_slippage": sum}).reindex(t_index).fillna(0)
         )
 
         total_profit = sum_daily["profit_percent_after_slippage"] - minimum_acceptable_return

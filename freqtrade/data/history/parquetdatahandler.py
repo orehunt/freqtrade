@@ -23,6 +23,18 @@ class ParquetDataHandler(IDataHandler):
     _compression = "gzip"
 
     @classmethod
+    def ohlcv_get_available_data(cls, datadir: Path) -> ListPairsWithTimeframes:
+        """
+        Returns a list of all pairs with ohlcv data available in this datadir
+        :param datadir: Directory to search for ohlcv files
+        :return: List of Tuples of (pair, timeframe)
+        """
+        _tmp = [re.search(r'^(\d+\S+)\/([a-zA-Z_]+)', p.name)
+                for p in datadir.glob(f"*.{cls._get_file_extension()}")]
+        return [(match[1].replace('_', '/'), match[2]) for match in _tmp
+                if match and len(match.groups()) > 1]
+
+    @classmethod
     def ohlcv_get_pairs(cls, datadir: Path, timeframe: str) -> List[str]:
         """
         Returns a list of all pairs with ohlcv data available in this datadir
