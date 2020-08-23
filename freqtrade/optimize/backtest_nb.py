@@ -76,7 +76,7 @@ def copy_ranges(
         ofs += rn
 
 @njit(fastmath=True, nogil=True, cache=True)
-def split_cumsum(max_size, arr):
+def split_cumsum(max_size: int, arr: ndarray):
     cumsum = 0
     splits = []
     for i, e in enumerate(arr):

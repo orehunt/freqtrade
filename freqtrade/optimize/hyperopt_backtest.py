@@ -126,6 +126,8 @@ class HyperoptBacktesting(Backtesting):
     df_loc = {}
     bts_loc = {}
     trigger_types = []
+    # how many rows can an expanded array have
+    max_size = 10e6
 
     def __init__(self, config):
         if config.get("backtesting_engine") == "vectorized":
@@ -570,17 +572,12 @@ class HyperoptBacktesting(Backtesting):
             bought[:, loc["next_sold_ofs"]] - bought[:, loc["ohlc_ofs"]]
         ).astype("int64")
         # Use the first version only if the expanded array would take < ~500MB per col
-        # if bought_ranges.sum() < 10e6:
-        if True:
+        if bought_ranges.sum() < self.max_size:
             self.calc_type = True
             # intervals are short compute everything in one round
-            if dbg:
-                dbg.start_pyinst(interval=0.01, skip=1)
             bts_vals = self._v1_select_triggered_events(
                 df_vals, bought, bought_ranges, bts_vals
             )
-            if dbg:
-                dbg.stop_pyinst(keep=10)
         else:
             # intervals are too long, jump over candles
             self.calc_type = False
@@ -1200,9 +1197,8 @@ class HyperoptBacktesting(Backtesting):
 
 
         # cap the bought range iteration to limit memory usage
-        max_size = 1e6
         ranges_csum = bought_ranges.cumsum()
-        split_idx = [0, *split_cumsum(max_size, bought_ranges), None]
+        split_idx = [0, *split_cumsum(self.max_size, bought_ranges), None]
         # will store the partial arrays for triggers
         data_chunks = []
         for chunk_start, chunk_stop in zip(split_idx, split_idx[1::1]):
