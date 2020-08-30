@@ -6,6 +6,7 @@ from enum import IntEnum
 from collections import namedtuple
 from functools import reduce
 
+import talib as ta
 from numba import types
 from numba.typed import Dict as nb_Dict, List as nb_List
 from numpy import (
@@ -102,7 +103,9 @@ class Candle(IntEnum):
     # STOPLOSS = 12
 
 
-# class TriggersVars:
+class OrderType(IntEnum):
+    LIMIT = 0
+    MARKET = 1
 
 
 class HyperoptBacktesting(Backtesting):
@@ -127,7 +130,10 @@ class HyperoptBacktesting(Backtesting):
     bts_loc = {}
     trigger_types = []
     # how many rows can an expanded array have
-    max_size = 10e6
+    max_ranges_size = 10e6
+    # choose the backtesting function
+    use_v1 = False
+    use_v2 = False
 
     def __init__(self, config):
         if config.get("backtesting_engine") == "vectorized":
@@ -139,8 +145,12 @@ class HyperoptBacktesting(Backtesting):
             else:
                 self.backtest = self.vectorized_backtest
             self.beacktesting_engine = "vectorized"
-            self.td_timeframe = Timedelta(config["timeframe"])
-            self.td_half_timeframe = self.td_timeframe / 2
+
+        self.td_timeframe = Timedelta(config["timeframe"])
+        self.td_half_timeframe = self.td_timeframe / 2
+        self.timeframe_wnd = config.get("timeframe_window", TIMEFRAME_WND).get(
+            config["timeframe"], DEFAULT_WND
+        )
 
         backtesting_amounts = config.get("backtesting_amounts", {})
         self.stoploss_enabled = backtesting_amounts.get("stoploss", False)
@@ -189,7 +199,7 @@ class HyperoptBacktesting(Backtesting):
         where_sold = where(sell_vals[:, sell_cols["bought_or_sold"]] == Candle.SOLD)[0]
         events_sold = sell_vals[where_sold, :]
         # use an external ndarray to store sell_type to avoid float conversion
-        sell_reason = ndarray(shape=(sell_vals.shape[0]), dtype="object")
+        sell_reason = ndarray(shape=(sell_vals.shape[0]), dtype=IntEnum)
 
         sell_reason[where_sold] = SellType.SELL_SIGNAL
         sell_vals[where_sold, sell_cols["close_rate"]] = events_sold[
@@ -278,8 +288,8 @@ class HyperoptBacktesting(Backtesting):
                 ),
                 "profit_percent": profits_prc,
                 "profit_abs": profits_abs,
-                "open_time": to_datetime(buy_vals[:, buy_cols["date"]]),
-                "close_time": to_datetime(sell_vals[:, sell_cols["date"]]),
+                "open_date": to_datetime(buy_vals[:, buy_cols["date"]]),
+                "close_date": to_datetime(sell_vals[:, sell_cols["date"]]),
                 "open_index": buy_vals[:, buy_cols["ohlc"]].astype(int),
                 "close_index": sell_vals[:, sell_cols["ohlc"]].astype(int),
                 "trade_duration": trade_duration.dt.seconds / 60,
@@ -289,9 +299,6 @@ class HyperoptBacktesting(Backtesting):
                 "sell_reason": sell_reason,
             }
         )
-
-    def _calc_close_rate(self, open_rate, profits):
-        return -(open_rate * profits + open_rate * (1 + self.fee)) / (self.fee - 1)
 
     def _calc_profits(
         self, open_rate: ndarray, close_rate: ndarray, dec=False, calc_abs=False
@@ -346,32 +353,10 @@ class HyperoptBacktesting(Backtesting):
     ) -> Union[DataFrame, Series]:
         """ pair aware shifting nulls rows that cross over the next pair data"""
 
-        ofs = (
-            None
-            if diff_arr is None or len(diff_arr) < 1
-            else self._diff_indexes(diff_arr)
-        )
+        ofs = None if diff_arr is None or len(diff_arr) < 1 else diff_indexes(diff_arr)
         shifted = shift(data, period, fill=fill_v)
         shifted[self.shifted_offsets(ofs, period)] = null_v
         return shifted
-
-    @staticmethod
-    def _diff_indexes(arr: ndarray, with_start=False, with_end=False) -> ndarray:
-        """ returns the indexes where consecutive values are not equal,
-        used for finding pairs ends """
-        try:
-            if with_start:
-                if with_end:
-                    raise OperationalException("with_start and with_end are exclusive")
-                return where(arr != shift(arr))[0]
-            elif with_end:
-                if with_start:
-                    raise OperationalException("with_end and with_start are exclusive")
-                return where(arr != shift(arr, -1))[0]
-            else:
-                return where(arr != shift(arr, fill=arr[0]))[0]
-        except:
-            return []
 
     def advise_pair_df(self, df: DataFrame, pair: str, n_pair: float) -> DataFrame:
         """ Execute strategy signals and return df for given pair """
@@ -403,6 +388,36 @@ class HyperoptBacktesting(Backtesting):
         return MultiIndex.from_product([pairs, idx], names=["pair", "ohlc"]).swaplevel(
             0, 1
         )
+
+    def post_process(self, df_vals: ndarray, ofs=None):
+        """
+        Calculate estimates like spread and liquidity
+        """
+        loc = self.df_loc
+        ofs = self.pairs_offset
+        wnd = self.timeframe_wnd
+
+        df_vals = add_columns(df_vals, loc, ["high_low", "spread", "illiq", "liq"])
+        high = df_vals[:, loc["high"]]
+        low = df_vals[:, loc["low"]]
+        open = df_vals[:, loc["open"]]
+        close = df_vals[:, loc["close"]]
+        volume = df_vals[:, loc["volume"]]
+
+        # spread is removed from profits
+        if self.config.get("backtest_subtract_spread", True):
+            df_vals[:, loc["spread"]] = calc_spread(high, low, close, ofs)
+        # high low order determines open/close rate interpolation
+        if self.config.get("backtest_skew_rates_by_volume", True):
+            df_vals[:, loc["high_low"]] = sim_high_low(close, open)
+            # min max liquidity statistics over a rolling window to use for interpolation
+            df_vals[:, loc["liq"]] = rolling_norm(
+                calc_liquidity(volume, close, high, low), wnd, ofs
+            )
+            df_vals[:, loc["illiq"]] = rolling_norm(
+                calc_illiquidity(close, volume, wnd, ofs), wnd, ofs
+            )
+        return df_vals
 
     def merge_pairs_df(self, processed: Dict[str, DataFrame]) -> DataFrame:
         """ join all the pairs data into one concatenate df adding needed columns """
@@ -521,13 +536,13 @@ class HyperoptBacktesting(Backtesting):
         """ numpy version of the next_sold_ofs calculation """
         loc = self.bts_loc
         first_bought_idx = bts_vals[
-            self._diff_indexes(bts_vals[:, loc["pair"]], with_start=True),
+            diff_indexes(bts_vals[:, loc["pair"]], with_start=True),
             # index calling is not needed because bts_df has the full index,
             # but keep it for clarity
             loc["index"],
         ]
         sold_idx = sold[:, loc["index"]]
-        first_sold_loc = self._diff_indexes(sold[:, loc["pair"]], with_start=True)
+        first_sold_loc = diff_indexes(sold[:, loc["pair"]], with_start=True)
         first_sold_idx = sold_idx[first_sold_loc]
         # the bulk of the repetitions, prepend an empty value
         sold_repeats = empty(len(sold_idx), dtype="int64")
@@ -572,7 +587,7 @@ class HyperoptBacktesting(Backtesting):
             bought[:, loc["next_sold_ofs"]] - bought[:, loc["ohlc_ofs"]]
         ).astype("int64")
         # Use the first version only if the expanded array would take < ~500MB per col
-        if bought_ranges.sum() < self.max_size:
+        if self.use_v1 and bought_ranges.sum() < self.max_ranges_size:
             self.calc_type = True
             # intervals are short compute everything in one round
             bts_vals = self._v1_select_triggered_events(
@@ -582,14 +597,11 @@ class HyperoptBacktesting(Backtesting):
             # intervals are too long, jump over candles
             self.calc_type = False
             args = [df_vals, bought, bought_ranges, bts_vals]
-            if dbg:
-                dbg.start_pyinst(interval=0.01)
             bts_vals = (
                 self._v2_select_triggered_events(*args)
-                # self._nb_select_triggered_events(*args)
+                if self.use_v2
+                else self._nb_select_triggered_events(*args)
             )
-            if dbg:
-                dbg.stop_pyinst(keep=10)
         return bts_vals
 
     @staticmethod
@@ -1112,7 +1124,7 @@ class HyperoptBacktesting(Backtesting):
     ) -> ndarray:
         # since pairs are concatenated orderly diffing on the previous rows
         # gives the offset of each pair data
-        pairs_offset = self._diff_indexes(df[group].values, with_start=True)
+        pairs_offset = diff_indexes(df[group].values, with_start=True)
         # add the last span at the end of the repeats, since we are working with starting offsets
         pairs_ofs_repeats = append(
             pairs_offset[1:] - pairs_offset[:-1], len(df) - pairs_offset[-1]
@@ -1195,10 +1207,9 @@ class HyperoptBacktesting(Backtesting):
         ohlc_vals = df_vals[:, [df_loc[c] for c in df_cols]]
         bought_vals = swapaxes(array(list(bought_data.values())), 0, 1)
 
-
         # cap the bought range iteration to limit memory usage
         ranges_csum = bought_ranges.cumsum()
-        split_idx = [0, *split_cumsum(self.max_size, bought_ranges), None]
+        split_idx = [0, *split_cumsum(self.max_ranges_size, bought_ranges), None]
         # will store the partial arrays for triggers
         data_chunks = []
         for chunk_start, chunk_stop in zip(split_idx, split_idx[1::1]):
@@ -1768,15 +1779,24 @@ class HyperoptBacktesting(Backtesting):
         self, processed: Dict[str, DataFrame], **kwargs,
     ) -> DataFrame:
         """ NOTE: can't have default values as arguments since it is an overridden function
-        TODO: benchmark if rewriting without use of df masks for
-        readability gives a worthwhile speedup
         """
         df = self.merge_pairs_df(processed)
 
         df_vals, empty = self.bought_or_sold(df)
 
+        # date = df_vals[:, self.df_loc["date"]]
+        # high = df_vals[:, self.df_loc["high"]]
+        # low = df_vals[:, self.df_loc["low"]]
+        # close = df_vals[:, self.df_loc["close"]]
+        # open = df_vals[:, self.df_loc["open"]]
+        # volume = df_vals[:, self.df_loc["volume"]]
+        # print(volume[:100])
+
         if empty:  # if no bought signals
             return self.empty_results
+
+        df_vals = self.post_process(df_vals, self.pairs_offset)
+
         if self.any_trigger:
             bts_vals = self.set_triggers(df_vals)
         else:

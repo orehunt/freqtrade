@@ -42,7 +42,7 @@ def start_backtesting(args: Dict[str, Any]) -> None:
     :return: None
     """
     # Import here to avoid loading backtesting module when it's not used
-    from freqtrade.optimize.backtesting import Backtesting
+    from freqtrade.optimize.hyperopt_backtest import HyperoptBacktesting as Backtesting
 
     # Initialize configuration
     config = setup_optimize_configuration(args, RunMode.BACKTEST)

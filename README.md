@@ -26,3 +26,18 @@
 - pairlist/PrecisionFilter.py
 - strategy/interface.py
 ```
+
+## Sell rate configuration
+Sell signals happen on open on the next candle. The rate is calculated as:
+```
+mean([open, low, min(open, close)])
+norm_vol: volume normalized in a rolling window by average trade duration
+vol_diff: 1 - norm_vol
+if open > close:
+       open_vol = norm_vol
+       low_vol = vol_diff
+else:
+     open_vol = vol_diff
+     low_vol = norm_vol
+open * norm_vol + low * vol_diff
+```

@@ -236,7 +236,8 @@ class Main:
                 return pairs.split(",")
             # keep n profitable pairs or discard n profitable pairs
             elif tp in ("b", "bk", "bd"):
-                exportfilename = f"{self.config['user_data_dir']}/backtest_results/{self.timeframe}.json"
+                exportfilename = f"{self.config['user_data_dir']}/backtest_results/{self.timeframe}*"
+                exportfilename = glob.glob(exportfilename)[0]
                 trades = load_trades(
                     "file",
                     db_url=self.config.get("db_url"),

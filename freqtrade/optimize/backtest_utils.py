@@ -23,6 +23,7 @@ from numpy import (
 )
 import numpy as np
 from pandas import DataFrame
+from freqtrade.exceptions import OperationalException
 
 
 def padfill(arr: ndarray):
@@ -36,7 +37,6 @@ def union_eq(arr: ndarray, vals: List) -> List[bool]:
     for v in vals[1:]:
         res = res | (arr == v)
     return res
-
 
 def shift(arr: ndarray, period=1, fill=nan) -> ndarray:
     """ shift ndarray """
@@ -226,3 +226,20 @@ def merge_2d(arr1, arr2, k1, k2, sort=True, null_k2=True):
     if null_k2:
         merged[~arr1_mrg_mask, k1] = nan
     return merged
+
+def diff_indexes(arr: ndarray, with_start=False, with_end=False) -> ndarray:
+    """ returns the indexes where consecutive values are not equal,
+    used for finding pairs ends """
+    try:
+        if with_start:
+            if with_end:
+                raise OperationalException("with_start and with_end are exclusive")
+            return where(arr != shift(arr))[0]
+        elif with_end:
+            if with_start:
+                raise OperationalException("with_end and with_start are exclusive")
+            return where(arr != shift(arr, -1))[0]
+        else:
+            return where(arr != shift(arr, fill=arr[0]))[0]
+    except:
+        return []

@@ -3,7 +3,8 @@
 OPTS="$(realpath $(dirname $_))"
 . ${OPTS}/opts.sh
 
-indicators1="sb" indicators2="macd"
+# indicators1="sb" indicators2="macd"
+indicators1="sb" indicators2="liqu illiqu spread"
 # indicators1="tn kj sa sb ck sh lo emas emam mp mpp tl ub mb lb"
 # indicators1="tn kj sa sb ck ub mb lb"
 # indicators1="sh lo emas emam mp mpp tl ub mb lb sar"

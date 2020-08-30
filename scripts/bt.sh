@@ -4,7 +4,7 @@ OPTS="$(realpath $(dirname $_))"
 . ${OPTS}/opts.sh
 
 file=${userdir}/backtest_results/${timeframe}.json
-[ ! -s $file ] && rm -f $file
+[ "$(ls ${file%\.json}* 2>/dev/null | wc -l)" -gt 0 ] && rm -f ${file%\.json}*
 
 days=${days:-21}
 source=file # db
@@ -37,7 +37,8 @@ exec $main_exec \
      $open_trades_arg \
      $stake_amount_arg \
      --timerange "$timerange" \
-     --export-filename=$file \
      --export=$export \
+     --export-filename=$file \
      -i $timeframe \
      $debug
+

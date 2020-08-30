@@ -8,6 +8,7 @@ from numpy import ndarray
 from typing import NamedTuple
 from collections import namedtuple
 from freqtrade.optimize.backtest_constants import *
+from freqtrade.optimize.backtest_utils import *
 
 
 @njit(cache=True, nogil=True)
@@ -44,14 +45,16 @@ def ofs_cummax(data_ofs: ndarray, data: ndarray) -> ndarray:
         p = i
     return cumarr
 
+
 @njit(fastmath=True, cache=True, nogil=True)
 def iter_trg_cols(start, arr, trg):
     for rn, r in enumerate(arr):
         # each trigger
         for cn, e in enumerate(r):
             if e:
-                trg[start+rn] = cn
+                trg[start + rn] = cn
                 return
+
 
 @njit(fastmath=True, cache=True, nogil=True)
 def ofs_first_flat_true(data_ofs: ndarray, arr: ndarray):
@@ -64,16 +67,23 @@ def ofs_first_flat_true(data_ofs: ndarray, arr: ndarray):
 
 @njit(fastmath=True, nogil=True, cache=True)
 def copy_ranges(
-        chunk_start, chunk_stop,
-    bought_ofs, data_df, data_bought, ohlc_vals, bought_vals, bought_ranges
+    chunk_start,
+    chunk_stop,
+    bought_ofs,
+    data_df,
+    data_bought,
+    ohlc_vals,
+    bought_vals,
+    bought_ranges,
 ):
     ofs = 0
     for n, i in enumerate(bought_ofs[chunk_start:chunk_stop], chunk_start):
         rn = bought_ranges[n]
-        data_df[ofs:ofs + rn] = ohlc_vals[i : i + rn]
+        data_df[ofs : ofs + rn] = ohlc_vals[i : i + rn]
         # these vals are repeated for each range
-        data_bought[ofs:ofs + rn] = bought_vals[n]
+        data_bought[ofs : ofs + rn] = bought_vals[n]
         ofs += rn
+
 
 @njit(fastmath=True, nogil=True, cache=True)
 def split_cumsum(max_size: int, arr: ndarray):
@@ -86,10 +96,133 @@ def split_cumsum(max_size: int, arr: ndarray):
             cumsum = e
     return splits
 
+
 @njit(cache=True, nogil=True)
 def round_8(arr):
     # pass profits_prc as out, https://github.com/numba/numba/issues/4439
     return np.round(arr, 8, arr)
+
+
+@njit(cache=True, nogil=True)
+def pct_change(arr, period, window=None):
+    pct = np.empty_like(arr)
+    pct[:period] = np.nan
+    pct[period:] += arr[period:] / arr[:-period]
+    if window is not None and window > 0:
+        wnd = np.empty_like(arr)
+        pw = abs(period) + window
+        wnd[:pw] = np.nan
+        for n in range(window):
+            wnd[pw:] += pct[pw + n : -pw + n]
+        return wnd / window
+    return pct
+
+
+# https://stackoverflow.com/a/62841583/2229761
+@njit
+def shift_nb(arr, num, fill_value=np.nan, ofs=Union[None, ndarray]):
+    if num >= 0:
+        shifted = np.concatenate((np.full(num, fill_value), arr[:-num]))
+    else:
+        shifted = np.concatenate((arr[-num:], np.full(-num, fill_value)))
+    if ofs is not None:
+        # if an offset array is given, fill every index present in ofs
+        # for every step of the window size, respecting direction (sign)
+        for n in range(0, num, np.sign(num)):
+            shifted[ofs + n] = fill_value
+    return shifted
+
+
+# A Simple Estimation of Bid Ask spread
+@njit(cache=True, nogil=True)
+def calc_spread(high, low, close, ofs):
+    # calc mid price
+    # mid_range = (np.log(high) + np.log(low)) / 2
+    # forward mid price
+    # mid_range_1 = (np.log(shift_nb(high, -1)) + np.log(shift_nb(low, -1))) / 2
+    # log_close = np.log(close)
+
+    # spread formula
+    # return np.sqrt(
+    #     np.maximum(4 * (log_close - mid_range) * (log_close - mid_range_1), 0)
+    # )
+    return np.sqrt(
+        np.maximum(
+            4
+            * (np.log(close) - (np.log(high) + np.log(low)) / 2)
+            * (
+                np.log(close)
+                - (
+                    np.log(shift_nb(high, -1, np.nan, ofs))
+                    + np.log(shift_nb(low, -1, np.nan, ofs))
+                )
+                / 2
+            ),
+            0,
+        )
+    )
+
+
+# amihud illiquidity measure
+@njit(cache=True, nogil=True)
+def calc_illiquidity(close, volume, window=120, ofs=None) -> ndarray:
+    # volume in quote currency
+    volume_curr = volume * close
+    # returns are NOT a ratio
+    returns_volume_ratio = np.abs(
+        ((close - shift_nb(close, 1, np.nan, ofs))) / volume_curr
+    )
+    rolling_rvr_sum = rolling_sum(returns_volume_ratio, window, ofs)
+    return rolling_rvr_sum / window * 1e6
+
+
+@njit(cache=True, nogil=True)
+def sim_high_low(open, close):
+    return close <= open
+
+
+@nb.njit(cache=True, nogil=True)
+def null_ofs_ranges(rolled, window, ofs, null_v):
+    for start in ofs:
+        rolled[start:start+window] = null_v
+
+@njit(cache=True, nogil=True)
+def rolling_sum(arr, window, ofs=None, null_v=np.nan):
+    rsum = np.empty_like(arr)
+    c = 0
+    for n in range(window - 1, arr.shape[0]):
+        rsum[n] = 0
+        for v in arr[c:c+window]:
+            rsum[n] += v
+        c += 1
+    if ofs is not None:
+        null_ofs_ranges(rsum, window, ofs, null_v)
+    return rsum
+
+
+@njit(cache=True, nogil=True)
+def rolling_norm(arr, window, ofs=None, null_v=np.nan, static=0):
+    rnorm = np.empty_like(arr)
+    rnorm[:window] = np.nan
+    c = 0
+    for n in range(window - 1, arr.shape[0]):
+        mn, mx = arr[c], arr[c]
+        for v in arr[c+1:c+window]:
+            if v > mx:
+                mx = v
+            elif v < mn:
+                mn = v
+        rnorm[n] = ((arr[n] - mn) / (mx - mn)) if mx != mn else static
+        c += 1
+    if ofs is not None:
+        null_ofs_ranges(rnorm, window, ofs, null_v)
+    return rnorm
+
+# LIX formula
+# values between ~5..~10 higher is more liquid
+@njit(cache=True, nogil=True)
+def calc_liquidity(volume, close, high, low):
+    return np.log10((volume * close) / (high - low))
 
 
 @njit(cache=True, nogil=True)
@@ -113,9 +246,12 @@ def calc_profits(open_rate: ndarray, close_rate: ndarray, stake_amount, fee) -> 
             - 1
         )
     )
+
+
 @njit(cache=True, nogil=True)
 def stoploss_triggered_col(data, low, rate):
     return data[:, low] <= data[:, rate]
+
 
 @njit(cache=True, nogil=True)
 def calc_roi_close_rate(
@@ -133,30 +269,6 @@ def find_first(vec, t):
             return n
     return n + 1
 
-@njit(fastmath=True, cache=True, nogil=True)
-def find_with_dups(haystack, needles):
-    pos = np.full(needles.shape[0], -1)
-    found = set()
-    for i, d in enumerate(needles):
-        for n, h in enumerate(haystack):
-            if h == d and n not in found:
-                pos[i] = n
-                found.add(n)
-                break
-    return pos
-
-@njit(fastmath=True, cache=True, nogil=True)
-def increase(arr):
-    out = np.empty(arr.shape[0], nb.int64)
-    inc = 0
-    for n, e in enumerate(arr):
-        if e != arr[n-1]:
-            out[n] = e
-            inc = 0
-        else:
-            inc += 1
-            out[n] = e + inc
-    return out
 
 @njit(fastmath=True, cache=True, nogil=True)
 def cummax(arr) -> ndarray:

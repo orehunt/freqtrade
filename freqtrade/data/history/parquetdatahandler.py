@@ -9,7 +9,7 @@ from pandas import DataFrame, read_json, to_datetime, read_parquet
 
 from freqtrade import misc
 from freqtrade.configuration import TimeRange
-from freqtrade.constants import DEFAULT_DATAFRAME_COLUMNS
+from freqtrade.constants import (DEFAULT_DATAFRAME_COLUMNS, ListPairsWithTimeframes)
 from freqtrade.data.converter import trades_dict_to_list
 
 from .idatahandler import IDataHandler, TradeList
@@ -81,8 +81,9 @@ class ParquetDataHandler(IDataHandler):
         filename = self._pair_data_filename(self._datadir, pair, timeframe)
         if not filename.exists():
             return DataFrame(columns=self._columns)
-        pairdata = read_parquet(filename, columns=self._columns)
-        pairdata.drop(columns="month", inplace=True)
+        # only pyarrow engine support directories
+        pairdata = read_parquet(filename, engine='pyarrow', columns=self._columns)
+        # pairdata.drop(columns="month", inplace=True)
         pairdata = pairdata.astype(
             dtype={
                 "open": "float",
