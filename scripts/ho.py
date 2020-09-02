@@ -23,7 +23,7 @@ from user_data.modules import testsequences as ts
 
 from freqtrade.configuration.configuration import Configuration, RunMode
 from freqtrade.optimize.hyperopt import Hyperopt
-from freqtrade.loggers import setup_logging
+from freqtrade.loggers import setup_logging_pre, setup_logging
 from freqtrade.data.btanalysis import load_trades
 
 from scripts.hopt.args import parse_hopt_args
@@ -60,6 +60,7 @@ ho: Hyperopt
 
 class Main:
 
+    setup_logging_pre()
     args = parse_hopt_args()
 
     timeframe = args.i
