@@ -89,8 +89,9 @@ class Exchange:
 
         # Deep merge ft_has with default ft_has options
         self._ft_has = deep_merge_dicts(self._ft_has, deepcopy(self._ft_has_default))
-        if exchange_config.get("_ft_has_params"):
-            self._ft_has = deep_merge_dicts(exchange_config.get("_ft_has_params"), self._ft_has)
+        if exchange_config.get('_ft_has_params'):
+            self._ft_has = deep_merge_dicts(exchange_config.get('_ft_has_params'),
+                                            self._ft_has)
             logger.info("Overriding exchange._ft_has with config params, result: %s", self._ft_has)
 
         # Assign this directly for easy access
@@ -1028,8 +1029,13 @@ class Exchange:
 
     @retrier
     def cancel_order(self, order_id: str, pair: str) -> Dict:
-        if self._config["dry_run"]:
-            return {}
+        if self._config['dry_run']:
+            order = self._dry_run_open_orders.get(order_id)
+            if order:
+                order.update({'status': 'canceled', 'filled': 0.0, 'remaining': order['amount']})
+                return order
+            else:
+                return {}
 
         try:
             return self._api.cancel_order(order_id, pair)

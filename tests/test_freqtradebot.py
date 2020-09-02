@@ -953,6 +953,7 @@ def test_process_informative_pairs_added(default_conf, ticker, mocker) -> None:
 ])
 def test_get_buy_rate(mocker, default_conf, caplog, side, ask, bid,
                       last, last_ab, expected) -> None:
+    caplog.set_level(logging.DEBUG)
     default_conf['bid_strategy']['ask_last_balance'] = last_ab
     default_conf['bid_strategy']['price_side'] = side
     freqtrade = get_patched_freqtradebot(mocker, default_conf)
@@ -2288,7 +2289,7 @@ def test_check_handle_timedout_partial(default_conf, ticker, limit_buy_order_old
     # note this is for a partially-complete buy order
     freqtrade.check_handle_timedout()
     assert cancel_order_mock.call_count == 1
-    assert rpc_mock.call_count == 2
+    assert rpc_mock.call_count == 1
     trades = Trade.query.filter(Trade.open_order_id.is_(open_trade.open_order_id)).all()
     assert len(trades) == 1
     assert trades[0].amount == 23.0
@@ -2323,7 +2324,7 @@ def test_check_handle_timedout_partial_fee(default_conf, ticker, open_trade, cap
     assert log_has_re(r"Applying fee on amount for Trade.*", caplog)
 
     assert cancel_order_mock.call_count == 1
-    assert rpc_mock.call_count == 2
+    assert rpc_mock.call_count == 1
     trades = Trade.query.filter(Trade.open_order_id.is_(open_trade.open_order_id)).all()
     assert len(trades) == 1
     # Verify that trade has been updated
@@ -2363,7 +2364,7 @@ def test_check_handle_timedout_partial_except(default_conf, ticker, open_trade, 
     assert log_has_re(r"Could not update trade amount: .*", caplog)
 
     assert cancel_order_mock.call_count == 1
-    assert rpc_mock.call_count == 2
+    assert rpc_mock.call_count == 1
     trades = Trade.query.filter(Trade.open_order_id.is_(open_trade.open_order_id)).all()
     assert len(trades) == 1
     # Verify that trade has been updated
@@ -2526,13 +2527,15 @@ def test_handle_cancel_sell_limit(mocker, default_conf, fee) -> None:
     send_msg_mock.reset_mock()
 
     order['amount'] = 2
-    assert freqtrade.handle_cancel_sell(trade, order, reason) == CANCEL_REASON['PARTIALLY_FILLED']
+    assert freqtrade.handle_cancel_sell(trade, order, reason
+                                        ) == CANCEL_REASON['PARTIALLY_FILLED_KEEP_OPEN']
     # Assert cancel_order was not called (callcount remains unchanged)
     assert cancel_order_mock.call_count == 1
     assert send_msg_mock.call_count == 1
-    assert freqtrade.handle_cancel_sell(trade, order, reason) == CANCEL_REASON['PARTIALLY_FILLED']
+    assert freqtrade.handle_cancel_sell(trade, order, reason
+                                        ) == CANCEL_REASON['PARTIALLY_FILLED_KEEP_OPEN']
     # Message should not be iterated again
-    assert trade.sell_order_status == CANCEL_REASON['PARTIALLY_FILLED']
+    assert trade.sell_order_status == CANCEL_REASON['PARTIALLY_FILLED_KEEP_OPEN']
     assert send_msg_mock.call_count == 1
 
 
@@ -3969,6 +3972,8 @@ def test_order_book_ask_strategy(default_conf, limit_buy_order, limit_sell_order
     ('ask', 0.006, 1.0, 0.006),
 ])
 def test_get_sell_rate(default_conf, mocker, caplog, side, bid, ask, expected) -> None:
+    caplog.set_level(logging.DEBUG)
+
     default_conf['ask_strategy']['price_side'] = side
     mocker.patch('freqtrade.exchange.Exchange.fetch_ticker', return_value={'ask': ask, 'bid': bid})
     pair = "ETH/BTC"
@@ -3990,6 +3995,7 @@ def test_get_sell_rate(default_conf, mocker, caplog, side, bid, ask, expected) -
     ('ask', 0.043949),  # Value from order_book_l2 fiture - asks side
 ])
 def test_get_sell_rate_orderbook(default_conf, mocker, caplog, side, expected, order_book_l2):
+    caplog.set_level(logging.DEBUG)
     # Test orderbook mode
     default_conf['ask_strategy']['price_side'] = side
     default_conf['ask_strategy']['use_order_book'] = True
