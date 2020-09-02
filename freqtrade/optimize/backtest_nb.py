@@ -119,12 +119,20 @@ def pct_change(arr, period, window=None):
 
 
 # https://stackoverflow.com/a/62841583/2229761
-@njit
+@njit(cache=True, nogil=True)
 def shift_nb(arr, num, fill_value=np.nan, ofs=Union[None, ndarray]):
     if num >= 0:
-        shifted = np.concatenate((np.full(num, fill_value), arr[:-num]))
+        if arr.ndim > 1:
+            shifted_shape = (num, arr.shape[1])
+        else:
+            shifted_shape = (num, )
+        shifted = np.concatenate((np.full(shifted_shape, fill_value), arr[:-num]))
     else:
-        shifted = np.concatenate((arr[-num:], np.full(-num, fill_value)))
+        if arr.ndim > 1:
+            shifted_shape = (-num, arr.shape[1])
+        else:
+            shifted_shape = (-num, )
+        shifted = np.concatenate((arr[-num:], np.full(shifted_shape, fill_value)))
     if ofs is not None:
         # if an offset array is given, fill every index present in ofs
         # for every step of the window size, respecting direction (sign)
@@ -164,7 +172,7 @@ def calc_spread(high, low, close, ofs):
 
 
 # amihud illiquidity measure
-@njit(cache=True, nogil=True)
+@njit(cache=True, nogil=True, inline='always')
 def calc_illiquidity(close, volume, window=120, ofs=None) -> ndarray:
     # volume in quote currency
     volume_curr = volume * close
@@ -174,7 +182,6 @@ def calc_illiquidity(close, volume, window=120, ofs=None) -> ndarray:
     )
     rolling_rvr_sum = rolling_sum(returns_volume_ratio, window, ofs)
     return rolling_rvr_sum / window * 1e6
-
 
 @njit(cache=True, nogil=True)
 def sim_high_low(open, close):
@@ -208,9 +215,11 @@ def rolling_norm(arr, window, ofs=None, null_v=np.nan, static=0):
     for n in range(window - 1, arr.shape[0]):
         mn, mx = arr[c], arr[c]
         for v in arr[c+1:c+window]:
-            if v > mx:
+            if np.isnan(v):
+                continue
+            if np.isnan(mx) or v > mx:
                 mx = v
-            elif v < mn:
+            elif np.isnan(mn) or v < mn:
                 mn = v
         rnorm[n] = ((arr[n] - mn) / (mx - mn)) if mx != mn else static
         c += 1
@@ -223,7 +232,6 @@ def rolling_norm(arr, window, ofs=None, null_v=np.nan, static=0):
 @njit(cache=True, nogil=True)
 def calc_liquidity(volume, close, high, low):
     return np.log10((volume * close) / (high - low))
-
 
 @njit(cache=True, nogil=True)
 def calc_profits(open_rate: ndarray, close_rate: ndarray, stake_amount, fee) -> ndarray:
