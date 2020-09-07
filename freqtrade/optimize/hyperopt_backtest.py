@@ -190,7 +190,7 @@ class HyperoptBacktesting(Backtesting):
     ) -> DataFrame:
         buy_cols = self.bts_loc
         sell_cols = buy_cols
-        ohlc_vals = ohlc.values
+        ohlc_vals = ohlc.values.astype(float)
         ohlc_cols = df_cols(ohlc)
         # choose sell rate depending on sell reason and set sell_reason
         # add new needed columns
@@ -398,10 +398,12 @@ class HyperoptBacktesting(Backtesting):
         wnd = self.timeframe_wnd
 
         df_vals = add_columns(df_vals, loc, ["high_low", "spread", "illiq", "liq"])
-        high = df_vals[:, loc["high"]]
-        low = df_vals[:, loc["low"]]
+        df_vals = df_vals.astype(float)
+
+        high, low, close = get_cols(df_vals, loc, ["high", "low", "close"])
+        # low = df_vals[:, loc["low"]]
         open = df_vals[:, loc["open"]]
-        close = df_vals[:, loc["close"]]
+        # close = df_vals[:, loc["close"]]
         volume = df_vals[:, loc["volume"]]
 
         # spread is removed from profits
@@ -445,6 +447,7 @@ class HyperoptBacktesting(Backtesting):
         # set startup offset from the first index (should be equal for all pairs)
         self.startup_offset = df.index[0]
         # add a column for pairs offsets to make the index unique
+        # pairs_offset is the FIRST candle by contiguous index of each pair
         offsets_arr, self.pairs_offset = self._calc_pairs_offsets(df, return_ofs=True)
         self.pairs_ofs_end = append(self.pairs_offset[1:] - 1, len(df) - 1)
         # loop over the missing data pairs and calculate the point where data ends
@@ -1046,7 +1049,8 @@ class HyperoptBacktesting(Backtesting):
 
         # loop over col names and assign column by column because the df doesn't have the same
         # order as the triggers ndarray
-        mask = isin(bts_vals[:, loc["ohlc_ofs"]], bought[:, loc["ohlc_ofs"]])
+        # mask = isin(bts_vals[:, loc["ohlc_ofs"]], bought[:, loc["ohlc_ofs"]])
+        mask = bts_vals[:, loc["bought_or_sold"]] == Candle.BOUGHT
         # can't copy over to multiple columns in one assignment
         for n, c in enumerate(col_names):
             bts_vals[mask, loc[c]] = triggers[:, n]
@@ -1730,8 +1734,8 @@ class HyperoptBacktesting(Backtesting):
                 # exclude the last boughts that are not stoploss and which next sold is
                 # END sold candle
                 & ~(
-                    (isnan(bts_vals[:, bts_loc["trigger_ofs"]]))
-                    & isin(bts_vals[:, bts_loc["next_sold_ofs"]], self.pairs_ofs_end)
+                    isnan(bts_vals[:, bts_loc["trigger_ofs"]])
+                    & isin(bts_vals[:, bts_loc["next_sold_ofs"]], self.pairs_ofs_end,)
                 )
             ]
             # compute the number of sell repetitions for non triggered boughts
@@ -1745,11 +1749,13 @@ class HyperoptBacktesting(Backtesting):
             # some sold candles can be void if all the preceding bought candles
             # (after the previous sold) are triggered
             # (otherwise would just be an eq check == Candle.SOLD)
+
             events_sell = bts_vals[
                 isin(bts_vals[:, bts_loc["ohlc_ofs"]], nso)
                 | isfinite(bts_vals[:, bts_loc["trigger_ofs"]])
             ]
             events_sell_repeats = ones(len(events_sell), dtype=int)
+            # repeated next_sold indexes are always sequential, so can repeat them
             events_sell_repeats[
                 isin(events_sell[:, bts_loc["ohlc_ofs"]], nso)
             ] = sell_repeats
@@ -1765,12 +1771,10 @@ class HyperoptBacktesting(Backtesting):
                     invert=True,
                 )
             ]
-            events_sell = bts_vals[
-                bts_vals[:, bts_loc["bought_or_sold"]] == Candle.SOLD
-            ]
-            _, sold_repeats = unique(
+            nso, sold_repeats = unique(
                 events_buy[:, bts_loc["next_sold_ofs"]], return_counts=True
             )
+            events_sell = bts_vals[isin(bts_vals[:, bts_loc["ohlc_ofs"]], nso)]
             events_sell = repeat(events_sell, sold_repeats, axis=0)
         self.bts_loc = bts_loc
         return (events_buy, events_sell)

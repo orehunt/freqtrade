@@ -38,6 +38,7 @@ def union_eq(arr: ndarray, vals: List) -> List[bool]:
         res = res | (arr == v)
     return res
 
+
 def shift(arr: ndarray, period=1, fill=nan) -> ndarray:
     """ shift ndarray """
     moved: ndarray = ndarray(shape=arr.shape, dtype=arr.dtype)
@@ -78,11 +79,17 @@ def add_columns(
         axis=1,
     )
 
+
+def get_cols(arr: ndarray, col_dict, col_names: List[int]) -> List[ndarray]:
+    return [arr[:, col_dict[c]] for c in col_names]
+
+
 def without_cols(cols_dict: Dict, exclude: List) -> List:
     without = cols_dict.copy()
     for e in exclude:
         del without[e]
     return list(without.keys())
+
 
 def replace_values(v: ndarray, k: ndarray, arr: ndarray) -> ndarray:
     """ replace values in a 1D array """
@@ -126,7 +133,9 @@ def np_left_join(
 
 
 # https://stackoverflow.com/q/41190852/2229761
-def np_fill(arr_src, replace_value=None, fill_value=None, backfill=False, inplace=False):
+def np_fill(
+    arr_src, replace_value=None, fill_value=None, backfill=False, inplace=False
+):
     """ forward fill array with nans or value """
     # NOTE: last value wraps to beginning value if nan
     if replace_value is not None:
@@ -151,6 +160,7 @@ def np_fill(arr_src, replace_value=None, fill_value=None, backfill=False, inplac
     else:
         return arr[prev]
 
+
 # https://stackoverflow.com/a/54136635/2229761
 def count_in1d(arr1, arr2):
     """ count occurrences of arr1 in arr2 """
@@ -167,6 +177,7 @@ def first_unique(arr, is_sorted=False, kind="stable"):
         0
     ]
 
+
 def idx_to_mask(idx: ndarray, shape: Tuple, invert=False) -> ndarray:
     if invert:
         mask = np.ones(shape, dtype=np.bool)
@@ -175,6 +186,7 @@ def idx_to_mask(idx: ndarray, shape: Tuple, invert=False) -> ndarray:
         mask = np.zeros(shape, dtype=np.bool)
         mask[idx] = 1
     return mask
+
 
 def merge_2d(arr1, arr2, k1, k2, sort=True, null_k2=True):
     """ Assumptions:
@@ -213,19 +225,18 @@ def merge_2d(arr1, arr2, k1, k2, sort=True, null_k2=True):
     dup_arr1 = count_in1d(arr1[:, k1], merged[:, k1])
 
     mrg_unq_idx = first_unique(merged_ofs)
-    mrg_is_unq = idx_to_mask( mrg_unq_idx, merged_ofs.shape[0])
+    mrg_is_unq = idx_to_mask(mrg_unq_idx, merged_ofs.shape[0])
 
     merged[arr1_mrg_mask, :arr1_shape] = np.repeat(arr1, dup_arr1, axis=0)
     # copy the inserted rows from arr2 into arr1 into the merged arr
     not_arr1_arr2_mask = arr2_mrg_mask & arr1_mrg_mask & mrg_is_unq
     merged[not_arr1_arr2_mask, arr1_shape:] = arr2[~arr1_arr2_mask][:, arr2_to_merge]
 
-    merged[arr2_mrg_idx, arr1_shape:] = arr2[
-        arr1_arr2_mask
-    ][:, arr2_to_merge]
+    merged[arr2_mrg_idx, arr1_shape:] = arr2[arr1_arr2_mask][:, arr2_to_merge]
     if null_k2:
         merged[~arr1_mrg_mask, k1] = nan
     return merged
+
 
 def diff_indexes(arr: ndarray, with_start=False, with_end=False) -> ndarray:
     """ returns the indexes where consecutive values are not equal,

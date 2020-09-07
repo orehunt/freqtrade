@@ -5,7 +5,7 @@ import sys
 import json
 import io
 from pprint import pformat
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Union
 from pathlib import Path
 
 import rapidjson
@@ -13,6 +13,8 @@ from colorama import Fore, Style
 from pandas import DataFrame, isna, json_normalize
 import tabulate
 import enlighten
+import numba as nb
+import numpy as np
 
 from freqtrade.misc import round_dict
 
@@ -27,11 +29,7 @@ import freqtrade.optimize.hyperopt_backend as backend
 # Suppress scikit-learn FutureWarnings from skopt
 with warnings.catch_warnings():
     warnings.filterwarnings("ignore", category=FutureWarning)
-# Additional regressors already pluggable into the optimizer
-# from sklearn.linear_model import ARDRegression, BayesianRidge
-# possibly interesting regressors that need predict method override
-# from sklearn.ensemble import HistGradientBoostingRegressor
-# from xgboost import XGBoostRegressor
+
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +115,10 @@ class HyperoptOut(HyperoptData):
         # Round floats to `r` digits after the decimal point if requested
         return round_dict(d, r) if r else d
 
+    @staticmethod
+    def limit_num_len(num: Union[float, int], fnum: str, limit=16, decimals=8):
+        return fnum.format(num) if len(f"{num:.{decimals}f}") < limit else f"{num:.2e}"
+
     def print_results(self, trials, table_header: int, epochs=None) -> None:
         """
         Log results if it is better than any previous evaluation
@@ -139,22 +141,6 @@ class HyperoptOut(HyperoptData):
         )
 
     @staticmethod
-    def print_results_explanation(
-        results, total_epochs, highlight_best: bool, print_colorized: bool
-    ) -> None:
-        """
-        Log results explanation string
-        """
-        explanation_str = HyperoptOut._format_explanation_string(results, total_epochs)
-        # Colorize output
-        if print_colorized:
-            if results["total_profit"] > 0:
-                explanation_str = Fore.GREEN + explanation_str
-            if highlight_best and results["is_best"]:
-                explanation_str = Style.BRIGHT + explanation_str
-        print(explanation_str)
-
-    @staticmethod
     def _format_explanation_string(results, total_epochs) -> str:
         return (
             (
@@ -164,8 +150,19 @@ class HyperoptOut(HyperoptData):
             )
             + f"{results['current_epoch']:5d}/{total_epochs}: "
             + f"{results['results_explanation']} "
-            + f"Objective: {results['loss']:.5f}"
+            + f"Objective: {results['loss']:2.2e}"
         )
+
+    @staticmethod
+    @nb.jit(cache=True)
+    def format_results_nb(arr, col):
+        if col == "Epoch":
+            for n, e in enumerate(arr):
+                arr[n] = (
+                    limit_num_len(e, "{:,.2f}%").rjust(7, " ")
+                    if not np.isnan(e)
+                    else "--".rjust(7, " ")
+                )
 
     @staticmethod
     def get_result_table(
@@ -220,32 +217,33 @@ class HyperoptOut(HyperoptData):
         trials.loc[trials["Total profit"] > 0, "is_profit"] = True
         trials["Trades"] = trials["Trades"].astype(str)
 
+        l = HyperoptOut.limit_num_len
         trials["Epoch"] = trials["Epoch"].apply(
             lambda x: "{}/{}".format(
                 str(x).rjust(len(str(total_epochs)), " "), total_epochs
             )
         )
         trials["Avg profit"] = trials["Avg profit"].apply(
-            lambda x: "{:,.2f}%".format(x).rjust(7, " ")
+            lambda x: l(x, "{:,.2f}%").rjust(7, " ")
             if not isna(x)
             else "--".rjust(7, " ")
         )
         trials["Avg duration"] = trials["Avg duration"].apply(
-            lambda x: "{:,.1f} m".format(x).rjust(7, " ")
+            lambda x: l(x, "{:,.1f} m").rjust(7, " ")
             if not isna(x)
             else "--".rjust(7, " ")
         )
         trials["Objective"] = trials["Objective"].apply(
-            lambda x: "{:,.5f}".format(x).rjust(8, " ")
+            lambda x: l(x, "{:,.5f}").rjust(8, " ")
             if x != 100000
             else "N/A".rjust(8, " ")
         )
 
         trials["Profit"] = trials.apply(
-            lambda x: "{:,.8f} {} {}".format(
-                x["Total profit"],
+            lambda x: "{} {} {}".format(
+                l(x["Total profit"], "{:,.2f}"),
                 config["stake_currency"],
-                "({:,.2f}%)".format(x["Profit"]).rjust(10, " "),
+                l(x["Profit"], "({:,.2f}%)").rjust(10, " "),
             ).rjust(25 + len(config["stake_currency"]))
             if x["Total profit"] != 0.0
             else "--".rjust(25 + len(config["stake_currency"])),
@@ -260,12 +258,12 @@ class HyperoptOut(HyperoptData):
                 if trials["is_profit"].iat[i]:
                     for j in range(n_cols - 3):
                         trials.iat[i, j] = "{}{}{}".format(
-                            Fore.GREEN, str(trials.iat[i, j]), Fore.RESET
+                            Fore.GREEN, trials.iat[i, j], Fore.RESET
                         )
                 if trials["is_best"].iat[i] and highlight_best:
                     for j in range(n_cols - 3):
                         trials.iat[i, j] = "{}{}{}".format(
-                            Style.BRIGHT, str(trials.iat[i, j]), Style.RESET_ALL
+                            Style.BRIGHT, trials.iat[i, j], Style.RESET_ALL
                         )
 
         trials = trials.drop(columns=["is_initial_point", "is_best", "is_profit"])
@@ -296,91 +294,6 @@ class HyperoptOut(HyperoptData):
         return table
 
     @staticmethod
-    def export_csv_file(
-        config: dict,
-        results: list,
-        total_epochs: int,
-        highlight_best: bool,
-        csv_file: str,
-    ) -> None:
-        """
-        Log result to csv-file
-        """
-        if not results:
-            return
-
-        # Verification for overwrite
-        path = Path(csv_file)
-        if path.isfile(csv_file):
-            logger.error(f"CSV file already exists: {csv_file}")
-            return
-
-        try:
-            io.open(csv_file, "w+").close()
-        except IOError:
-            logger.error(f"Failed to create CSV file: {csv_file}")
-            return
-
-        trials = json_normalize(results, max_level=1)
-        trials["Best"] = ""
-        trials["Stake currency"] = config["stake_currency"]
-        trials = trials[
-            [
-                "Best",
-                "current_epoch",
-                "results_metrics.trade_count",
-                "results_metrics.avg_profit",
-                "results_metrics.total_profit",
-                "Stake currency",
-                "results_metrics.profit",
-                "results_metrics.duration",
-                "loss",
-                "is_initial_point",
-                "is_best",
-            ]
-        ]
-        trials.columns = [
-            "Best",
-            "Epoch",
-            "Trades",
-            "Avg profit",
-            "Total profit",
-            "Stake currency",
-            "Profit",
-            "Avg duration",
-            "Objective",
-            "is_initial_point",
-            "is_best",
-        ]
-        trials["is_profit"] = False
-        trials.loc[trials["is_initial_point"], "Best"] = "*"
-        trials.loc[trials["is_best"], "Best"] = "Best"
-        trials.loc[trials["is_initial_point"] & trials["is_best"], "Best"] = "* Best"
-        trials.loc[trials["Total profit"] > 0, "is_profit"] = True
-        trials["Epoch"] = trials["Epoch"].astype(str)
-        trials["Trades"] = trials["Trades"].astype(str)
-
-        trials["Total profit"] = trials["Total profit"].apply(
-            lambda x: "{:,.8f}".format(x) if x != 0.0 else ""
-        )
-        trials["Profit"] = trials["Profit"].apply(
-            lambda x: "{:,.2f}".format(x) if not isna(x) else ""
-        )
-        trials["Avg profit"] = trials["Avg profit"].apply(
-            lambda x: "{:,.2f}%".format(x) if not isna(x) else ""
-        )
-        trials["Avg duration"] = trials["Avg duration"].apply(
-            lambda x: "{:,.1f} m".format(x) if not isna(x) else ""
-        )
-        trials["Objective"] = trials["Objective"].apply(
-            lambda x: "{:,.5f}".format(x) if x != 100000 else ""
-        )
-
-        trials = trials.drop(columns=["is_initial_point", "is_best", "is_profit"])
-        trials.to_csv(csv_file, index=False, header=True, mode="w", encoding="UTF-8")
-        logger.info(f"CSV file created: {csv_file}")
-
-    @staticmethod
     def _format_results_explanation_string(
         stake_cur: str, results_metrics: Dict
     ) -> str:
@@ -390,10 +303,10 @@ class HyperoptOut(HyperoptData):
         return (
             (
                 f"{results_metrics['trade_count']:6d} trades. "
-                f"Avg profit {results_metrics['avg_profit']: 6.2f}%. "
-                f"Total profit {results_metrics['total_profit']: 11.8f} {stake_cur} "
-                f"({results_metrics['profit']: 7.2f}\N{GREEK CAPITAL LETTER SIGMA}%). "
-                f"Avg duration {results_metrics['duration']:5.1f} min."
+                f"Avg profit {results_metrics['avg_profit']:6.2e}%. "
+                f"Total profit {results_metrics['total_profit']:11.8e} {stake_cur} "
+                f"({results_metrics['profit']: 7.2e}%). "
+                f"Avg duration {results_metrics['duration']:5.1e} min."
             )
             .encode(locale.getpreferredencoding(), "replace")
             .decode("utf-8")

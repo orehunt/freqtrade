@@ -36,9 +36,11 @@ class BacktestDebug:
             les = len(events_sell)
             nxt = True
             for n, i in enumerate(events_buy.index.values[1 : min(leb, les)], 1):
-                nxt = (events_sell.iloc[n].name >= i) & (
-                    events_sell.iloc[n - 1].name < i
-                ) & (events_buy.iloc[n].name <= events_sell.iloc[n].name)
+                nxt = (
+                    (events_sell.iloc[n].name >= i)
+                    & (events_sell.iloc[n - 1].name < i)
+                    & (events_buy.iloc[n].name <= events_sell.iloc[n].name)
+                )
                 if not nxt:
                     print(events_buy.iloc[n])
                     print(events_buy.iloc[n - 1 : min(leb, n + 1)])
@@ -62,12 +64,14 @@ class BacktestDebug:
     @staticmethod
     def start_time():
         import timeit
+
         global timer_start
         timer_start = timeit.default_timer()
 
     @staticmethod
     def stop_time():
         import timeit
+
         global timer_start
         print(timeit.default_timer() - timer_start)
         exit()
@@ -78,9 +82,10 @@ class BacktestDebug:
         from functools import partial
         import pstats
         from pstats import SortKey
+
         lo.update(locals())
-        stats_file = '/tmp/prf'
-        cProfile.runctx('func(*args)', glo, lo, stats_file)
+        stats_file = "/tmp/prf"
+        cProfile.runctx("func(*args)", glo, lo, stats_file)
         p = pstats.Stats(stats_file)
         p.strip_dirs().sort_stats(-1).print_stats()
 
@@ -162,7 +167,11 @@ class BacktestDebug:
         return flt_cols
 
     def _asdf(self, arr, df):
-        return pd.DataFrame(arr, columns=df.columns, index=arr[:, df.columns.get_loc(df.index.name or df.columns[0]) or 0])
+        return pd.DataFrame(
+            arr,
+            columns=df.columns,
+            index=arr[:, df.columns.get_loc(df.index.name or df.columns[0]) or 0],
+        )
 
     def _load_results(self) -> pd.DataFrame:
         import pickle
@@ -185,7 +194,7 @@ class BacktestDebug:
         print_data=False,
         filter_fsell=True,
         print_inc=True,
-            cols=None,
+        cols=None,
     ):
         """ find all the non matching indexes between results, differentiate between not present (to include)
         and invalid (to exclude) """
@@ -194,12 +203,14 @@ class BacktestDebug:
         key_1 = where[1]
         key_pair_0 = f"pair_{key_0}"
         key_pair_1 = f"pair_{key_1}"
-        events = self.backtesting.events if "events" in dir(self.backtesting) else self.events
+        events = (
+            self.backtesting.events
+            if "events" in dir(self.backtesting)
+            else self.events
+        )
         if not isinstance(results, pd.DataFrame):
             results = pd.DataFrame(
-                results,
-                columns=cols,
-                index=results[:, cols["ohlc_ofs"]],
+                results, columns=cols, index=results[:, cols["ohlc_ofs"]],
             )
 
         if len(results) == 0 and len(saved_results) == 0:
@@ -209,16 +220,16 @@ class BacktestDebug:
             if events is not None:
                 end_candles = events[
                     events["next_sold_ofs"].isin(self.backtesting.pairs_ofs_end)
-                ]["ohlc"].values
+                ]["date"].values
             else:
                 end_candles = []
             results = results.loc[
                 (results["sell_reason"].values != SellType.FORCE_SELL)
-                & ~(results[key_0].isin(end_candles))
+                & ~(results["open_date"].isin(end_candles))
             ]
             saved_results = saved_results.loc[
                 (saved_results["sell_reason"].values != SellType.FORCE_SELL)
-                & ~(saved_results[key_1].isin(end_candles).values)
+                & ~(saved_results["open_date"].isin(end_candles).values)
             ]
 
         # stock results are sorted, so align indexes
@@ -298,7 +309,7 @@ class BacktestDebug:
             print(
                 saved_results.iloc[
                     max(0, s_idx - 10) : min(s_idx + 10, len(saved_results))
-                ][saved_results.columns.difference(["pair_open_index"])]
+                ][saved_results.columns.difference(["pair_open_date"])]
             )
             print("idx:", idx, ", count:", self.counter)
             if ex:
@@ -311,11 +322,9 @@ class BacktestDebug:
                 events_buy, columns=bts_loc, index=events_buy[:, bts_loc["ohlc_ofs"]]
             )
             events_sell = pd.DataFrame(
-                events_sell,
-                columns=bts_loc,
-                index=events_sell[:, bts_loc["ohlc_ofs"]],
+                events_sell, columns=bts_loc, index=events_sell[:, bts_loc["ohlc_ofs"]],
             )
-        s_res = dbg._load_results().sort_values(by=["pair", "open_index"])
+        s_res = dbg._load_results().sort_values(by=["pair", "open_date"])
         print(events_buy.iloc[pos][cols])
         print(events_sell.iloc[pos][cols])
         print(bts_df.iloc[pos][cols])
@@ -355,14 +364,14 @@ class BacktestDebug:
         else:
             results = cls.vectorized_backtest(processed)
             saved_results = cls.backtest_vanilla(processed, **kwargs,)
-        if cache not in  ("0", "1"):
-            idx_name = os.getenv("FQT_CMP_IDX", "open_index")
-            self._cmp_indexes((idx_name, idx_name), results, saved_results)
+        if cache not in ("0", "1"):
+            col_name = os.getenv("FQT_CMP_IDX", "open_date")
+            self._cmp_indexes((col_name, col_name), results, saved_results)
         if os.getenv("FQT_SHOW_RES", ""):
             print(
                 results.iloc[:10],
                 "\n",
-                saved_results.sort_values(by=["pair", "open_index"]).iloc[:10],
+                saved_results.sort_values(by=["pair", "open_date"]).iloc[:10],
             )
         # return saved_results
         return results

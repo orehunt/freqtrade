@@ -230,9 +230,9 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
 
     def _set_params(self, params_dict: Dict[str, Any] = None):
         if self.has_space("roi"):
-            self.backtesting.strategy.amounts["roi"] = self.custom_hyperopt.generate_roi_table(
-                params_dict
-            )
+            self.backtesting.strategy.amounts[
+                "roi"
+            ] = self.custom_hyperopt.generate_roi_table(params_dict)
         if self.has_space("buy"):
             self.backtesting.strategy.advise_buy = self.custom_hyperopt.buy_strategy_generator(
                 params_dict
@@ -339,13 +339,30 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             "total_profit": total_profit,
         }
 
+    # def _calculate_results_metrics(self, backtesting_results: DataFrame) -> Dict:
+    #     wins = len(backtesting_results[backtesting_results.profit_percent > 0])
+    #     draws = len(backtesting_results[backtesting_results.profit_percent == 0])
+    #     losses = len(backtesting_results[backtesting_results.profit_percent < 0])
+    #     return {
+    #         "trade_count": len(backtesting_results.index),
+    #         "avg_profit": backtesting_results.profit_percent.mean() * 100.0,
+    #         "total_profit": backtesting_results.profit_abs.sum(),
+    #         "profit": backtesting_results.profit_percent.sum() * 100.0,
+    #         "duration": backtesting_results.trade_duration.mean(),
+    #     }
+
     def _calculate_results_metrics(self, backtesting_results: DataFrame) -> Dict:
         wins = len(backtesting_results[backtesting_results.profit_percent > 0])
         draws = len(backtesting_results[backtesting_results.profit_percent == 0])
         losses = len(backtesting_results[backtesting_results.profit_percent < 0])
         return {
             "trade_count": len(backtesting_results.index),
+            # "wins": wins,
+            # "draws": draws,
+            # "losses": losses,
+            # "winsdrawslosses": f"{wins}/{draws}/{losses}",
             "avg_profit": backtesting_results.profit_percent.mean() * 100.0,
+            # "median_profit": backtesting_results.profit_percent.median() * 100.0,
             "total_profit": backtesting_results.profit_abs.sum(),
             "profit": backtesting_results.profit_percent.sum() * 100.0,
             "duration": backtesting_results.trade_duration.mean(),
@@ -969,12 +986,22 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         # we delete from the preprocessed dict within the loop
         pairs = [pair for pair in preprocessed.keys()]
         for pair in pairs:
+            prev_len_pair_df = len(preprocessed[pair])
             preprocessed[pair] = trim_dataframe(preprocessed[pair], timerange)
-            len_pair_df = len(preprocessed[pair])
-            if len_pair_df < 1:
+            # trimming by timerange doesn't cut the startup period if one of the pairs
+            # starts at a later date
+            left_to_trim = (
+                prev_len_pair_df
+                - len(preprocessed[pair])
+                - self.backtesting.required_startup
+            )
+            if left_to_trim < 0:
+                preprocessed[pair] = preprocessed[pair][abs(left_to_trim) :]
+            trimmed_len_pair_df = len(preprocessed[pair])
+            if trimmed_len_pair_df < 1:
                 del preprocessed[pair]
             else:
-                self.n_candles += len_pair_df
+                self.n_candles += trimmed_len_pair_df
         if len(preprocessed) < 1:
             raise OperationalException(
                 "Not enough data to support the provided startup candle count."
@@ -985,7 +1012,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         min_candles_ratio = self.config.get("hyperopt_min_candles_ratio", 0.5)
         max_candles = n_pairs * (
             abs(Timedelta(timerange.stopts - timerange.startts))
-            / Timedelta(self.config["ticker_interval"])
+            / Timedelta(self.config["timeframe"])
         )
         candles_ratio = self.n_candles / max_candles
         if candles_ratio < min_candles_ratio:
@@ -995,9 +1022,11 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             )
         min_date, max_date = get_timerange(preprocessed)
 
-        logger.info(f'Hyperopting with data from {min_date.strftime(DATETIME_PRINT_FORMAT)} '
-                    f'up to {max_date.strftime(DATETIME_PRINT_FORMAT)} '
-                    f'({(max_date - min_date).days} days)..')
+        logger.info(
+            f"Hyperopting with data from {min_date.strftime(DATETIME_PRINT_FORMAT)} "
+            f"up to {max_date.strftime(DATETIME_PRINT_FORMAT)} "
+            f"({(max_date - min_date).days} days).."
+        )
 
         dump(preprocessed, self.data_pickle_file)
 

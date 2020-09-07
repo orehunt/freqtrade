@@ -11,7 +11,7 @@ source=file # db
 export=trades
 db=
 if [ -n "$debug" ]; then
-    debug="-$debug"
+	debug="-$debug"
 fi
 
 export NUMEXPR_MAX_THREADS=16
@@ -21,24 +21,23 @@ export FREQTRADE_USERDIR=$userdir
 pairlists=$dir/pairlists_static.json
 
 exec $main_exec \
-     backtesting  -c $strategy \
-     -c $hyperopt \
-     -c $live \
-     -c $exchange \
-     -c $amounts \
-     -c $amounts_default \
-     -c $amounts_tuned \
-     -c $askbid \
-     -c $pairlists \
-     -c $paths \
-     --userdir $userdir \
-     $dmmp \
-     $eps \
-     $open_trades_arg \
-     $stake_amount_arg \
-     --timerange "$timerange" \
-     --export=$export \
-     --export-filename=$file \
-     -i $timeframe \
-     $debug
-
+	backtesting -c $hyperopt \
+	-c $strategy \
+	-c $live \
+	-c $exchange \
+	-c $amounts \
+	-c $amounts_default \
+	-c $amounts_tuned \
+	-c $askbid \
+	-c $pairlists \
+	-c $paths \
+	--userdir $userdir \
+	$dmmp \
+	$eps \
+	$open_trades_arg \
+	$stake_amount_arg \
+	--timerange "$timerange" \
+	--export=$export \
+	--export-filename=$file \
+	-i $timeframe \
+	$debug

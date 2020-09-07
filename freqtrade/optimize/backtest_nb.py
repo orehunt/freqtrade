@@ -5,7 +5,7 @@ from numba import njit, int64, float64
 from pandas import DataFrame
 import numpy as np
 from numpy import ndarray
-from typing import NamedTuple
+from typing import NamedTuple, Any
 from collections import namedtuple
 from freqtrade.optimize.backtest_constants import *
 from freqtrade.optimize.backtest_utils import *
@@ -125,13 +125,13 @@ def shift_nb(arr, num, fill_value=np.nan, ofs=Union[None, ndarray]):
         if arr.ndim > 1:
             shifted_shape = (num, arr.shape[1])
         else:
-            shifted_shape = (num, )
+            shifted_shape = (num,)
         shifted = np.concatenate((np.full(shifted_shape, fill_value), arr[:-num]))
     else:
         if arr.ndim > 1:
             shifted_shape = (-num, arr.shape[1])
         else:
-            shifted_shape = (-num, )
+            shifted_shape = (-num,)
         shifted = np.concatenate((arr[-num:], np.full(shifted_shape, fill_value)))
     if ofs is not None:
         # if an offset array is given, fill every index present in ofs
@@ -172,7 +172,7 @@ def calc_spread(high, low, close, ofs):
 
 
 # amihud illiquidity measure
-@njit(cache=True, nogil=True, inline='always')
+@njit(cache=True, nogil=True, inline="always")
 def calc_illiquidity(close, volume, window=120, ofs=None) -> ndarray:
     # volume in quote currency
     volume_curr = volume * close
@@ -183,6 +183,7 @@ def calc_illiquidity(close, volume, window=120, ofs=None) -> ndarray:
     rolling_rvr_sum = rolling_sum(returns_volume_ratio, window, ofs)
     return rolling_rvr_sum / window * 1e6
 
+
 @njit(cache=True, nogil=True)
 def sim_high_low(open, close):
     return close <= open
@@ -191,7 +192,8 @@ def sim_high_low(open, close):
 @nb.njit(cache=True, nogil=True)
 def null_ofs_ranges(rolled, window, ofs, null_v):
     for start in ofs:
-        rolled[start:start+window] = null_v
+        rolled[start : start + window] = null_v
+
 
 @njit(cache=True, nogil=True)
 def rolling_sum(arr, window, ofs=None, null_v=np.nan):
@@ -199,7 +201,7 @@ def rolling_sum(arr, window, ofs=None, null_v=np.nan):
     c = 0
     for n in range(window - 1, arr.shape[0]):
         rsum[n] = 0
-        for v in arr[c:c+window]:
+        for v in arr[c : c + window]:
             rsum[n] += v
         c += 1
     if ofs is not None:
@@ -214,7 +216,7 @@ def rolling_norm(arr, window, ofs=None, null_v=np.nan, static=0):
     c = 0
     for n in range(window - 1, arr.shape[0]):
         mn, mx = arr[c], arr[c]
-        for v in arr[c+1:c+window]:
+        for v in arr[c + 1 : c + window]:
             if np.isnan(v):
                 continue
             if np.isnan(mx) or v > mx:
@@ -227,11 +229,13 @@ def rolling_norm(arr, window, ofs=None, null_v=np.nan, static=0):
         null_ofs_ranges(rnorm, window, ofs, null_v)
     return rnorm
 
+
 # LIX formula
 # values between ~5..~10 higher is more liquid
 @njit(cache=True, nogil=True)
 def calc_liquidity(volume, close, high, low):
     return np.log10((volume * close) / (high - low))
+
 
 @njit(cache=True, nogil=True)
 def calc_profits(open_rate: ndarray, close_rate: ndarray, stake_amount, fee) -> ndarray:

@@ -3,5 +3,4 @@ minepy
 numba
 psutil
 technical
-tables
 hurst
