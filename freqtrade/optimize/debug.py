@@ -43,8 +43,8 @@ class BacktestDebug:
                 )
                 if not nxt:
                     print(events_buy.iloc[n])
-                    print(events_buy.iloc[n - 1 : min(leb, n + 1)])
-                    print(events_sell.iloc[n - 1 : min(les, n + 1)], end="\n")
+                    print(events_buy.iloc[n - 1 : min(leb, n + 2)])
+                    print(events_sell.iloc[n - 1 : min(les, n + 2)], end="\n")
                     print("buy:", len(events_buy), "sell:", len(events_sell))
                     raise OperationalException(
                         f"Buy and sell events not matching at {n}"
@@ -362,7 +362,7 @@ class BacktestDebug:
         elif cache == "0":
             results = cls.backtest_vanilla(processed, **kwargs)
         else:
-            results = cls.vectorized_backtest(processed)
+            results = cls.vectorized_backtest(processed, **kwargs)
             saved_results = cls.backtest_vanilla(processed, **kwargs,)
         if cache not in ("0", "1"):
             col_name = os.getenv("FQT_CMP_IDX", "open_date")

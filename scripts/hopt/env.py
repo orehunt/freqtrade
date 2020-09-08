@@ -13,7 +13,7 @@ def set_environment(args: dict, paths: list, config) -> None:
     # set env vars
     # never use pair based amounts in hyperopt
     os.environ["FQT_PBA"] = "1"
-    os.environ["FQT_TIMEFRAME"] = config.get("timeframe", config["ticker_interval"])
+    os.environ["FQT_TIMEFRAME"] = config.get("timeframe", "1h")
     if args.s:
         os.environ["FQT_NOSS"] = "1"
     if args.sc:

@@ -592,7 +592,7 @@ class HyperoptMulti(HyperoptOut):
         if is_shared:
             loss = array(list(backend.Xi_h.values()))
         else:
-            loss = array(opt.Xi)
+            loss = array(opt.yi)
             last_period = last_period // jobs
             n_tail = backend.just_saved * (len(backend.Xi_h) // len(opt.Xi) or 2)
         # calculate base values, dependent on loss score

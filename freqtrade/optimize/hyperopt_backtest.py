@@ -470,6 +470,7 @@ class HyperoptBacktesting(Backtesting):
         df["ofs"] = offsets_arr
         # could as easily be arange(len(df)) ...
         df["ohlc_ofs"] = df.index.values + offsets_arr - self.startup_offset
+        self.pairs_ohlc_ofs_end = df["ohlc_ofs"].iloc[self.pairs_ofs_end].values
         df["ohlc"] = df.index.values
         # fill missing ohlc with open value index wise
         # df[isnan(df["low"].values), "low"] = df["open"]
@@ -1704,7 +1705,7 @@ class HyperoptBacktesting(Backtesting):
                 # END sold candle
                 & ~(
                     isnan(bts_vals[:, bts_loc["trigger_ofs"]])
-                    & isin(bts_vals[:, bts_loc["next_sold_ofs"]], self.pairs_ofs_end)
+                    & isin(bts_vals[:, bts_loc["next_sold_ofs"]], self.pairs_ohlc_ofs_end)
                 )
             ]
             events_sell = bts_vals[
@@ -1732,7 +1733,7 @@ class HyperoptBacktesting(Backtesting):
                 # END sold candle
                 & isin(
                     bts_vals[:, bts_loc["next_sold_ofs"]],
-                    self.pairs_ofs_end,
+                    self.pairs_ohlc_ofs_end,
                     invert=True,
                 )
             ]
@@ -1753,7 +1754,7 @@ class HyperoptBacktesting(Backtesting):
                 # END sold candle
                 & ~(
                     isnan(bts_vals[:, bts_loc["trigger_ofs"]])
-                    & isin(bts_vals[:, bts_loc["next_sold_ofs"]], self.pairs_ofs_end,)
+                    & isin(bts_vals[:, bts_loc["next_sold_ofs"]], self.pairs_ohlc_ofs_end,)
                 )
             ]
             # compute the number of sell repetitions for non triggered boughts
@@ -1785,7 +1786,7 @@ class HyperoptBacktesting(Backtesting):
                 # END sold candle
                 & isin(
                     bts_vals[:, bts_loc["next_sold_ofs"]],
-                    self.pairs_ofs_end,
+                    self.pairs_ohlc_ofs_end,
                     invert=True,
                 )
             ]
@@ -1838,7 +1839,7 @@ class HyperoptBacktesting(Backtesting):
             else self.split_events_stack(bts_vals)
         )
 
-        if dbg:
-            dbg.bts_loc = self.bts_loc
-            dbg._validate_events(events_buy, events_sell)
+        # if dbg:
+        #     dbg.bts_loc = self.bts_loc
+        #     dbg._validate_events(events_buy, events_sell)
         return self.get_results(events_buy, events_sell, df)

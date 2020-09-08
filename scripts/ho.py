@@ -116,7 +116,6 @@ class Main:
     config["use_max_market_positions"] = args.mp
     config["hyperopt_random_state"] = args.rand if args.rand else None
     config["timeframe"] = timeframe
-    config["ticker_interval"] = timeframe
     config["fee"] = args.fee
     base_config = config
 
