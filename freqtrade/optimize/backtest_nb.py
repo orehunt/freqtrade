@@ -185,7 +185,17 @@ def calc_illiquidity(close, volume, window=120, ofs=None) -> ndarray:
 
 
 @njit(cache=True, nogil=True)
+def calc_skewed_spread(high, low, close, volume, wnd, ofs):
+    spread = calc_spread(high, low, close, ofs)
+    # min max liquidity statistics over a rolling window to use for interpolation
+    lix_norm = rolling_norm(calc_liquidity(volume, close, high, low), wnd, ofs)
+    ilq_norm = rolling_norm(calc_illiquidity(close, volume, wnd, ofs), wnd, ofs)
+    return skew_rate_by_liq(ilq_norm, lix_norm, np.zeros(spread.shape), spread)
+
+
+@njit(cache=True, nogil=True)
 def sim_high_low(open, close):
+    """ when True, high happens before low """
     return close <= open
 
 
@@ -267,10 +277,34 @@ def stoploss_triggered_col(data, low, rate):
 
 @njit(cache=True, nogil=True)
 def calc_roi_close_rate(
-    open_rate: ndarray, min_rate: ndarray, roi: ndarray, fee: float
+    open_rate: ndarray, min_rate: ndarray, roi: ndarray, high_low: ndarray, fee: float
 ):
     roi_rate = -(open_rate * roi + open_rate * (1 + fee)) / (fee - 1)
     return np.fmax(roi_rate, min_rate)
+
+
+@njit(cache=True, nogil=True)
+def skew_rate_by_liq(ilq_norm, lix_norm, good_rate, bad_rate):
+    # rationale: if liquidity is low, the execution rate will be closer to the bad rate
+    # (bad rate is high or low depending if buy or sell)
+    liq = lix_norm - ilq_norm
+    liq_above = liq > 0
+    rate = np.empty_like(good_rate)
+    # skew by liquidity indicator depending on which one is dominant
+    rate[liq_above] = (
+        good_rate[liq_above] * lix_norm[liq_above]
+        + bad_rate[liq_above] * (1 - lix_norm[liq_above])
+    ) / 2
+    not_liq_above = ~liq_above
+    rate[not_liq_above] = (
+        good_rate[not_liq_above] * ilq_norm[not_liq_above]
+        + bad_rate[not_liq_above] * (1 - ilq_norm[not_liq_above])
+    ) / 2
+    # skew a second time, reducing the liquidity adjustement based
+    # on the intensity of the liquidity dominance
+    mean_rate = (good_rate + bad_rate) / 2
+    rate[:] = (rate * np.abs(liq) + mean_rate * (1 - np.abs(liq))) / 2
+    return rate
 
 
 @njit(fastmath=True, cache=True, nogil=True)
@@ -363,10 +397,10 @@ def roi_is_triggered(*args):
 @njit(cache=True, nogil=True)
 def roi_is_triggered_op(n, i, high_profit, inv_roi_timeouts, inv_roi_values, fl_cols):
     for t, tm in enumerate(inv_roi_timeouts):
-        # tf is the duration of the current trade in timeframes
+        # i is the timeframe counter for the current trade at the current position
         # tm is the timeframe count after which a roi ratio is enabled
-        # a roi with tm == 0 should be enabled at tf == 0
-        # a roi with tm 3 should not be enabled at tf 2
+        # a roi with tm == 0 should be enabled at i == 0
+        # a roi with tm 3 should not be enabled at i == 2
         if tm <= i:
             if high_profit > inv_roi_values[t]:
                 fl_cols["col_roi_profit"][n] = inv_roi_values[t]
@@ -382,7 +416,6 @@ def calc_trailing_rate(stoploss_rate, *args):
 
 @njit(cache=True, nogil=True)
 def calc_trailing_rate_op(stoploss_rate, tf, bl, high_profit, fl_cols, fl):
-    # if not (bl["sl_only_offset"] and high_profit < fl["sl_offset"]):
     if not (bl["sl_only_offset"] and high_profit < fl["sl_offset"]):
         return max(
             # trailing only increases
@@ -424,6 +457,14 @@ def trade_is_overlap(*args):
 @njit(cache=True, nogil=True)
 def trade_is_overlap_op(bl, b, tf):
     return bl["not_position_stacking"] and b <= tf
+
+
+@njit(cache=True, nogil=True)
+def copy_trigger_data(b, tf, n, fl_cols, it_cols):
+    fl_cols["col_trigger_bought_ofs"][n] = b
+    fl_cols["col_trigger_date"][n] = it_cols["ohlc_date"][tf]
+    fl_cols["col_trigger_ofs"][n] = tf
+    return get_last_trigger(n)
 
 
 def define_callbacks(feat):
@@ -481,18 +522,31 @@ def iter_triggers(
 
     tf = it_cols["bofs"][0] - 1
     for n, b in enumerate(it_cols["bofs"]):
-        # if bl["not_position_stacking"] and b <= tf:
+        # skip if position stacking is NOT enabled
         if trade_is_overlap(bl, b, tf):
             continue
+        # keep track of the last trigger and reset
         if triggered:
             set_last_trigger(n, tf, last_trigger, fl_cols)
             triggered = False
+        # data for the current trade
         open_rate = fl_cols["bopen"][n]
         stoploss_static, stoploss_rate = calc_stoploss_static(open_rate, fl["stoploss"])
+        # loop over the range of the current trade
         tf = b
         for i, low in enumerate(
             fl_cols["ohlc_low"][b : b + it_cols["bought_ranges"][n]]
         ):
+            # if low happens first
+            if not fl_cols["high_low"][tf]:
+                # check stoploss against previous rate
+                if triggered := stoploss_is_triggered(
+                    n, low, stoploss_rate, stoploss_static, fl_cols
+                ):
+                    last_trigger = copy_trigger_data(b, tf, n, fl_cols, it_cols)
+                    break
+
+            # otherwise check against new high
             high_profit = calc_high_profit(
                 open_rate, fl_cols["ohlc_high"][tf], fl["stake_amount"], fl["fee"]
             )
@@ -500,17 +554,19 @@ def iter_triggers(
                 stoploss_rate, tf, bl, high_profit, fl_cols, fl
             )
             if triggered := stoploss_is_triggered(
-                n, low, stoploss_rate, stoploss_static, fl_cols
+                n,
+                low,
+                stoploss_rate,
+                stoploss_static,
+                fl_cols
+                # check roi only if updated trailing is not triggered
             ) or roi_is_triggered(
                 n, i, high_profit, inv_roi_timeouts, inv_roi_values, fl_cols
             ):
-                fl_cols["col_trigger_bought_ofs"][n] = b
-                fl_cols["col_trigger_date"][n] = it_cols["ohlc_date"][tf]
-                fl_cols["col_trigger_ofs"][n] = tf
-                last_trigger = get_last_trigger(n)
+                last_trigger = copy_trigger_data(b, tf, n, fl_cols, it_cols)
                 break
             tf += 1
-    # update the last last_trigger slice if the last bought is sold with trigger
+    # update the last last_trigger slice only if the last bought is sold with a trigger
     if triggered and bl["not_position_stacking"]:
         fl_cols["col_last_trigger"][last_trigger:n_bought] = tf
     return

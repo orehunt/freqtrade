@@ -170,6 +170,7 @@ class HyperoptBacktesting(Backtesting):
             )
             if f
         ]
+        self.account_for_spread = backtesting_amounts.get("account_for_spread", True)
         # null all config amounts for disabled ones (to compare against vanilla backtesting)
         if not self.roi_enabled:
             config["minimal_roi"] = {"0": 10}
@@ -234,12 +235,24 @@ class HyperoptBacktesting(Backtesting):
                 # cast as int since using as indexer
                 roi_ofs = sell_vals[where_roi, sell_cols["trigger_ofs"]].astype(int)
                 roi_low = ohlc_vals[roi_ofs, ohlc_cols["low"]]
-                sell_vals[where_roi, sell_cols["close_rate"]] = calc_roi_close_rate(
+                roi_close_rate = calc_roi_close_rate(
                     roi_open_rate,
                     roi_low,
                     events_roi[:, sell_cols["roi_profit"]],
+                    events_roi[:, sell_cols["high_low"]],
                     self.fee,
                 )
+                roi_open_ofs = buy_vals[where_roi, buy_cols["ohlc_ofs"]].astype(int)
+                roi_open = ohlc_vals[roi_ofs, ohlc_cols["open"]]
+                # override roi close rate with open if
+                roi_on_open_mask = (
+                    # the trade lasts more than 1 candle
+                    (roi_ofs - roi_open_ofs > 0)
+                    # and the open rate triggers roi
+                    & (roi_open > roi_close_rate)
+                )
+                roi_close_rate[roi_on_open_mask] = roi_open[roi_on_open_mask]
+                sell_vals[where_roi, sell_cols["close_rate"]] = roi_close_rate
         if self.trailing_enabled:
             trailing_triggered = sell_vals[:, sell_cols["trailing_triggered"]].astype(
                 bool
@@ -269,6 +282,12 @@ class HyperoptBacktesting(Backtesting):
 
         open_rate = buy_vals[:, buy_cols["open"]]
         close_rate = sell_vals[:, sell_cols["close_rate"]]
+
+        # if spread is included in the profits calculation
+        # increase open_rate and decrease close_rate
+        if self.account_for_spread:
+            open_rate += open_rate * buy_vals[:, buy_cols["spread"]]
+            close_rate -= close_rate * sell_vals[:, sell_cols["spread"]]
 
         profits_abs, profits_prc = self._calc_profits(
             open_rate, close_rate, calc_abs=True
@@ -397,7 +416,7 @@ class HyperoptBacktesting(Backtesting):
         ofs = self.pairs_offset
         wnd = self.timeframe_wnd
 
-        df_vals = add_columns(df_vals, loc, ["high_low", "spread", "illiq", "liq"])
+        df_vals = add_columns(df_vals, loc, ["high_low", "spread",])
         df_vals = df_vals.astype(float)
 
         high, low, close = get_cols(df_vals, loc, ["high", "low", "close"])
@@ -406,18 +425,13 @@ class HyperoptBacktesting(Backtesting):
         # close = df_vals[:, loc["close"]]
         volume = df_vals[:, loc["volume"]]
 
-        # spread is removed from profits
-        if self.config.get("backtest_subtract_spread", True):
-            df_vals[:, loc["spread"]] = calc_spread(high, low, close, ofs)
-        # high low order determines open/close rate interpolation
-        if self.config.get("backtest_skew_rates_by_volume", True):
-            df_vals[:, loc["high_low"]] = sim_high_low(close, open)
-            # min max liquidity statistics over a rolling window to use for interpolation
-            df_vals[:, loc["liq"]] = rolling_norm(
-                calc_liquidity(volume, close, high, low), wnd, ofs
-            )
-            df_vals[:, loc["illiq"]] = rolling_norm(
-                calc_illiquidity(close, volume, wnd, ofs), wnd, ofs
+        # high low order determines trailing between old/new rate
+        df_vals[:, loc["high_low"]] = sim_high_low(close, open)
+
+        # spread is removed from profits, it's value is skewed by liquidity
+        if self.account_for_spread:
+            df_vals[:, loc["spread"]] = calc_skewed_spread(
+                high, low, close, volume, wnd, ofs
             )
         return df_vals
 
@@ -708,6 +722,7 @@ class HyperoptBacktesting(Backtesting):
             # the number of columns for the shape of the trigger range
             "trg_n_cols": 0,
             "bought_ranges": bought_ranges,
+            "high_low": df_vals[:, self.df_loc["high_low"]],
         }
         v["calc_offset"] = (v["sl_positive"] or v["sl_only_offset"],)
 
@@ -739,7 +754,7 @@ class HyperoptBacktesting(Backtesting):
         v["trg_names"].append("stoploss_triggered")
         v["trg_n_cols"] += 1
 
-        # tailing
+        # trailing
         v["trailing_cols_names"] = ("trailing_rate", "trailing_triggered")
         v["col_names"].extend(v["trailing_cols_names"])
         v["trg_names"].append("trailing_triggered")
@@ -818,7 +833,9 @@ class HyperoptBacktesting(Backtesting):
     def _nb_vars(self, v: Dict) -> Tuple:
         # columns of the trigger array which stores all the calculations
 
-        fl_dict = {k: v[k] for k in ("ohlc_low", "ohlc_high", "bopen", "roi_vals")}
+        fl_dict = {
+            k: v[k] for k in ("ohlc_low", "ohlc_high", "bopen", "roi_vals", "high_low")
+        }
         fl_dict.update(
             {f"col_{k}": v["triggers"][:, n] for k, n in v["col"].__dict__.items()}
         )
@@ -826,13 +843,13 @@ class HyperoptBacktesting(Backtesting):
 
         it_dict = {
             k: v[k]
-            for k in ("bofs", "bsold", "ohlc_date", "bought_ranges", "trg_roi_idx")
+            for k in ("bofs", "bsold", "ohlc_date", "bought_ranges", "trg_roi_idx",)
         }
         update_tpdict(it_dict.keys(), it_dict.values(), Int64Cols)
 
         fl = {
             k: v[k]
-            for k in ("fee", "stake_amount", "stoploss", "sl_positive", "sl_offset")
+            for k in ("fee", "stake_amount", "stoploss", "sl_positive", "sl_offset",)
         }
         update_tpdict(fl.keys(), fl.values(), Float64Vals)
 

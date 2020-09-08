@@ -305,7 +305,7 @@ class HyperoptOut(HyperoptData):
                 f"{results_metrics['trade_count']:6d} trades. "
                 f"Avg profit {results_metrics['avg_profit']:6.2e}%. "
                 f"Total profit {results_metrics['total_profit']:11.8e} {stake_cur} "
-                f"({results_metrics['profit']: 7.2e}%). "
+                f"({results_metrics['profit']: 7.2f}%). "
                 f"Avg duration {results_metrics['duration']:5.1e} min."
             )
             .encode(locale.getpreferredencoding(), "replace")
