@@ -141,9 +141,11 @@ def shift_nb(arr, num, fill_value=np.nan, ofs=Union[None, ndarray]):
     return shifted
 
 
-# A Simple Estimation of Bid Ask spread
+
 @njit(cache=True, nogil=True)
 def calc_spread(high, low, close, ofs):
+    """ A Simple Estimation of Bid Ask spread
+    NOTE: this calculation can return NaNs """
     # calc mid price
     # mid_range = (np.log(high) + np.log(low)) / 2
     # forward mid price
@@ -186,6 +188,7 @@ def calc_illiquidity(close, volume, window=120, ofs=None) -> ndarray:
 
 @njit(cache=True, nogil=True)
 def calc_skewed_spread(high, low, close, volume, wnd, ofs):
+    """ Calculate spread and skew it according to the balance of LIX and illiquidity estimates """
     spread = calc_spread(high, low, close, ofs)
     # min max liquidity statistics over a rolling window to use for interpolation
     lix_norm = rolling_norm(calc_liquidity(volume, close, high, low), wnd, ofs)
@@ -289,13 +292,14 @@ def skew_rate_by_liq(ilq_norm, lix_norm, good_rate, bad_rate):
     # (bad rate is high or low depending if buy or sell)
     liq = lix_norm - ilq_norm
     liq_above = liq > 0
-    rate = np.empty_like(good_rate)
+    # rate = np.empty_like(good_rate)
+    rate = np.zeros(good_rate.shape[0])
     # skew by liquidity indicator depending on which one is dominant
     rate[liq_above] = (
         good_rate[liq_above] * lix_norm[liq_above]
         + bad_rate[liq_above] * (1 - lix_norm[liq_above])
     ) / 2
-    not_liq_above = ~liq_above
+    not_liq_above = np.logical_not(liq_above)
     rate[not_liq_above] = (
         good_rate[not_liq_above] * ilq_norm[not_liq_above]
         + bad_rate[not_liq_above] * (1 - ilq_norm[not_liq_above])

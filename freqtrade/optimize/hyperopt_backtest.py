@@ -430,9 +430,10 @@ class HyperoptBacktesting(Backtesting):
 
         # spread is removed from profits, it's value is skewed by liquidity
         if self.account_for_spread:
-            df_vals[:, loc["spread"]] = calc_skewed_spread(
+            # there can be NaNs in the spread calculation
+            df_vals[:, loc["spread"]] = np.nan_to_num(calc_skewed_spread(
                 high, low, close, volume, wnd, ofs
-            )
+            ))
         return df_vals
 
     def merge_pairs_df(self, processed: Dict[str, DataFrame]) -> DataFrame:
