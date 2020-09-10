@@ -4,7 +4,7 @@ OPTS="$(realpath $(dirname $_))"
 . ${OPTS}/opts.sh
 
 if [ -n "$1" ]; then
-	freqtrade hyperopt-show -c $hyperopt -n $1 --print-json 2>/dev/null
+	freqtrade hyperopt-show -c $exchange -c $hyperopt -c <(echo "$instance_json") -n $trial_index --print-json
 	exit
 fi
 

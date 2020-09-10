@@ -29,7 +29,7 @@ class HyperoptCV:
     target_trials: DataFrame
     trials_maxout: int
     trials_timeout: float
-
+    use_progressbar: True
 
     @abstractmethod
     def parallel_objective(self, t: int, params, epochs: Epochs, trials_state: TrialsState):
@@ -56,7 +56,8 @@ class HyperoptCV:
 
             # params_Xi = np.memmap(Xi_file, dtype='float64', mode='r', shape=(epochs,n_dims))
             for t, X in enumerate(Xi[offset:]):
-                HyperoptOut._print_progress(t, jobs, self.trials_maxout)
+                if self.use_progressbar:
+                    HyperoptOut._print_progress(t, jobs, self.trials_maxout)
                 yield t, []
         else:
             # loop over jobs to schedule the last dispatch to collect unsaved epochs

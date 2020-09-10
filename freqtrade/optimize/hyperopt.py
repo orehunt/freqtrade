@@ -97,6 +97,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         self.trials_max_empty = self.config.get(
             "hyperopt_trials_max_empty", self.trials_maxout
         )
+        self.use_progressbar = self.config.get("hyperopt_use_progressbar", True)
 
         # configure multi mode, before backtesting to not spawn another exchange instance
         # inside the manager
@@ -339,18 +340,6 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             "total_profit": total_profit,
         }
 
-    # def _calculate_results_metrics(self, backtesting_results: DataFrame) -> Dict:
-    #     wins = len(backtesting_results[backtesting_results.profit_percent > 0])
-    #     draws = len(backtesting_results[backtesting_results.profit_percent == 0])
-    #     losses = len(backtesting_results[backtesting_results.profit_percent < 0])
-    #     return {
-    #         "trade_count": len(backtesting_results.index),
-    #         "avg_profit": backtesting_results.profit_percent.mean() * 100.0,
-    #         "total_profit": backtesting_results.profit_abs.sum(),
-    #         "profit": backtesting_results.profit_percent.sum() * 100.0,
-    #         "duration": backtesting_results.trade_duration.mean(),
-    #     }
-
     def _calculate_results_metrics(self, backtesting_results: DataFrame) -> Dict:
         wins = len(backtesting_results[backtesting_results.profit_percent > 0])
         draws = len(backtesting_results[backtesting_results.profit_percent == 0])
@@ -499,7 +488,8 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                 opt.update_next()
                 a = point()
             evald.add(a)
-            HyperoptOut._print_progress(t, jobs, self.trials_maxout)
+            if self.use_progressbar:
+                HyperoptOut._print_progress(t, jobs, self.trials_maxout)
             t += 1
             yield t, a
 
@@ -573,7 +563,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         batch_start = trials_state.num_saved
         current = batch_start + 1
         current_best = ep.current_best_epoch
-        has_roi_space = "roi" in self.config["spaces"]
+        has_roi_space = self.has_space("roi")
         i = 0
         for i, v in enumerate(backend.trials_list, 1):
             is_best = self.is_best_loss(v, ep.current_best_loss)
@@ -967,9 +957,10 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                     backend.trials_list = [t for t in backend.trials.tail]
                     backend.just_saved = self.log_trials(backend.trials, backend.epochs)
                     backend.trials.num_done -= backend.just_saved
-                HyperoptOut._print_progress(
-                    backend.just_saved, jobs, self.trials_maxout, finish=True
-                )
+                if self.use_progressbar:
+                    HyperoptOut._print_progress(
+                        backend.just_saved, jobs, self.trials_maxout, finish=True
+                    )
 
     def start(self) -> None:
         """ Broom Broom """
@@ -1060,9 +1051,10 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         else:
             jobs_scheduler = self.run_backtest_parallel
 
-        HyperoptOut._init_progressbar(
-            self.print_colorized, self.total_epochs or None, self.cv
-        )
+        if self.use_progressbar:
+            HyperoptOut._init_progressbar(
+                self.print_colorized, self.total_epochs or None, self.cv
+            )
         self.main_loop(jobs_scheduler)
 
         # Print best epoch

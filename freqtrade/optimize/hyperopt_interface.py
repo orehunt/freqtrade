@@ -144,7 +144,7 @@ class IHyperOpt(ABC):
             "roi_p2": roi_limits["roi_p2_min"],
             "roi_p3": roi_limits["roi_p3_min"],
         }
-        logger.info(f"Min roi table: {round_dict(IHyperOpt.generate_roi_table(p), 5)}")
+        logger.debug(f"Min roi table: {round_dict(IHyperOpt.generate_roi_table(p), 5)}")
         p = {
             "roi_t1": roi_limits["roi_t1_max"],
             "roi_t2": roi_limits["roi_t2_max"],
@@ -153,7 +153,7 @@ class IHyperOpt(ABC):
             "roi_p2": roi_limits["roi_p2_max"],
             "roi_p3": roi_limits["roi_p3_max"],
         }
-        logger.info(f"Max roi table: {round_dict(IHyperOpt.generate_roi_table(p), 5)}")
+        logger.debug(f"Max roi table: {round_dict(IHyperOpt.generate_roi_table(p), 5)}")
 
         return [
             Integer(roi_limits["roi_t1_min"], roi_limits["roi_t1_max"], name="roi_t1"),

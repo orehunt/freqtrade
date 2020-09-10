@@ -113,7 +113,7 @@ class HyperoptBacktesting(Backtesting):
     empty_results = DataFrame.from_records([], columns=BacktestResult._fields)
     events = None
 
-    td_zero = Timedelta(0)
+    td_zero = Timedelta(0, unit="m")
     td_timeframe: Timedelta
     td_half_timeframe: Timedelta
     pairs_offset: List[int]
@@ -145,6 +145,25 @@ class HyperoptBacktesting(Backtesting):
             else:
                 self.backtest = self.vectorized_backtest
             self.beacktesting_engine = "vectorized"
+        else:
+            super().__init__(config)
+            return
+
+        assert (
+            "pair",
+            "profit_percent",
+            "profit_abs",
+            "open_date",
+            "open_rate",
+            "open_fee",
+            "close_date",
+            "close_rate",
+            "close_fee",
+            "amount",
+            "trade_duration",
+            "open_at_end",
+            "sell_reason",
+        ) == BacktestResult._fields
 
         self.td_timeframe = Timedelta(config["timeframe"])
         self.td_half_timeframe = self.td_timeframe / 2
@@ -156,7 +175,7 @@ class HyperoptBacktesting(Backtesting):
         self.stoploss_enabled = backtesting_amounts.get("stoploss", False)
         self.trailing_enabled = backtesting_amounts.get(
             "trailing", False
-        ) and config.get("trailing_stop", False)
+        ) and config['amounts'].get("trailing_stop", False)
         self.roi_enabled = backtesting_amounts.get("roi", False)
         self.any_trigger = (
             self.stoploss_enabled or self.trailing_enabled or self.roi_enabled
@@ -173,10 +192,13 @@ class HyperoptBacktesting(Backtesting):
         self.account_for_spread = backtesting_amounts.get("account_for_spread", True)
         # null all config amounts for disabled ones (to compare against vanilla backtesting)
         if not self.roi_enabled:
+            config['amounts']["roi"] = {"0": 10}
             config["minimal_roi"] = {"0": 10}
         if not self.trailing_enabled:
+            config['amounts']['trailing_stop'] = False
             config["trailing_stop"] = False
         if not self.stoploss_enabled:
+            config['amounts']['stoploss'] = -100
             config["stoploss"] = -100
 
         # parent init after config overrides
@@ -294,7 +316,8 @@ class HyperoptBacktesting(Backtesting):
         )
 
         trade_duration = to_timedelta(
-            Series(sell_vals[:, sell_cols["date"]] - buy_vals[:, buy_cols["date"]])
+            Series(sell_vals[:, sell_cols["date"]] - buy_vals[:, buy_cols["date"]]),
+            unit="ns",
         )
         # replace trade duration of same candle trades with half the timeframe reduce to minutes
         trade_duration[trade_duration == self.td_zero].values[
@@ -308,14 +331,17 @@ class HyperoptBacktesting(Backtesting):
                 "profit_percent": profits_prc,
                 "profit_abs": profits_abs,
                 "open_date": to_datetime(buy_vals[:, buy_cols["date"]]),
-                "close_date": to_datetime(sell_vals[:, sell_cols["date"]]),
-                "open_index": buy_vals[:, buy_cols["ohlc"]].astype(int),
-                "close_index": sell_vals[:, sell_cols["ohlc"]].astype(int),
-                "trade_duration": trade_duration.dt.seconds / 60,
-                "open_at_end": False,
                 "open_rate": open_rate,
+                "open_fee": self.fee,
+                "close_date": to_datetime(sell_vals[:, sell_cols["date"]]),
                 "close_rate": close_rate,
+                "close_fee": self.fee,
+                "amount": self.config["stake_amount"],
+                "trade_duration": trade_duration.dt.total_seconds() / 60,
+                "open_at_end": False,
                 "sell_reason": sell_reason,
+                # "open_index": buy_vals[:, buy_cols["ohlc"]].astype(int),
+                # "close_index": sell_vals[:, sell_cols["ohlc"]].astype(int),
             }
         )
 
@@ -417,13 +443,11 @@ class HyperoptBacktesting(Backtesting):
         wnd = self.timeframe_wnd
 
         df_vals = add_columns(df_vals, loc, ["high_low", "spread",])
-        df_vals = df_vals.astype(float)
+        # df_vals = df_vals.astype(float)
 
-        high, low, close = get_cols(df_vals, loc, ["high", "low", "close"])
-        # low = df_vals[:, loc["low"]]
-        open = df_vals[:, loc["open"]]
-        # close = df_vals[:, loc["close"]]
-        volume = df_vals[:, loc["volume"]]
+        high, low, close, open, volume = get_cols(
+            df_vals, loc, ["high", "low", "close", "open", "volume"], dtype=float
+        )
 
         # high low order determines trailing between old/new rate
         df_vals[:, loc["high_low"]] = sim_high_low(close, open)
@@ -431,9 +455,9 @@ class HyperoptBacktesting(Backtesting):
         # spread is removed from profits, it's value is skewed by liquidity
         if self.account_for_spread:
             # there can be NaNs in the spread calculation
-            df_vals[:, loc["spread"]] = np.nan_to_num(calc_skewed_spread(
-                high, low, close, volume, wnd, ofs
-            ))
+            df_vals[:, loc["spread"]] = np.nan_to_num(
+                calc_skewed_spread(high, low, close, volume, wnd, ofs)
+            )
         return df_vals
 
     def merge_pairs_df(self, processed: Dict[str, DataFrame]) -> DataFrame:
@@ -481,10 +505,11 @@ class HyperoptBacktesting(Backtesting):
 
     def bought_or_sold(self, df: DataFrame) -> Tuple[DataFrame, bool]:
         """ Set bought_or_sold columns according to buy and sell signals """
-        df_vals = df.values
+        df_vals = df.values.astype(float)
+
         loc = df_cols(df)
         # NOTE: add commas when using tuples, or use lists
-        df_vals = add_columns(df.values, loc, ("bought_or_sold",))
+        df_vals = add_columns(df_vals, loc, ("bought_or_sold",))
         # set bought candles
         # skip if no valid bought candles are found
         # df["bought_or_sold"] = self._shift_paw(
@@ -703,6 +728,7 @@ class HyperoptBacktesting(Backtesting):
         return -1, -1
 
     def _v2_vars(self, df_vals: ndarray, bought: ndarray, bought_ranges) -> Dict:
+        amounts = SimpleNamespace(**self.strategy.amounts)
         v = {
             "roi_enabled": self.roi_enabled,
             "stoploss_enabled": self.stoploss_enabled,
@@ -710,12 +736,12 @@ class HyperoptBacktesting(Backtesting):
             "roi_or_trailing": self.roi_enabled or self.trailing_enabled,
             "stoploss_or_trailing": self.stoploss_enabled or self.trailing_enabled,
             "not_position_stacking": not self.position_stacking,
-            "sl_positive": self.strategy.trailing_stop_positive or 0.0,
-            "sl_positive_not_null": self.strategy.trailing_stop_positive is not None,
-            "sl_offset": self.strategy.trailing_stop_positive_offset,
-            "sl_only_offset": self.strategy.trailing_only_offset_is_reached,
-            "stoploss": abs(self.strategy.stoploss),
-            "stake_amount": self.config["stake_amount"],
+            "sl_positive": amounts.trailing_stop_positive or 0.0,
+            "sl_positive_not_null": amounts.trailing_stop_positive is not None,
+            "sl_offset": amounts.trailing_stop_positive_offset,
+            "sl_only_offset": amounts.trailing_only_offset_is_reached,
+            "stoploss": abs(amounts.stoploss),
+            "stake_amount": amounts.stake,
             "fee": self.fee,
             # columns of the trigger array which stores all the calculations
             "col_names": ["trigger_ofs", "trigger_date", "trigger_bought_ofs",],
@@ -1655,7 +1681,7 @@ class HyperoptBacktesting(Backtesting):
         # with the latest duplicate value when rounding to timeframes
         # NOTE: make sure to sort numerically
 
-        minimal_roi = self.config["minimal_roi"]
+        minimal_roi = self.strategy.amounts["minimal_roi"]
         sorted_minimal_roi = {k: minimal_roi[k] for k in sorted(minimal_roi, key=int)}
         roi_timeouts = self._round_roi_timeouts(list(minimal_roi.keys()))
         roi_values = [
@@ -1705,7 +1731,9 @@ class HyperoptBacktesting(Backtesting):
                 # END sold candle
                 & ~(
                     isnan(bts_vals[:, bts_loc["trigger_ofs"]])
-                    & isin(bts_vals[:, bts_loc["next_sold_ofs"]], self.pairs_ohlc_ofs_end)
+                    & isin(
+                        bts_vals[:, bts_loc["next_sold_ofs"]], self.pairs_ohlc_ofs_end
+                    )
                 )
             ]
             events_sell = bts_vals[
@@ -1754,7 +1782,9 @@ class HyperoptBacktesting(Backtesting):
                 # END sold candle
                 & ~(
                     isnan(bts_vals[:, bts_loc["trigger_ofs"]])
-                    & isin(bts_vals[:, bts_loc["next_sold_ofs"]], self.pairs_ohlc_ofs_end,)
+                    & isin(
+                        bts_vals[:, bts_loc["next_sold_ofs"]], self.pairs_ohlc_ofs_end,
+                    )
                 )
             ]
             # compute the number of sell repetitions for non triggered boughts
@@ -1828,10 +1858,10 @@ class HyperoptBacktesting(Backtesting):
         if len(bts_vals) < 1:
             return self.empty_results
 
-        # if dbg:
-        #     self.events = as_df(
-        #         bts_vals, self.bts_loc, bts_vals[:, self.bts_loc["ohlc_ofs"]]
-        #     )
+        if dbg:
+            self.events = as_df(
+                bts_vals, self.bts_loc, bts_vals[:, self.bts_loc["ohlc_ofs"]]
+            )
 
         events_buy, events_sell = (
             self.split_events(bts_vals)
@@ -1839,7 +1869,7 @@ class HyperoptBacktesting(Backtesting):
             else self.split_events_stack(bts_vals)
         )
 
-        # if dbg:
-        #     dbg.bts_loc = self.bts_loc
-        #     dbg._validate_events(events_buy, events_sell)
+        if dbg:
+            dbg.bts_loc = self.bts_loc
+            dbg._validate_events(events_buy, events_sell)
         return self.get_results(events_buy, events_sell, df)

@@ -92,8 +92,9 @@ class Main:
     ]
 
     config = {}
+
+    # state
     config["user_data_dir"] = Path(paths["user"])
-    config["hyperopt_loss"] = "DecideCoreLoss" if not args.lo else args.lo
     config["hyperopt_clear"] = args.clr
     config["hyperopt_reset"] = args.res
     config["hyperopt_jobs"] = args.j
@@ -102,21 +103,28 @@ class Main:
     config["hyperopt_trials_instance"] = args.inst or (
         "cv" if (args.cv and not args.kn) else None
     )
+    # optimizer
     config["epochs"] = args.e
     config["mode"] = args.mode
     config["lie_strat"] = args.lie
     config["effort"] = args.f
     config["ask_points"] = args.pts
+    config["hyperopt_random_state"] = args.rand if args.rand else None
+    config["hyperopt_loss"] = "DecideCoreLoss" if not args.lo else args.lo
+
+    # output
     config["print_json"] = True
     config["print_all"] = not args.np
     config["print_colorized"] = True
     config["verbosity"] = args.dbg
     config["logfile"] = "hyperopt.log" if args.log else ""
+
+    # trades
     config["position_stacking"] = not args.ns
     config["use_max_market_positions"] = args.mp
-    config["hyperopt_random_state"] = args.rand if args.rand else None
     config["timeframe"] = timeframe
     config["fee"] = args.fee
+
     base_config = config
 
     # spaces config
@@ -127,8 +135,8 @@ class Main:
     spaces_amounts_types = [["roi"], ["stoploss", "trailing"]]
 
     # make a stub lock to save trials from outside hyperopt
-    stub = lambda: None
-    stub.lock = Lock()
+    # stub = lambda: None
+    # stub.lock = Lock()
 
     def calc_trades(self):
         self.calc_days()
@@ -584,6 +592,7 @@ class Main:
             return False
 
     def hashcond(self, cond):
+        """ Variable -> string -> bytes(UTF-8) -> SHA1 """
         return sha1(bytes(f"{cond}", "UTF-8")).hexdigest()
 
     def process_last_condition(self, c: int, prev_params: list, skipor: True) -> list:
@@ -676,6 +685,22 @@ class Main:
                     i[n] = "" if i[n] == i[n - b] else i[n]
         with open(dst, "w") as fp:
             json.dump(evals, fp)
+
+    def print_config(self):
+        config = self.config.copy()
+        # convert unserializable types to str
+        config['runmode'] = str(config['runmode'])
+        config['user_data_dir'] = str(config['user_data_dir'])
+        config['datadir'] = str(config['datadir'])
+        config['exportfilename'] = str(config['exportfilename'])
+        config['spaces'] = list(config['spaces'])
+        del config['original_config']
+        # for k in config:
+        #     print(k, type(config[k]))
+        if self.args.path:
+            self.write_json_file(config, self.args.path, update=False)
+        else:
+            print(json.dumps(config, indent=4))
 
     def pick_limits(self):
         limits = self.read_json_file(self.args.path)
@@ -1157,6 +1182,8 @@ class Main:
             self.print_scores()
         elif self.args.ppars:
             self.print_params()
+        elif self.args.pconf:
+            self.print_config()
         elif self.args.cat:
             self.concat_pairs_amounts(self.args.cat)
         elif self.args.pp:

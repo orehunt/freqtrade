@@ -58,6 +58,7 @@ class HyperoptMulti(HyperoptOut):
     # stop warning against missing results after a while
     void_output_backoff = False
     Xi_cols: List[Tuple] = []
+    use_progressbar = True
 
     @abstractmethod
     def backtest_params(
@@ -82,7 +83,8 @@ class HyperoptMulti(HyperoptOut):
         # at the end dispatch wrap up tasks
         if backend.trials.exit:
             for t in range(jobs):
-                HyperoptOut._print_progress(t, jobs, self.trials_maxout)
+                if self.use_progressbar:
+                    HyperoptOut._print_progress(t, jobs, self.trials_maxout)
                 yield t
 
         # termination window
@@ -97,7 +99,8 @@ class HyperoptMulti(HyperoptOut):
                     t, jobs, backend.trials, backend.epochs
                 ):
                     break
-            HyperoptOut._print_progress(t, jobs, self.trials_maxout)
+            if self.use_progressbar:
+                HyperoptOut._print_progress(t, jobs, self.trials_maxout)
             yield t
 
     def setup_multi(self):

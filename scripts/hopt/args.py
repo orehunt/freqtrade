@@ -83,5 +83,6 @@ def parse_hopt_args() -> dict:
         "-exc", help="exchange name which maps to a config file", default="exchange_testing"
     )
     parser.add_argument("-ppars", help="show params of epoch number", default="")
+    parser.add_argument("-pconf", help="print config to output or to file (-path)", action="store_true")
 
     return parser.parse_args()

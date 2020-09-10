@@ -32,7 +32,10 @@ while getopts "ta:d:q:e:i:p:f:xm:ctd:s:n:g:u:l:r:y:o:v:b:j" o; do
 		clear=true
 		config=true
 		;;
-	n) tuned_amounts=$OPTARG ;;
+	n)
+		tuned_amounts=$OPTARG
+		trial_index=$OPTARG
+		;;
 	l)
 		sqlite=$OPTARG
 		opt_arc=1
@@ -97,6 +100,8 @@ amounts_pairs=$dir/amounts/pairs_amounts.json
 if [ -n "$tuned_amounts" ]; then
 	if [ "$tuned_amounts" = 0 ]; then
 		amounts_tuned=$dir/amounts_backtesting_tuned.json
+	elif [ "$tuned_amounts" == off ]; then
+		amounts_tuned=$dir/amounts/off.json
 	elif [ "$tuned_amounts" != "${tuned_amounts#cfg}" ]; then
 		amounts_tuned=${tuned_amounts}
 	else
@@ -104,6 +109,18 @@ if [ -n "$tuned_amounts" ]; then
 	fi
 else
 	amounts_tuned=$dir/roi/${timeframe}.json
+fi
+
+# get last trials instance from file
+if [ -n "$instance" ]; then
+	if [ $instance == "last" ]; then
+		instance=$(jq -r '.[-1]' <${userdir}/hyperopt_data/trials_instances.json)
+	elif [ $instance == "last:cv" ]; then
+		instance=$(jq -r '.[-1]' <${userdir}/hyperopt_data/trials_instances.json)_cv
+	fi
+	instance_json='{"hyperopt_trials_instance": "'"$instance"'"}'
+else
+	instance_json="{}"
 fi
 
 [ -n "$open_trades" ] && open_trades_arg="--max-open-trades $open_trades"

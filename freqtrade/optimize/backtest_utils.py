@@ -75,13 +75,16 @@ def add_columns(
     for n, c in enumerate(columns, len(cols_dict)):
         cols_dict[c] = n
     return concatenate(
-        (arr, ndarray(shape=(arr.shape[0], len(columns))) if data is None else data),
+        (arr, ndarray(shape=(arr.shape[0], len(columns)), dtype=arr.dtype) if data is None else data),
         axis=1,
     )
 
 
-def get_cols(arr: ndarray, col_dict, col_names: List[int]) -> List[ndarray]:
-    return [arr[:, col_dict[c]] for c in col_names]
+def get_cols(arr: ndarray, col_dict, col_names: List[int], dtype=None) -> List[ndarray]:
+    if dtype:
+        return [arr[:, col_dict[c]].astype(dtype) for c in col_names]
+    else:
+        return [arr[:, col_dict[c]] for c in col_names]
 
 
 def without_cols(cols_dict: Dict, exclude: List) -> List:

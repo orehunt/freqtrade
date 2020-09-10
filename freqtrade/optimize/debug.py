@@ -369,9 +369,9 @@ class BacktestDebug:
             self._cmp_indexes((col_name, col_name), results, saved_results)
         if os.getenv("FQT_SHOW_RES", ""):
             print(
-                results.iloc[:10],
+                results.sort_values(by=["pair", "open_date"]).iloc[:100],
                 "\n",
-                saved_results.sort_values(by=["pair", "open_date"]).iloc[:10],
+                saved_results.sort_values(by=["pair", "open_date"]).iloc[:100],
             )
         # return saved_results
         return results

@@ -3,7 +3,8 @@
 OPTS="$(realpath $(dirname $_))"
 . ${OPTS}/opts.sh
 
-file=${userdir}/backtest_results/${timeframe}.json
+results_path=${userdir}/backtest_results/
+file=${results_path}/${timeframe}.json
 [ "$(ls ${file%\.json}* 2>/dev/null | wc -l)" -gt 0 ] && rm -f ${file%\.json}*
 
 days=${days:-21}
@@ -20,7 +21,7 @@ export FREQTRADE_USERDIR=$userdir
 
 pairlists=$dir/pairlists_static.json
 
-exec $main_exec \
+$main_exec \
 	backtesting -c $hyperopt \
 	-c $strategy \
 	-c $live \
@@ -41,3 +42,6 @@ exec $main_exec \
 	--export-filename=$file \
 	-i $timeframe \
 	$debug
+
+results_file=$(jq -r .'latest_backtest' <${results_path}/.last_result.json)
+mv ${results_path}$results_file ${results_path}/${timeframe}.json
