@@ -91,6 +91,7 @@ class HyperoptMulti(HyperoptOut):
         w = self.trials_maxout * jobs
         t = len(self.trials)
         yield t
+        sri = self.space_reduction_interval
         # give a next trial count indefinitely
         for _ in iter(lambda: 0, 1):
             t += 1
@@ -99,6 +100,8 @@ class HyperoptMulti(HyperoptOut):
                     t, jobs, backend.trials, backend.epochs
                 ):
                     break
+            if sri and t % sri < 1:
+                self.apply_space_reduction(jobs, backend.trials, backend.epochs)
             if self.use_progressbar:
                 HyperoptOut._print_progress(t, jobs, self.trials_maxout)
             yield t
@@ -161,7 +164,9 @@ class HyperoptMulti(HyperoptOut):
         # split workers to diversify acquisition
         self.n_explorers = self.n_jobs // 2
         self.n_exploiters = self.n_jobs // 2 + self.n_jobs % 2
-        self.max_convergence_ratio = self.config.get("hyperopt_max_convergence_ratio", 0.05)
+        self.max_convergence_ratio = self.config.get(
+            "hyperopt_max_convergence_ratio", 0.05
+        )
 
     @staticmethod
     def setup_backend():
@@ -228,9 +233,14 @@ class HyperoptMulti(HyperoptOut):
         scheduling the specified number of trials,
         passing the needed objects handled by the manager """
         parallel(
-            delayed(
-                self.parallel_opt_objective_sig_handler
-            )(t, jobs, backend.optimizers, backend.epochs, backend.trials, self.cls_file)
+            delayed(self.parallel_opt_objective_sig_handler)(
+                t,
+                jobs,
+                backend.optimizers,
+                backend.epochs,
+                backend.trials,
+                self.cls_file,
+            )
             for t in self.epochs_iterator(jobs)
         )
 
@@ -246,20 +256,28 @@ class HyperoptMulti(HyperoptOut):
 
     @staticmethod
     def opt_state(
-        optimizers: Optional[Queue] = None, s_opt: Optimizer = None
+        optimizers: Optional[Queue] = None,
+        epochs: Epochs = None,
+        s_opt: Optimizer = None,
     ) -> Optimizer:
         """ Return an optimizer in multi opt mode """
         # get an optimizer instance
         if s_opt:
             backend.opt = s_opt
             return s_opt
-        if hasattr(backend, "opt") and backend.opt:
+        # check if a space reduction has been performed
+        # and delete current parameters if so
+        opt_available = hasattr(backend, "opt") and backend.opt
+        space_reduction = (
+            epochs and epochs.space_reduction > 0 and not backend.just_reduced
+        )
+        if opt_available and not space_reduction:
             opt = backend.opt
             # if the Xi_h dict got gced re-fetch all the points
             if not backend.Xi_h and backend.trials_index:
                 backend.trials_index = 0
         else:
-            # at worker startup fetch an optimizer from the queue
+            # at worker startup or at space reduction fetch an optimizer from the queue
             if optimizers is not None:
                 if optimizers.qsize() > 0:
                     opt = optimizers.get(timeout=1)
@@ -276,6 +294,13 @@ class HyperoptMulti(HyperoptOut):
                     "Global state was reclaimed and no optimizer instance was "
                     "available for recovery"
                 )
+        # if space reduction was performed decrease jobs counter
+        if space_reduction:
+            logger.info("worker space_reduction was performed..")
+            epochs.space_reduction -= 1
+            backend.just_reduced = True
+        elif backend.just_reduced:
+            backend.just_reduced = False
         return opt
 
     @staticmethod
@@ -332,7 +357,9 @@ class HyperoptMulti(HyperoptOut):
                 yi = params_df["loss"].values.tolist()
             elif not opt.Xi:
                 # while in multi opt, still have to add startup points
-                prev_opt_params = params_df.loc[params_df["random_state"] == opt.rs]
+                prev_opt_params = params_df.loc[
+                    params_df["random_state"].values == opt.rs
+                ]
                 Xi = prev_opt_params.loc[:, self.Xi_cols].values.tolist()
                 yi = prev_opt_params["loss"].values.tolist()
             else:
@@ -350,7 +377,12 @@ class HyperoptMulti(HyperoptOut):
                 dict(zip(params_df["Xi_h"].values, params_df["loss"].values))
             )
         if backend.Xi:  # or just tell prev points
-            opt.tell(backend.Xi, backend.yi)
+            try:
+                opt.tell(backend.Xi, backend.yi)
+            # this can happen if space reduction has been performed and the
+            # points of the previous tests are outside the new search space
+            except ValueError as e:
+                logger.debug(e)
         else:
             # get a new point by copy if didn't tell new ones
             opt = HyperoptMulti.opt_rand(opt)
@@ -429,10 +461,12 @@ class HyperoptMulti(HyperoptOut):
         Check if we should save trials to disk, based on time, and number of local trials
         """
         if backend.trials_list:
+            trials_to_save = len(backend.trials_list)
             if (
                 now() - backend.timer >= self.trials_timeout
-                or len(backend.trials_list) >= self.trials_maxout
+                or trials_to_save >= self.trials_maxout
                 or trials_state.exit
+                or (backend.just_reduced and trials_to_save)
             ):
                 backend.just_saved = self.log_trials(trials_state, epochs)
                 if backend.just_saved:
@@ -474,7 +508,7 @@ class HyperoptMulti(HyperoptOut):
         optimizers: Queue,
         epochs: Epochs,
         trials_state: TrialsState,
-        cls_file: Path
+        cls_file: Path,
     ):
         """
         An objective run in multi opt mode;
@@ -483,11 +517,11 @@ class HyperoptMulti(HyperoptOut):
         """
         if not backend.cls:
             backend.cls = load(cls_file)
-        cls = backend.cls
+        cls: HyperoptMulti = backend.cls
 
         if not backend.timer:
             backend.timer = now()
-        opt = HyperoptMulti.opt_state(optimizers)
+        opt = HyperoptMulti.opt_state(optimizers, epochs=epochs)
         # enable gc after referencing optimizer
         gc.enable()
 
@@ -510,9 +544,12 @@ class HyperoptMulti(HyperoptOut):
             opt.void = -1
             cls.opt_state(s_opt=opt)
             # Terminate after enough workers didn't receive a point to test
-            trials_state.empty_strikes += 1
+            # only when not in the process of a space reduction
+            if epochs.space_reduction < 1:
+                trials_state.empty_strikes += 1
             if trials_state.empty_strikes >= cls.trials_max_empty:
                 trials_state.exit = True
+                # NOTE: this warning is not formatted..
                 logger.warn("Reached empty strikes.")
             return
         # run the backtest for each point to do (untested_Xi)
@@ -522,9 +559,7 @@ class HyperoptMulti(HyperoptOut):
             trials, opt, trials_state, is_shared
         )
 
-        cls.opt_log_trials(
-            opt, void_filtered, t, jobs, is_shared, trials_state, epochs
-        )
+        cls.opt_log_trials(opt, void_filtered, t, jobs, is_shared, trials_state, epochs)
         # disable gc at the end to prevent disposal of global vars
 
         gc.disable()

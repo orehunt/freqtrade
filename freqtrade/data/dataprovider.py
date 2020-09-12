@@ -4,6 +4,7 @@ Responsible to provide data to the bot
 including ticker and orderbook data, live and historical candle (OHLCV) data
 Common Interface for bot and strategy to access data.
 """
+from freqtrade.data.history.idatahandler import get_datahandler
 import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -27,6 +28,7 @@ class DataProvider:
         self._exchange = exchange
         self._pairlists = pairlists
         self.__cached_pairs: Dict[PairWithTimeframe, Tuple[DataFrame, datetime]] = {}
+        self._data_handler = get_datahandler(self._config['datadir'], self._config['dataformat_ohlcv'])
 
     def _set_cached_df(self, pair: str, timeframe: str, dataframe: DataFrame) -> None:
         """
@@ -87,7 +89,7 @@ class DataProvider:
         """
         return load_pair_history(pair=pair,
                                  timeframe=timeframe or self._config['timeframe'],
-                                 datadir=self._config['datadir']
+                                 datadir=self._config['datadir'], data_handler=self._data_handler
                                  )
 
     def get_pair_dataframe(self, pair: str, timeframe: str = None) -> DataFrame:

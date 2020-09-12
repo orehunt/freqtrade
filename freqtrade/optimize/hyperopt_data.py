@@ -5,7 +5,7 @@ import json
 import random
 from numpy import iinfo, int32
 from pathlib import Path
-from typing import Dict, List, Any, Callable, Tuple
+from typing import Dict, List, Any, Callable, Tuple, Union
 from abc import abstractmethod
 from time import sleep
 from os import makedirs
@@ -36,6 +36,7 @@ from freqtrade.optimize.hyperopt_constants import VOID_LOSS
 with warnings.catch_warnings():
     warnings.filterwarnings("ignore", category=FutureWarning)
     from skopt import Optimizer
+    from skopt.space import Space, Categorical, Dimension
 # Additional regressors already pluggable into the optimizer
 # from sklearn.linear_model import ARDRegression, BayesianRidge
 # possibly interesting regressors that need predict method override
@@ -68,6 +69,8 @@ class HyperoptData:
     epochs_limit: Callable
     total_epochs: int
     trials: DataFrame
+    space_reduction_interval: int
+    space_reduction_config = None
 
     # identifier for HyperOpt class, set of parameters, loss function
     trials_instance: str
@@ -141,17 +144,22 @@ class HyperoptData:
     def cast_trials_types(trials: DataFrame) -> DataFrame:
         """ Force types for ambiguous metrics """
         sep = "."
-        trials = trials.astype(dtype={
-            "total_profit": float64,
-            "loss": float64,
-            f"results_metrics{sep}total_profit": float64,
-            f"results_metrics{sep}avg_profit": float64,
-            f"results_metrics{sep}duration": float64
-        }, copy=False).fillna(0)
+        trials = trials.astype(
+            dtype={
+                "total_profit": float64,
+                "loss": float64,
+                f"results_metrics{sep}total_profit": float64,
+                f"results_metrics{sep}avg_profit": float64,
+                f"results_metrics{sep}duration": float64,
+            },
+            copy=False,
+        ).fillna(0)
         return trials
 
     @staticmethod
-    def alias_cols(trials: DataFrame, prefix: str, sep=".") -> Tuple[DataFrame, List[str]]:
+    def alias_cols(
+        trials: DataFrame, prefix: str, sep="."
+    ) -> Tuple[DataFrame, List[str]]:
         cols_names = trials.filter(regex=f"^{prefix}{sep}").columns  # with dot
         stripped_names = []
         for name in cols_names:
@@ -189,7 +197,7 @@ class HyperoptData:
 
         while not saved:
             try:
-                logger.debug(f"\nSaving {num_trials} {plural(num_trials, 'epoch')}.")
+                logger.debug(f"Saving {num_trials} {plural(num_trials, 'epoch')}.")
                 # cast types
                 trials = HyperoptData.cast_trials_types(trials)
                 # print(trials.loc[trials.isna().any(axis=1)])
@@ -220,10 +228,12 @@ class HyperoptData:
                 if locked:
                     trials_state.lock.release()
                 # If a lock on the hdf file can't be acquired
-                if type(e) == AttributeError:
+                if isinstance(e, AttributeError):
                     # reset table as it has been corrupted
                     append = False
-                logger.warn(f"Couldn't access the trials storage, retrying in {interval}..")
+                logger.warn(
+                    f"Couldn't access the trials storage, retrying in {interval}.."
+                )
                 sleep(interval)
                 interval += 0.5
             finally:
@@ -242,6 +252,7 @@ class HyperoptData:
         trials_state: TrialsState = backend.trials,
         where="",
         start=None,
+        use_backup=True,
     ) -> List:
         """
         Read hyperopt trials file
@@ -250,8 +261,18 @@ class HyperoptData:
         if hasattr(backend.trials, "exit") and not backend.trials.exit:
             logger.info("Reading Trials from '%s'", trials_file)
         trials = DataFrame()
+        locked = False
         try:
-            trials = read_hdf(trials_file, key=trials_instance, where=where, start=start)
+            locked = trials_state.lock.acquire()
+            while not locked:
+                logger.debug("Acquiring trials state lock for reading trials")
+                locked = trials_state.lock.acquire()
+            trials = read_hdf(
+                trials_file, key=trials_instance, where=where, start=start
+            )
+            if locked:
+                trials_state.lock.release()
+                locked = False
             # make a copy of the trials in case this optimization run corrupts it
             # (wrongful termination)
             if backup and len(trials) > 0:
@@ -262,9 +283,13 @@ class HyperoptData:
                     trials_state=trials_state,
                     backup=True,
                 )
-            elif len(trials) < 1:
-                logger.warn(f"Instance table {trials_instance} appears empty, using backup...")
-                trials = read_hdf(trials_file, key=f"{trials_instance}_bak", where=where)
+            elif len(trials) < 1 and use_backup:
+                logger.warn(
+                    f"Instance table {trials_instance} appears empty, using backup..."
+                )
+                trials = read_hdf(
+                    trials_file, key=f"{trials_instance}_bak", where=where
+                )
         except (
             KeyError,
             AttributeError,
@@ -276,14 +301,23 @@ class HyperoptData:
                         f"Instance table {trials_instance} either "
                         "empty or corrupted, trying backup..."
                     )
-                    trials = read_hdf(trials_file, key=f"{trials_instance}_bak", where=where)
+                    trials = read_hdf(
+                        trials_file, key=f"{trials_instance}_bak", where=where
+                    )
                 except KeyError:
                     logger.warn(f"Backup not found...")
+        finally:
+            if locked:
+                trials_state.lock.release()
         return trials
 
     @staticmethod
     def trials_to_csv_file(
-        config: dict, trials: DataFrame, total_epochs: int, highlight_best: bool, csv_file: str
+        config: dict,
+        trials: DataFrame,
+        total_epochs: int,
+        highlight_best: bool,
+        csv_file: str,
     ) -> None:
         """
         Log result to csv-file
@@ -372,7 +406,9 @@ class HyperoptData:
             # startswith does not accept regexp
             match = f"{prefix}{sep}"
             cols_with_prefix = trials.filter(regex=match)  # with dot
-            cols_with_prefix.columns = cols_with_prefix.columns.str.replace(match, "", 1)
+            cols_with_prefix.columns = cols_with_prefix.columns.str.replace(
+                match, "", 1
+            )
             trials = trials.loc[:, ~trials.columns.str.startswith(match)]
             trials[prefix] = cols_with_prefix.to_dict("records")
 
@@ -410,7 +446,9 @@ class HyperoptData:
             "max_avg_profit": config.get("hyperopt_list_max_avg_profit", None),
             "min_total_profit": config.get("hyperopt_list_min_total_profit", None),
             "max_total_profit": config.get("hyperopt_list_max_total_profit", None),
-            "step_values": config.get("hyperopt_list_step_values", HYPEROPT_LIST_STEP_VALUES),
+            "step_values": config.get(
+                "hyperopt_list_step_values", HYPEROPT_LIST_STEP_VALUES
+            ),
             "step_keys": config.get("hyperopt_list_step_metric", []),
             "sort_keys": config.get("hyperopt_list_sort_metric", ["loss"]),
         }
@@ -574,21 +612,32 @@ class HyperoptData:
         """
         metrics = HyperoptData.metrics
         if filters["step_keys"]:
-            step_keys = metrics if filters["step_keys"] == ["all"] else filters["step_keys"]
-            sort_keys = metrics if filters["sort_keys"] == ["all"] else filters["sort_keys"]
+            step_keys = (
+                metrics if filters["step_keys"] == ["all"] else filters["step_keys"]
+            )
+            sort_keys = (
+                metrics if filters["sort_keys"] == ["all"] else filters["sort_keys"]
+            )
             step_values = filters["step_values"]
             flt_trials = []
             for step_k in step_keys:
                 for sort_k in sort_keys:
                     flt_trials.extend(
-                        HyperoptData.step_over_trials(step_k, step_values, sort_k, trials)
+                        HyperoptData.step_over_trials(
+                            step_k, step_values, sort_k, trials
+                        )
                     )
         else:
             flt_trials = [trials]
-        return concat(flt_trials).drop_duplicates(subset="current_epoch")
+        if flt_trials:
+            return concat(flt_trials).drop_duplicates(subset="current_epoch")
+        else:
+            return []
 
     @staticmethod
-    def find_steps(step_k: str, step_values: Dict, trials: DataFrame) -> Tuple[List, Any]:
+    def find_steps(
+        step_k: str, step_values: Dict, trials: DataFrame
+    ) -> Tuple[List, Any]:
         """
         compute the range of steps to perform over the trials metrics
         """
@@ -625,7 +674,9 @@ class HyperoptData:
         return steps, step_v
 
     @staticmethod
-    def step_over_trials(step_k: str, step_values: Dict, sort_k: str, trials: DataFrame) -> List:
+    def step_over_trials(
+        step_k: str, step_values: Dict, sort_k: str, trials: DataFrame
+    ) -> List:
         """ Apply the sampling of a metric_key:sort_key combination over the trials """
         # for duration and loss we sort by the minimum
         ascending = sort_k in ("duration", "loss")
@@ -637,7 +688,10 @@ class HyperoptData:
             try:
                 t = (
                     # the trials between the current step
-                    trials.loc[(trials[step_k].values >= s) & (trials[step_k].values <= s + step_v)]
+                    trials.loc[
+                        (trials[step_k].values >= s)
+                        & (trials[step_k].values <= s + step_v)
+                    ]
                     # sorted according to the specified key
                     .sort_values(sort_k, ascending=ascending).iloc[
                         [-1]
@@ -659,23 +713,33 @@ class HyperoptData:
         trials_state: TrialsState = backend.trials,
         where="",
         backup=False,
+        use_backup=True,
         clear=False,
+        clear_where=None,
     ) -> DataFrame:
         """
         Load data for epochs from the file if we have one
         """
         trials: DataFrame = DataFrame()
+        has_lock = hasattr(trials_state, "lock")
+        # locked = False
         if trials_file.is_file() and trials_file.stat().st_size > 0:
             trials = HyperoptData._read_trials(
-                trials_file, trials_instance, backup, trials_state, where
+                trials_file,
+                trials_instance,
+                backup,
+                trials_state,
+                where,
+                use_backup=use_backup,
             )
             # clear the table by replacing it with an empty df
             if clear:
-                with HDFStore(trials_file) as store:
-                    try:
-                        store.remove("/{}".format(trials_instance))
-                    except KeyError:
-                        pass
+                HyperoptData.clear_instance(
+                    trials_file,
+                    trials_instance,
+                    clear_where,
+                    trials_state if has_lock else None,
+                )
         return trials
 
     @staticmethod
@@ -687,7 +751,9 @@ class HyperoptData:
         with open(trials_instances_file, "r") as tif:
             instances = json.load(tif)
         if len(instances) < 1:
-            raise OperationalException(f"No instances were found at {trials_instances_file}")
+            raise OperationalException(
+                f"No instances were found at {trials_instances_file}"
+            )
         else:
             if cv:
                 return "{}_cv".format(instances[-1])
@@ -695,14 +761,33 @@ class HyperoptData:
                 return instances[-1]
 
     @staticmethod
-    def clear_instance(trials_file: Path, instance_name: str) -> bool:
+    def clear_instance(
+        trials_file: Path,
+        instance_name: str,
+        where=None,
+        trials_state=None,
+        backup=False,
+    ) -> bool:
         success = False
-        with HDFStore(trials_file) as store:
-            try:
-                store.remove("/{}".format(instance_name))
+        locked = trials_state.lock.acquire() if trials_state else False
+        interval = 0.01
+        while not ((trials_state and locked) or not trials_state):
+            logger.debug("Acquiring trials state lock for clearing trials instance")
+            sleep(interval)
+            locked = trials_state.lock.acquire()
+            interval += 0.5
+        try:
+            with HDFStore(trials_file) as store:
+                store.remove("/{}".format(instance_name), where=where)
+                if backup:
+                    store.remove("/{}_bak".format(instance_name), where=where)
                 success = True
-            except KeyError:
-                pass
+        except (KeyError, IOError, OSError, AttributeError) as e:
+            logger.debug(f"Failed clearing instance: {e}")
+            pass
+        if locked:
+            trials_state.lock.release()
+            locked = False
         return success
 
     @staticmethod
@@ -710,7 +795,9 @@ class HyperoptData:
         hyperopt = config["hyperopt"]
         strategy = config["strategy"]
         if not hyperopt or not strategy:
-            raise DependencyException("Strategy or Hyperopt name not specified, both are required.")
+            raise DependencyException(
+                "Strategy or Hyperopt name not specified, both are required."
+            )
         trials_file = trials_dir / f"{hyperopt}_{strategy}.hdf"
         return trials_file
 
@@ -765,6 +852,128 @@ class HyperoptData:
             self.opt.void_loss = VOID_LOSS
             self.opt.void = False
             self.opt.rs = self.random_state
+
+    def apply_space_reduction(
+        self, jobs: int, trials_state: TrialsState, epochs: Epochs
+    ):
+        # fetch all trials
+        trials = self.load_trials(
+            self.trials_file, self.trials_instance, trials_state, use_backup=False
+        )
+        if not len(trials):
+            return False
+        min_trials = self.opt_n_initial_points
+        is_shared_or_single = self.shared or not self.multi
+        if is_shared_or_single:
+            # update optimizers with new dimensions
+            # in shared/single mode only need to compute dimensions once
+            trials, trials_params = self.filter_trials_by_opt(None, trials, min_trials)
+            if trials is None:
+                return False
+            new_dims = self.reduce_dimensions(
+                None, self.dimensions, trials_params, min_trials=min_trials,
+            )
+        else:
+            new_dims = []
+        reduced_optimizers = []
+        reduced_losses = []
+        is_multi = self.mode == "multi"
+        for _ in range(jobs):
+            opt = backend.optimizers.get()
+            if is_multi:
+                opt_trials, trials_params = self.filter_trials_by_opt(
+                    opt.rs, trials, min_trials
+                )
+                if opt_trials is None:
+                    backend.optimizers.put(opt)
+                    continue
+                reduced_losses.extend(opt_trials["loss"].values.tolist())
+            opt_dims = (
+                # in shared or single mode
+                new_dims
+                # in multi mode when there are filtered trials
+                or self.reduce_dimensions(
+                    opt.rs, self.dimensions, trials_params, min_trials=min_trials,
+                )
+            )
+            # don't update space if this optimizer didn't have filtered trials
+            if opt_dims:
+                opt.space = Space(opt_dims)
+                del opt.Xi[:], opt.yi[:]
+                reduced_optimizers.append(opt.rs)
+            backend.optimizers.put(opt)
+
+        # clear storage
+        if is_shared_or_single:
+            loss_vals = trials["loss"].unique().tolist()
+        elif is_multi:
+            loss_vals = reduced_losses
+        if len(loss_vals) and len(reduced_optimizers):
+            self.clear_instance(
+                self.trials_file,
+                self.trials_instance,
+                where=f"(loss != {loss_vals}) and random_state == {reduced_optimizers}",
+                trials_state=trials_state,
+                backup=True,
+            )
+        # alert workers
+        epochs.space_reduction = jobs
+        return True
+
+    def filter_trials_by_opt(self, rs: Union[int, None], trials, min_trials) -> Tuple:
+        # filter all the trials at once
+        trials = HyperoptData.filter_trials(trials, self.space_reduction_config)
+        if rs is not None:
+            trials = trials.loc[trials["random_state"].values == rs]
+        if len(trials) < min_trials:
+            logger.debug(
+                "Can't reduce space since filtered trials are less "
+                "than starting random points"
+            )
+            return (None, None)
+        trials_params = trials[[*self.Xi_cols, "random_state"]]
+        sep = "."
+        trials_params.columns = trials_params.columns.str.replace(
+            f"params_dict{sep}", ""
+        )
+        logger.debug(f"Applying search space reduction over {len(trials)} trials..")
+        return trials, trials_params
+
+    @staticmethod
+    def reduce_dimensions(
+        rs: Union[int, None], dimensions: List, trials: DataFrame, min_trials: int
+    ) -> List:
+        # iterate over each dimension to find new min max
+        if rs is None:
+            rs_trials = trials
+        else:
+            rs_trials = trials.loc[trials["random_state"].values == rs]
+            if len(rs_trials) < 1:
+                logger.debug(
+                    f"Optimizer {rs} has not enough filtered trials "
+                    "to apply reduction"
+                )
+                return []
+
+        for n, dim in enumerate(dimensions):
+            # if it's integer or real, set low and high bounds
+            if dim.kind in (0, 1):
+                dm = dimensions[n]
+                dm.low = rs_trials[dim.name].values.min()
+                dm.high = rs_trials[dim.name].values.max()
+                # when bounds change transformer needs to be updated (skopt)
+                dm.set_transformer(dm.transform_)
+            # else set categories
+            else:
+                new_cats = rs_trials[dim.name].unique().tolist()
+                dm = dimensions[n]
+                # assert dm.name == dim.name
+                dimensions[n] = Categorical(
+                    new_cats, prior=dm.prior, transform=dm.transform_, name=dim.name
+                )
+                # reset the kind
+                dimensions[n].kind = 2
+        return dimensions
 
     @staticmethod
     def opt_rand(opt: Optimizer, rand: int = None, seed: bool = True) -> Optimizer:

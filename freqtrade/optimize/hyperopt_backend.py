@@ -23,7 +23,11 @@ exploit: int = 0
 trials_list: List = []  # (worker local)
 # each worker index position of known past trials (worker local)
 trials_index = 0
+# recently saved trials
 just_saved = 0
+# flag to remember if a worker has recently reset its optimizer parameters pool
+# is resetted once space_reduction is again 0 (from n_jobs)
+just_reduced = False
 
 # timer, keep track how hyperopt runtime, use it to decide when to save on storage (worker local)
 timer: float = 0
@@ -62,6 +66,7 @@ class Epochs(Namespace):
     current_best_epoch: int
     max_epoch: int
     avg_last_occurrence: int
+    space_reduction: int
 
 
 epochs: Epochs

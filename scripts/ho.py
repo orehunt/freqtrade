@@ -195,6 +195,9 @@ class Main:
 
         self.setup_config()
         setup_logging(self.config)
+        logger.warning("Overriding matplotlib and ccxt.base.exchange logging levels")
+        logging.getLogger('matplotlib').setLevel(logging.WARNING)
+        logging.getLogger('ccxt.base.exchange').setLevel(logging.WARNING)
 
         self.ho = Hyperopt(self.config)
 
@@ -966,10 +969,12 @@ class Main:
 
     def update_amounts(self, ua=args.ua, amounts_path=amounts_tuned_config):
         ua = ua.split(":")
+        # cv:123
         if ua[0] == "cv":
             ua = int(ua[1])
             cv = True
         else:
+            # 123
             ua = int(ua[0]) if ua[0] else 0
             cv = False
         if ua > 0:
@@ -980,7 +985,7 @@ class Main:
         else:
             _, best, _ = self.get_trials(wait=False, cv=cv, ignore_empty=True)
 
-        if not best:
+        if best is None:
             logger.info("Skipping update amounts as no best trial was found")
             return
         best = self.ho.trials_to_dict(best)[0]

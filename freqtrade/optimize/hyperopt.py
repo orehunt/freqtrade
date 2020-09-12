@@ -25,7 +25,7 @@ from joblib import (
 )
 from multiprocessing.managers import Namespace
 from pandas import DataFrame, HDFStore, json_normalize, read_hdf, Timedelta
-from numpy import isfinite
+from numpy import isfinite, iinfo, int32
 
 from freqtrade.constants import DATETIME_PRINT_FORMAT
 from freqtrade.data.converter import trim_dataframe
@@ -58,7 +58,7 @@ from freqtrade.strategy.interface import IStrategy
 with warnings.catch_warnings():
     warnings.filterwarnings("ignore", category=FutureWarning)
     from skopt import Optimizer
-    from skopt.space import Dimension
+    from skopt.space import Dimension, Real, Integer, Categorical
 # Additional regressors already pluggable into the optimizer
 # from sklearn.linear_model import ARDRegression, BayesianRidge
 # possibly interesting regressors that need predict method override
@@ -226,6 +226,22 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         if space == "trailing" or (space is None and self.has_space("trailing")):
             logger.debug("Hyperopt has 'trailing' space")
             spaces += self.custom_hyperopt.trailing_space()
+        # add enumeration to spaces:
+        # 0: Integer
+        # 1: Real
+        # 2: Category
+        for n, dim in enumerate(spaces):
+            if isinstance(dim, Integer):
+                spaces[n].kind = 0
+            elif isinstance(dim, Real):
+                spaces[n].kind = 1
+            elif isinstance(dim, Categorical):
+                spaces[n].kind = 2
+            else:
+                raise OperationalException(
+                    "Space dimension type not recognized during creation."
+                    "of hyperopt space."
+                )
 
         return spaces
 
@@ -378,7 +394,8 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         # to avoid oversubscription
         base_estimator = self.opt_base_estimator()
         acq_optimizer = (
-            ("lbfgs" if self.all_real else "sampling")
+            # ("lbfgs" if self.all_real else "sampling")
+            "auto"
             if base_estimator == "GP"
             else self.opt_acq_optimizer
         )
@@ -446,10 +463,11 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         locked = False
         t = 0
         read_index = 0
+        sri = self.space_reduction_interval
         for _ in iter(lambda: 0, 1):
             fit = len(to_ask) < 1  # # only fit when out of points
             # tell every once in a while
-            if not t % self.trials_maxout:
+            if t > self.n_initial_points and not t % self.trials_maxout:
                 try:
                     # only lock if its fitting time
                     locked = backend.trials.lock.acquire(fit)
@@ -468,6 +486,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                                 params_df["loss"].values.tolist(),
                                 fit=fit,
                             )
+                            logger.debug(f"Optimizer now has {len(opt.Xi)} points")
                 except (KeyError, FileNotFoundError, IOError, OSError):
                     if locked:
                         backend.trials.lock.release()
@@ -488,6 +507,8 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                 opt.update_next()
                 a = point()
             evald.add(a)
+            if sri and t % sri < 1:
+                self.apply_space_reduction(jobs, backend.trials, backend.epochs)
             if self.use_progressbar:
                 HyperoptOut._print_progress(t, jobs, self.trials_maxout)
             t += 1
@@ -705,6 +726,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                 "Couldn't acquire lock at startup during epochs setup."
             )
         ep = backend.epochs
+        ep.space_reduction = 0
         ep.current_best_epoch = 0
         ep.current_best_loss = float(VOID_LOSS)
         # shared collections have to use the manager
@@ -749,6 +771,31 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             ep.max_epoch = self.total_epochs
         ep.lock.release()
         return resumed
+
+    def setup_space_reduction(self):
+        """ Choose which configuration to use when applying space reduction """
+        config = self.config
+        if config.get("override_space_reduction_config", False):
+            self.space_reduction_interval = config.get(
+                "hyperopt_space_reduction_interval", iinfo(int32).max
+            )
+            if self.space_reduction_interval == iinfo(int32).max:
+                return
+        else:
+            if self.shared:
+                from freqtrade.optimize.hyperopt_constants import SHARED_SPACE_CONFIG
+
+                config = SHARED_SPACE_CONFIG
+            elif self.multi:
+                from freqtrade.optimize.hyperopt_constants import MULTI_SPACE_CONFIG
+
+                config = MULTI_SPACE_CONFIG
+            else:
+                from freqtrade.optimize.hyperopt_constants import SINGLE_SPACE_CONFIG
+
+                config = SINGLE_SPACE_CONFIG
+        self.space_reduction_interval = config["hyperopt_space_reduction_interval"]
+        self.space_reduction_config = config
 
     def _set_random_state(self, random_state: Optional[int]) -> int:
         if self.cv:
@@ -1035,6 +1082,9 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
 
         # Count the epochs
         self.setup_epochs()
+
+        # Choose space reduction configuration
+        self.setup_space_reduction()
 
         if self.print_colorized:
             colorama_init(autoreset=True)
