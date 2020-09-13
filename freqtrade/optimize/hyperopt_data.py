@@ -243,7 +243,7 @@ class HyperoptData:
                     trials_state.lock.release()
 
     @abstractmethod
-    def log_trials(self, trials_state: TrialsState, epochs: Epochs):
+    def log_trials(self, trials_state: TrialsState, epochs: Epochs, rs: Union[None, int]):
         """ Calculate epochs and save results to storage """
 
     @staticmethod

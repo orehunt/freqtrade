@@ -1,4 +1,4 @@
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Union
 from queue import Queue
 from multiprocessing.managers import SyncManager, Namespace
 from threading import Lock
@@ -28,6 +28,8 @@ just_saved = 0
 # flag to remember if a worker has recently reset its optimizer parameters pool
 # is resetted once space_reduction is again 0 (from n_jobs)
 just_reduced = False
+# in multi mode, each optimizer *also* stores its list of last_best periods
+epochs_since_last_best = []
 
 # timer, keep track how hyperopt runtime, use it to decide when to save on storage (worker local)
 timer: float = 0
@@ -62,9 +64,10 @@ class Epochs(Namespace):
     convergence: int
     epochs_since_last_best: List
     explo: int
-    current_best_loss: float
-    current_best_loss_dict: Dict
-    current_best_epoch: int
+    current_best_loss: Dict[Union[None, int], float]
+    last_best_loss: float
+    current_best_epoch: Dict[Union[None, int], int]
+    last_best_epoch: int
     max_epoch: int
     avg_last_occurrence: int
     space_reduction: int

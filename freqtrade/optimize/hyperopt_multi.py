@@ -3,7 +3,7 @@ import logging
 import gc
 from psutil import virtual_memory
 from pathlib import Path
-from typing import Any, Dict, List, Tuple, Optional
+from typing import Any, Dict, List, Tuple, Optional, Union
 from abc import abstractmethod
 from time import time as now
 from functools import partial
@@ -181,8 +181,9 @@ class HyperoptMulti(HyperoptOut):
         backend.epochs.explo = 0
         # tracks number of duplicate points received by asking
         backend.epochs.convergence = 0
-        # in multi mode each optimizer has its own best
-        backend.epochs.current_best_loss_dict = backend.manager.dict()
+        # in multi mode each optimizer has its own best loss/epoch
+        backend.epochs.current_best_loss = backend.manager.dict()
+        backend.epochs.current_best_epoch = backend.manager.dict()
         backend.trials = backend.manager.Namespace()
         # prevent reading to the store while saving
         backend.trials.lock = backend.manager.Lock()
@@ -439,7 +440,7 @@ class HyperoptMulti(HyperoptOut):
             backend.yi.append(v["loss"])
             backend.Xi_h[v["Xi_h"]] = v["loss"]
 
-        self.maybe_log_trials(trials_state, epochs)
+        self.maybe_log_trials(trials_state, epochs, rs=None if self.shared else opt.rs)
         # maybe_log_trials updated the just_saved attr
         if backend.just_saved:
             for h in backend.tested_h:
@@ -458,7 +459,9 @@ class HyperoptMulti(HyperoptOut):
                 opt.void_loss = nanmax(opt.yi)
         self.opt_state(s_opt=opt)
 
-    def maybe_log_trials(self, trials_state: TrialsState, epochs: Epochs):
+    def maybe_log_trials(
+        self, trials_state: TrialsState, epochs: Epochs, rs: Union[None, int]
+    ):
         """
         Check if we should save trials to disk, based on time, and number of local trials
         """
@@ -470,7 +473,7 @@ class HyperoptMulti(HyperoptOut):
                 or trials_state.exit
                 or (backend.just_reduced and trials_to_save)
             ):
-                backend.just_saved = self.log_trials(trials_state, epochs)
+                backend.just_saved = self.log_trials(trials_state, epochs, rs=rs)
                 if backend.just_saved:
                     # reset timer
                     backend.timer = now()
@@ -630,7 +633,11 @@ class HyperoptMulti(HyperoptOut):
     @staticmethod
     def opt_acq_window(opt: Optimizer, is_shared: bool, jobs: int, epochs: Epochs):
         """ Determine the ranges of yi to compare for acquisition adjustments """
-        last_period = epochs.epochs_since_last_best[-1]
+        last_period = (
+            epochs.epochs_since_last_best[-1]
+            if is_shared
+            else backend.epochs_since_last_best[-1]
+        )
         n_tail = backend.just_saved * jobs
         if is_shared:
             loss = array(list(backend.Xi_h.values()))
@@ -664,7 +671,7 @@ class HyperoptMulti(HyperoptOut):
     ) -> Optimizer:
         """ Tune exploration/exploitaion balance of optimizers """
 
-        opt.n_initial_points_
+        rs = None if is_shared else opt.rs
         # can only tune if we know the loss scores, and past initial points
         # in multi mode only use optimizer initial points count
         if (is_shared and len(backend.Xi_h) >= opt.n_initial_points_) or (
@@ -704,10 +711,10 @@ class HyperoptMulti(HyperoptOut):
                 # LCB uses kappa instead of xi, and is based on variance
                 if opt.acq_func in ("LCB", "gp_hedge"):
                     kappa = nanvar(
-                        [epochs.current_best_loss, nanmin(loss_tail)]
+                        [epochs.current_best_loss[rs], nanmin(loss_tail)]
                     ) or nanvar(
                         # use mean when we just found a new best as var would be 0
-                        [epochs.current_best_loss, nanmean(loss_tail)]
+                        [epochs.current_best_loss[rs], nanmean(loss_tail)]
                     )
             else:  # or use average values from the last period
                 # increment for exploration if was previous exploiting
@@ -718,7 +725,7 @@ class HyperoptMulti(HyperoptOut):
                 # adjust to tail position as we are in general more exploitative
                 # at the beginning and more explorative towards the end
                 tail_position = (
-                    epochs.current_best_epoch + last_period
+                    epochs.current_best_epoch[rs] + last_period
                 ) / epochs.max_epoch
                 if opt.acq_func in ("PI", "EI", "gp_hedge"):
                     xi = nanstd(loss_last) * tail_position

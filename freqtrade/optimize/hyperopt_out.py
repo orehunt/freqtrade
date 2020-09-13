@@ -329,7 +329,7 @@ class HyperoptOut(HyperoptData):
         color = "green"
         opt_format = (
             (
-                "Avg: {Style.BRIGHT}{Fore.BLUE}{backend.epochs.current_best_epoch}"
+                "Avg: {Style.BRIGHT}{Fore.BLUE}{backend.epochs.last_best_epoch}"
                 "+{backend.epochs.avg_last_occurrence} "
                 "{Style.RESET_ALL}"
                 "Exp: {Style.BRIGHT}{Fore.CYAN}{backend.epochs.explo} "
@@ -347,8 +347,8 @@ class HyperoptOut(HyperoptData):
         # or causes a very rare exception with a resize lock held by the enlighten manager
         trials_format = (
             "Best: "
-            "{Style.BRIGHT}{backend.epochs.current_best_epoch}"
-            "[{backend.epochs.current_best_loss:.02}] "
+            "{Style.BRIGHT}{backend.epochs.last_best_epoch}"
+            "[{backend.epochs.last_best_loss:.02}] "
             "{Style.RESET_ALL}"
             f"{opt_format}"
             "Buf: {Style.BRIGHT}{Fore.YELLOW}{backend.trials.num_done} "

@@ -493,6 +493,8 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         read_index = 0
         sri = self.space_reduction_interval
         for _ in iter(lambda: 0, 1):
+            # update acquisition
+            opt = self.opt_adjust_acq(opt, jobs, backend.epochs, backend.trials, is_shared=True)
             fit = len(to_ask) < 1  # # only fit when out of points
             # tell every once in a while
             if t > self.n_initial_points and not t % self.trials_maxout:
@@ -596,7 +598,9 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
 
         cls.maybe_log_trials(trials_state, epochs)
 
-    def log_trials(self, trials_state: TrialsState, epochs: Epochs) -> int:
+    def log_trials(
+        self, trials_state: TrialsState, epochs: Epochs, rs: Union[None, int]
+    ) -> int:
         """
         Log results if it is better than any previous evaluation
         """
@@ -611,11 +615,12 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
 
         batch_start = trials_state.num_saved
         current = batch_start + 1
-        current_best = ep.current_best_epoch
+        current_best = ep.current_best_epoch[rs]
         has_roi_space = self.has_space("roi")
         i = 0
+        # current best loss
         for i, v in enumerate(backend.trials_list, 1):
-            is_best = self.is_best_loss(v, ep.current_best_loss)
+            is_best = self.is_best_loss(v, ep.current_best_loss[rs])
             current = batch_start + i
             v["is_best"] = is_best
             v["current_epoch"] = current
@@ -633,8 +638,8 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             logger.debug(f"Optimizer epoch evaluated: {v}")
             if is_best:
                 current_best = current
-                ep.current_best_loss = v["loss"]
-        self.update_max_epoch(current_best, current, ep)
+                ep.current_best_loss[rs] = v["loss"]
+        self.update_max_epoch(current_best, current, ep, rs=rs)
         # Save results and optimizers after every batch
         trials = json_normalize(backend.trials_list)
 
@@ -755,8 +760,16 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             )
         ep = backend.epochs
         ep.space_reduction = 0
-        ep.current_best_epoch = 0
-        ep.current_best_loss = float(VOID_LOSS)
+        ep.last_best_epoch = 0
+        ep.last_best_loss = float(VOID_LOSS)
+        is_multi = self.multi and not self.shared
+        if is_multi:
+            for rs in self.rngs:
+                ep.current_best_epoch[rs] = 0
+                ep.current_best_loss[rs] = float(VOID_LOSS)
+        else:
+            ep.current_best_epoch[None] = 0
+            ep.current_best_loss[None] = float(VOID_LOSS)
         # shared collections have to use the manager
         len_trials = len(self.trials)
         ep.epochs_since_last_best = backend.manager.list([0, 0])
@@ -771,10 +784,31 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             best_epochs = self.trials.loc[self.trials["is_best"], :]
             len_best = len(best_epochs)
             if len_best > 0:
-                # sorting from lowest to highest, the first value is the current best
-                best = self.trials.sort_values(by=["loss"]).iloc[0].to_dict()
-                ep.current_best_epoch = best["current_epoch"]
-                ep.current_best_loss = best["loss"]
+                if is_multi:
+                    for rs in self.rngs:
+                        # sorting from lowest to highest, the first value is the current best
+                        opt_best = self.trials[self.trials["random_state"].values == rs]
+                        if len(opt_best) > 0:
+                            best = opt_best.sort_values(by=["loss"]).iloc[0].to_dict()
+                            ep.current_best_epoch[rs] = best["current_epoch"]
+                            ep.current_best_loss[rs] = best["loss"]
+
+                    # group by random state, get the lowest loss for each state, then pick the one with
+                    # the highest current_epoch
+                    last_best_trial = (
+                        self.trials.groupby("random_state")
+                        .apply(lambda x: x.sort_values(by=["loss"]).iloc[0])
+                        .sort_values(by="current_epoch")
+                        .iloc[-1]
+                    ).to_dict()
+                    ep.last_best_epoch = last_best_trial["current_epoch"]
+                    ep.last_best_loss =  last_best_trial["loss"]
+                else:
+                    best = self.trials.sort_values(by=["loss"]).iloc[0].to_dict()
+                    ep.current_best_epoch[None] = best["current_epoch"]
+                    ep.current_best_loss[None] = best["loss"]
+                    ep.last_best_epoch = best["current_epoch"]
+                    ep.last_best_loss = best["loss"]
                 ep.avg_last_occurrence = max(self.n_jobs, len_trials // len_best)
                 ep.epochs_since_last_best = (
                     (
@@ -904,15 +938,23 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
 
         return n_initial_points, min_epochs, search_space_size
 
-    def update_max_epoch(self, current_best: int, current: int, ep: Epochs):
+    def update_max_epoch(
+        self, current_best: int, current: int, ep: Epochs, rs: Union[None, int]
+    ):
         """ calculate max epochs: store the number of non best epochs
             between each best, and get the mean of that value """
         # if there isn't a new best, update the last period
-        if ep.current_best_epoch == current_best:
-            ep.epochs_since_last_best[-1] = current - ep.current_best_epoch
+        if ep.current_best_epoch[rs] == current_best:
+            ep.epochs_since_last_best[-1] = current - ep.current_best_epoch[rs]
         else:
-            ep.current_best_epoch = current_best
-            ep.epochs_since_last_best.append(current - ep.current_best_epoch)
+            ep.current_best_epoch[rs] = current_best
+            # this is used by progress bar, since it's unfeasable to print the best
+            # epoch for each optimizer state
+            ep.last_best_epoch = current_best
+            last_best_period = current - ep.current_best_epoch[rs]
+            ep.epochs_since_last_best.append(last_best_period)
+            # NOTE: this is worker/optimizer specific and is used by acquisition
+            backend.epochs_since_last_best.append(last_best_period)
         # this tracks the tip of the average, which is used to compute batch_len
         ep.avg_last_occurrence = sum(ep.epochs_since_last_best) // (
             len(ep.epochs_since_last_best) or 1
@@ -925,7 +967,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         # has to be at least min_epochs and not bigger than the search space
         ep.max_epoch = int(
             min(
-                max(ep.current_best_epoch + avg_best_occurrence, self.min_epochs)
+                max(ep.current_best_epoch[rs] + avg_best_occurrence, self.min_epochs)
                 * max(1, self.effort),
                 self.search_space_size,
             )
@@ -1108,9 +1150,6 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         # Set number of initial points, and optimizer related stuff
         self._setup_points()
 
-        # Count the epochs
-        self._setup_epochs()
-
         # Choose space reduction configuration
         self._setup_space_reduction()
 
@@ -1122,6 +1161,9 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             self._setup_loss_funcs()
             # After setup, trials are only needed by CV so can delete
             self.trials.iloc[0:] = None
+
+        # Count the epochs
+        self._setup_epochs()
 
         if self.cv:
             jobs_scheduler = self.run_cv_backtest_parallel
