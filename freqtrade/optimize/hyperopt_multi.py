@@ -181,6 +181,8 @@ class HyperoptMulti(HyperoptOut):
         backend.epochs.explo = 0
         # tracks number of duplicate points received by asking
         backend.epochs.convergence = 0
+        # in multi mode each optimizer has its own best
+        backend.epochs.current_best_loss_dict = backend.manager.dict()
         backend.trials = backend.manager.Namespace()
         # prevent reading to the store while saving
         backend.trials.lock = backend.manager.Lock()
@@ -553,7 +555,10 @@ class HyperoptMulti(HyperoptOut):
                 logger.warn("Reached empty strikes.")
             return
         # run the backtest for each point to do (untested_Xi)
-        trials = [cls.backtest_params(X) for X in untested_Xi]
+        trials = [
+            cls.backtest_params(X, rs=opt.rs if not is_shared else None)
+            for X in untested_Xi
+        ]
         # filter losses
         void_filtered = HyperoptMulti.filter_void_losses(
             trials, opt, trials_state, is_shared

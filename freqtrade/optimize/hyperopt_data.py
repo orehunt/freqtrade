@@ -85,6 +85,8 @@ class HyperoptData:
     trials_dir: Path
 
     opt: Optimizer
+    # list of all the optimizers random states
+    rngs: List
     # path where the hyperopt state loaded by workers is dumped
     cls_file: Path
     # path used by CV to store parameters values loaded by workers
@@ -801,7 +803,7 @@ class HyperoptData:
         trials_file = trials_dir / f"{hyperopt}_{strategy}.hdf"
         return trials_file
 
-    def setup_optimizers(self):
+    def _setup_optimizers(self):
         """
         Setup the optimizers objects, applies random state from saved trials if present,
         adds a few attributes to determine logic of execution during trials evaluation
@@ -847,11 +849,13 @@ class HyperoptData:
                 rngs.append(rs)
                 backend.optimizers.put(opt_copy)
             del opt_copy
+            self.rngs = rngs
         else:
             self.opt = self.get_optimizer()
             self.opt.void_loss = VOID_LOSS
             self.opt.void = False
             self.opt.rs = self.random_state
+            self.rngs = self.opt.rs
 
     def apply_space_reduction(
         self, jobs: int, trials_state: TrialsState, epochs: Epochs

@@ -8,9 +8,10 @@ import logging
 import json
 from collections import deque
 from math import factorial
-from typing import Any, Dict, List, Optional, Tuple, Set, Callable
+from typing import Any, Dict, List, Optional, Tuple, Set, Callable, Union
 from time import time as now
 from pathlib import Path
+from itertools import cycle
 
 from colorama import init as colorama_init
 from joblib import (
@@ -77,6 +78,10 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
     hyperopt.start()
     """
 
+    # NOTE: The hyperopt class is pickled, attributes can't have default values otherwise
+    # they would override the current state when pickled, only use default values for
+    # attributes not used by workers
+
     # True if the search space is made only of Real dimensions
     all_real = False
 
@@ -106,8 +111,6 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         self.backtesting = HyperoptBacktesting(self.config)
 
         self.custom_hyperopt = HyperOptResolver.load_hyperopt(self.config)
-        self.custom_hyperoptloss = HyperOptLossResolver.load_hyperoptloss(self.config)
-        self.calculate_loss = self.custom_hyperoptloss.hyperopt_loss_function
 
         # Populate functions here (hasattr is slow so should not be run during "regular" operations)
         if hasattr(self.custom_hyperopt, "populate_indicators"):
@@ -281,6 +284,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         raw_params: List[Any] = None,
         iteration=None,
         params_dict: Dict[str, Any] = None,
+        rs: Union[None, int] = None,
     ) -> Dict:
         if not params_dict:
             if raw_params:
@@ -315,7 +319,27 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             params_dict,
             params_details,
             processed,
+            rs,
         )
+
+    def _setup_loss_funcs(self):
+        """ Map a (cycled) list of loss functions to the optimizers random states """
+        if self.multi and not self.shared:
+            self.calculate_loss_dict = {}
+            loss_func_list = cycle(self.config.get("hyperopt_loss_multi", []))
+            logger.debug(f"Cycling over loss functions: {loss_func_list}")
+            config = self.config.copy()
+            # NOTE: the resolver walks over all the files in the dir on each call
+            for rs in self.rngs:
+                config["hyperopt_loss"] = next(loss_func_list)
+                self.calculate_loss_dict[rs] = HyperOptLossResolver.load_hyperoptloss(
+                    config
+                ).hyperopt_loss_function
+        else:
+            self.custom_hyperoptloss = HyperOptLossResolver.load_hyperoptloss(
+                self.config
+            )
+            self.calculate_loss = self.custom_hyperoptloss.hyperopt_loss_function
 
     def _get_result(
         self,
@@ -325,6 +349,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         params_dict,
         params_details,
         processed,
+        rs,
     ):
         results_metrics = self._calculate_results_metrics(backtesting_results)
         results_explanation = HyperoptOut._format_results_explanation_string(
@@ -340,7 +365,10 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         # path. We do not want to optimize 'hodl' strategies.
         loss: float = VOID_LOSS
         if trade_count >= self.config["hyperopt_min_trades"]:
-            loss = self.calculate_loss(
+            loss_func = (
+                self.calculate_loss_dict[rs] if rs is not None else self.calculate_loss
+            )
+            loss = loss_func(
                 results=backtesting_results,
                 trade_count=trade_count,
                 min_date=min_date.datetime,
@@ -647,7 +675,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         except KeyError:
             pass
 
-    def setup_trials(self, load_trials=True, backup=None):
+    def _setup_trials(self, load_trials=True, backup=None):
         """ The trials instance is the key used to identify the hdf table """
         # If the Hyperopt class has been previously initialized
         if self.config.get("skip_trials_setup", False):
@@ -718,7 +746,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
     def epochs_limit(self) -> int:
         return self.total_epochs or backend.epochs.max_epoch
 
-    def setup_epochs(self) -> bool:
+    def _setup_epochs(self) -> bool:
         """ used to resume the best epochs state from previous trials """
         locked = backend.epochs.lock.acquire(True, timeout=60)
         if not locked:
@@ -772,7 +800,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         ep.lock.release()
         return resumed
 
-    def setup_space_reduction(self):
+    def _setup_space_reduction(self):
         """ Choose which configuration to use when applying space reduction """
         config = self.config
         if config.get("override_space_reduction_config", False):
@@ -904,7 +932,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         )
         logger.debug(f"Max epoch set to: {ep.max_epoch}")
 
-    def setup_points(self):
+    def _setup_points(self):
         """
         Calc starting points, based on parameters, given epochs, mode
         """
@@ -1075,22 +1103,23 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         IStrategy.dp = None  # type: ignore
 
         # Set dimensions, trials instance and paths and load from storage
-        self.setup_trials()
+        self._setup_trials()
 
         # Set number of initial points, and optimizer related stuff
-        self.setup_points()
+        self._setup_points()
 
         # Count the epochs
-        self.setup_epochs()
+        self._setup_epochs()
 
         # Choose space reduction configuration
-        self.setup_space_reduction()
+        self._setup_space_reduction()
 
         if self.print_colorized:
             colorama_init(autoreset=True)
 
         if not self.cv:
-            self.setup_optimizers()
+            self._setup_optimizers()
+            self._setup_loss_funcs()
             # After setup, trials are only needed by CV so can delete
             self.trials.iloc[0:] = None
 

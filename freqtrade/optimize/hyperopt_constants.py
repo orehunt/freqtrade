@@ -35,7 +35,7 @@ MULTI_SPACE_CONFIG = {
   "hyperopt_space_reduction_interval": 1000,
   "hyperopt_list_pct_best": 0.33,
   "hyperopt_list_cutoff_best": 0.66,
-  "hyperopt_list_profitable": False,
+  "hyperopt_list_profitable": True,
   "hyperopt_list_step_values": {
     "range": 3
   },
@@ -46,23 +46,23 @@ MULTI_SPACE_CONFIG = {
 
 SHARED_SPACE_CONFIG = {
   "hyperopt_list_best": ["sum", "ratio"],
-  "hyperopt_space_reduction_interval": 1000,
-  "hyperopt_list_pct_best": 0.33,
-  "hyperopt_list_cutoff_best": 0.66,
-  "hyperopt_list_profitable": False,
+  "hyperopt_space_reduction_interval": 200,
+  "hyperopt_list_pct_best": "std",
+  "hyperopt_list_cutoff_best": "mean",
+  "hyperopt_list_profitable": True,
   "hyperopt_list_step_values": {
     "range": "mean"
   },
   "hyperopt_list_step_metric": ["all"],
-  "hyperopt_list_sort_metric": ["all"],
+  "hyperopt_list_sort_metric": ["loss"],
 }
 
 
 SINGLE_SPACE_CONFIG = {
   "hyperopt_list_best": ["sum", "ratio"],
   "hyperopt_space_reduction_interval": 50,
-  "hyperopt_list_pct_best": 0.66,
-  "hyperopt_list_cutoff_best": 0.33,
+  "hyperopt_list_pct_best": "mean",
+  "hyperopt_list_cutoff_best": "mean",
   "hyperopt_list_profitable": True,
   "hyperopt_list_step_values": {
     "range": "std"

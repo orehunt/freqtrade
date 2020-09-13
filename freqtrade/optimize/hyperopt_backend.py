@@ -63,6 +63,7 @@ class Epochs(Namespace):
     epochs_since_last_best: List
     explo: int
     current_best_loss: float
+    current_best_loss_dict: Dict
     current_best_epoch: int
     max_epoch: int
     avg_last_occurrence: int
