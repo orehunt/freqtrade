@@ -30,7 +30,7 @@ from freqtrade.optimize.hyperopt_backend import TrialsState, Epochs
 from freqtrade.optimize.hyperopt_interface import IHyperOpt  # noqa: F401
 from freqtrade.optimize.hyperopt_loss_interface import IHyperOptLoss  # noqa: F401
 
-from freqtrade.optimize.hyperopt_constants import VOID_LOSS
+from freqtrade.optimize.hyperopt_constants import OPTIMIZER_CUSTOM_ATTRS, VOID_LOSS
 
 # Suppress scikit-learn FutureWarnings from skopt
 with warnings.catch_warnings():
@@ -243,7 +243,9 @@ class HyperoptData:
                     trials_state.lock.release()
 
     @abstractmethod
-    def log_trials(self, trials_state: TrialsState, epochs: Epochs, rs: Union[None, int]):
+    def log_trials(
+        self, trials_state: TrialsState, epochs: Epochs, rs: Union[None, int]
+    ):
         """ Calculate epochs and save results to storage """
 
     @staticmethod
@@ -882,30 +884,46 @@ class HyperoptData:
         reduced_optimizers = []
         reduced_losses = []
         is_multi = self.mode == "multi"
-        for _ in range(jobs):
-            opt = backend.optimizers.get()
-            if is_multi:
-                opt_trials, trials_params = self.filter_trials_by_opt(
-                    opt.rs, trials, min_trials
+        if self.mode != "single":
+            for _ in range(jobs):
+                opt = backend.optimizers.get()
+                if is_multi:
+                    opt_trials, trials_params = self.filter_trials_by_opt(
+                        opt.rs, trials, min_trials
+                    )
+                    if opt_trials is None:
+                        backend.optimizers.put(opt)
+                        continue
+                    reduced_losses.extend(opt_trials["loss"].values.tolist())
+                opt_dims = (
+                    # in shared or single mode
+                    new_dims
+                    # in multi mode when there are filtered trials
+                    or self.reduce_dimensions(
+                        opt.rs, self.dimensions, trials_params, min_trials=min_trials,
+                    )
                 )
-                if opt_trials is None:
-                    backend.optimizers.put(opt)
-                    continue
-                reduced_losses.extend(opt_trials["loss"].values.tolist())
-            opt_dims = (
-                # in shared or single mode
-                new_dims
-                # in multi mode when there are filtered trials
-                or self.reduce_dimensions(
-                    opt.rs, self.dimensions, trials_params, min_trials=min_trials,
-                )
-            )
-            # don't update space if this optimizer didn't have filtered trials
-            if opt_dims:
-                opt.space = Space(opt_dims)
-                del opt.Xi[:], opt.yi[:]
-                reduced_optimizers.append(opt.rs)
-            backend.optimizers.put(opt)
+                # don't update space if this optimizer didn't have filtered trials
+                if opt_dims:
+                    opt.space = Space(opt_dims)
+                    del opt.Xi[:], opt.yi[:]
+                    reduced_optimizers.append(opt.rs)
+                backend.optimizers.put(opt)
+        else:
+            if new_dims:
+                # gaussian processes are instantiaded with the search space
+                # so recreate the optimizer
+                opt = self.opt
+                if self.opt_base_estimator() == "GP":
+                    state = self.save_opt_state(opt)
+                    self.apply_opt_state(
+                        self.get_optimizer(random_state=opt.rs, dimensions=new_dims), state
+                    )
+                    self.opt = opt
+                else:
+                    self.opt.space = Space(new_dims)
+                    del self.opt.Xi[:], self.opt.yi[:]
+                reduced_optimizers.append(self.opt.rs)
 
         # clear storage
         if is_shared_or_single:
@@ -916,6 +934,8 @@ class HyperoptData:
             self.clear_instance(
                 self.trials_file,
                 self.trials_instance,
+                # NOTE: disequality (instead of gt) is needed for loss values
+                # to support different loss functions
                 where=f"(loss != {loss_vals}) and random_state == {reduced_optimizers}",
                 trials_state=trials_state,
                 backup=True,
@@ -989,12 +1009,11 @@ class HyperoptData:
             if not rand:
                 rand = opt.rng.randint(0, VOID_LOSS)
             opt.rng.seed(rand)
-        opt, opt.void_loss, opt.void, opt.rs, opt.role = (
+        opt, opt.void_loss, opt.void, opt.rs = (
             opt.copy(random_state=opt.rng),
             opt.void_loss,
             opt.void,
             opt.rs,
-            opt.role,
         )
         return opt
 
@@ -1003,3 +1022,15 @@ class HyperoptData:
         """ Delete models and points from an optimizer instance """
         del opt.models[:], opt.Xi[:], opt.yi[:]
         return opt
+
+    @staticmethod
+    def save_opt_state(opt: Optimizer) -> Dict:
+        state = {}
+        for attr in OPTIMIZER_CUSTOM_ATTRS:
+            state[attr] = getattr(opt, attr)
+        return state
+
+    @staticmethod
+    def apply_opt_state(opt: Optimizer, state: Dict) -> Optimizer:
+        for attr in OPTIMIZER_CUSTOM_ATTRS:
+            setattr(opt, attr, state[attr])

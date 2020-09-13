@@ -20,6 +20,8 @@ CYCLE_ACQ_FUNCS = cycle(ACQ_FUNCS)
 
 VOID_LOSS = iinfo(int32).max  # just a big enough number to be a bad point in the loss optimization
 
+OPTIMIZER_CUSTOM_ATTRS = ("rs", "void", "void_loss")
+
 testing = "pytest" in sys.modules
 
 if testing:
@@ -60,7 +62,7 @@ SHARED_SPACE_CONFIG = {
 
 SINGLE_SPACE_CONFIG = {
   "hyperopt_list_best": ["sum", "ratio"],
-  "hyperopt_space_reduction_interval": 50,
+  "hyperopt_space_reduction_interval": 20,
   "hyperopt_list_pct_best": "mean",
   "hyperopt_list_cutoff_best": "mean",
   "hyperopt_list_profitable": True,

@@ -415,7 +415,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
     def acq_funcs():
         return next(CYCLE_ACQ_FUNCS)
 
-    def get_optimizer(self, random_state: int = None) -> Optimizer:
+    def get_optimizer(self, random_state: int = None, dimensions=None) -> Optimizer:
         " Construct an optimizer object "
         # https://github.com/scikit-learn/scikit-learn/issues/14265
         # lbfgs uses joblib threading backend so n_jobs has to be reduced
@@ -429,7 +429,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         )
         n_jobs = 1 if self.opt_acq_optimizer == "lbfgs" else self.n_jobs
         return Optimizer(
-            self.dimensions,
+            self.dimensions if dimensions is None else dimensions,
             base_estimator=base_estimator,
             acq_optimizer=acq_optimizer,
             acq_func=self.opt_acq_func(),
@@ -494,8 +494,14 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         sri = self.space_reduction_interval
         for _ in iter(lambda: 0, 1):
             # update acquisition
-            opt = self.opt_adjust_acq(opt, jobs, backend.epochs, backend.trials, is_shared=True)
+            self.opt = self.opt_adjust_acq(
+                opt, jobs, backend.epochs, backend.trials, is_shared=True
+            )
             fit = len(to_ask) < 1  # # only fit when out of points
+            if sri and t % sri < 1:
+                if self.apply_space_reduction(jobs, backend.trials, backend.epochs):
+                    read_index = 0
+            opt = self.opt
             # tell every once in a while
             if t > self.n_initial_points and not t % self.trials_maxout:
                 try:
@@ -511,12 +517,17 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                         backend.trials.lock.release()
                         if len(params_df) > 0:
                             read_index = t
-                            opt.tell(
-                                params_df.loc[:, self.Xi_cols].values.tolist(),
-                                params_df["loss"].values.tolist(),
-                                fit=fit,
-                            )
-                            logger.debug(f"Optimizer now has {len(opt.Xi)} points")
+                            try:
+                                opt.tell(
+                                    params_df.loc[:, self.Xi_cols].values.tolist(),
+                                    params_df["loss"].values.tolist(),
+                                    fit=fit,
+                                )
+                                logger.debug(f"Optimizer now has {len(opt.Xi)} points")
+                            # If space reduction has just been performed points
+                            # might be out of space
+                            except ValueError as e:
+                                logger.debug(f"Failed telling optimizer results, {e}")
                 except (KeyError, FileNotFoundError, IOError, OSError):
                     if locked:
                         backend.trials.lock.release()
@@ -537,8 +548,6 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                 opt.update_next()
                 a = point()
             evald.add(a)
-            if sri and t % sri < 1:
-                self.apply_space_reduction(jobs, backend.trials, backend.epochs)
             if self.use_progressbar:
                 HyperoptOut._print_progress(t, jobs, self.trials_maxout)
             t += 1
@@ -596,7 +605,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             backend.trials_list.append(v)
             trials_state.num_done += 1
 
-        cls.maybe_log_trials(trials_state, epochs)
+        cls.maybe_log_trials(trials_state, epochs, rs=None)
 
     def log_trials(
         self, trials_state: TrialsState, epochs: Epochs, rs: Union[None, int]
@@ -635,7 +644,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                         ).items()
                     }
                 )
-            logger.debug(f"Optimizer epoch evaluated: {v}")
+            logger.debug(f"Optimizer epoch evaluated: {v['current_epoch']}, yi: {v['loss']}")
             if is_best:
                 current_best = current
                 ep.current_best_loss[rs] = v["loss"]
@@ -802,7 +811,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                         .iloc[-1]
                     ).to_dict()
                     ep.last_best_epoch = last_best_trial["current_epoch"]
-                    ep.last_best_loss =  last_best_trial["loss"]
+                    ep.last_best_loss = last_best_trial["loss"]
                 else:
                     best = self.trials.sort_values(by=["loss"]).iloc[0].to_dict()
                     ep.current_best_epoch[None] = best["current_epoch"]
@@ -1072,7 +1081,9 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                 # since the list was passed through the manager, make a copy
                 if backend.trials.tail:
                     backend.trials_list = [t for t in backend.trials.tail]
-                    backend.just_saved = self.log_trials(backend.trials, backend.epochs)
+                    backend.just_saved = self.log_trials(
+                        backend.trials, backend.epochs, rs=None
+                    )
                     backend.trials.num_done -= backend.just_saved
                 if self.use_progressbar:
                     HyperoptOut._print_progress(
@@ -1159,11 +1170,13 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         if not self.cv:
             self._setup_optimizers()
             self._setup_loss_funcs()
-            # After setup, trials are only needed by CV so can delete
-            self.trials.iloc[0:] = None
 
         # Count the epochs
         self._setup_epochs()
+
+        if not self.cv:
+            # After setup, trials are only needed by CV so can delete
+            self.trials.drop(self.trials.index, inplace=True)
 
         if self.cv:
             jobs_scheduler = self.run_cv_backtest_parallel
@@ -1184,7 +1197,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                 self.trials_file,
                 self.trials_instance,
                 backend.trials,
-                where=f"loss in {backend.epochs.current_best_loss}",
+                where=f"loss in {backend.epochs.last_best_loss}",
             )
             best = self.trials_to_dict(best_trial)[0]
             self.print_epoch_details(best, self.epochs_limit(), self.print_json)

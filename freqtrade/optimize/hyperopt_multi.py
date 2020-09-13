@@ -124,7 +124,6 @@ class HyperoptMulti(HyperoptOut):
         else:
             self.mode = self.config.get("mode", "single")
             if self.mode == "single":
-                # self.opt_base_estimator = lambda: BayesianRidge(n_iter=100, normalize=True)
                 self.opt_base_estimator = lambda: "GP"
                 self.opt_acq_func = lambda: "gp_hedge"
                 self.opt_acq_optimizer = "lbfgs"
