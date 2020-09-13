@@ -1,9 +1,11 @@
 import logging
 import os
+from timeit import repeat
 import warnings
 import json
 import random
-from numpy import iinfo, int32
+from numpy import iinfo, int32, array
+from numpy import repeat as np_repeat
 from pathlib import Path
 from typing import Dict, List, Any, Callable, Tuple, Union
 from abc import abstractmethod
@@ -12,7 +14,7 @@ from os import makedirs
 
 
 from multiprocessing.managers import Namespace
-from pandas import DataFrame, HDFStore, concat, isna, read_hdf
+from pandas import Series, DataFrame, HDFStore, concat, isna, read_hdf
 from numpy import arange, float64, isfinite, nanmean
 from os import path
 import io
@@ -636,7 +638,7 @@ class HyperoptData:
         if flt_trials:
             return concat(flt_trials).drop_duplicates(subset="current_epoch")
         else:
-            return []
+            return Series()
 
     @staticmethod
     def find_steps(
@@ -665,16 +667,18 @@ class HyperoptData:
         else:
             try:
                 steps = arange(step_start, step_stop, step_v)
-            except ValueError:
-                steps = []
-        if len(steps) > len(trials):
-            min_step = step_v * (len(steps) / len(trials))
+            except (ValueError, MemoryError):
+                steps = array([])
+        n_trials = len(trials)
+        if len(steps) > n_trials:
+            min_step = step_v * (len(steps) / n_trials)
             if not defined_range:
                 logger.warn(
                     f"Step value of {step_v} for metric {step_k} is too small. "
                     f"Using a minimum of {min_step:.4f}"
                 )
             step_v = min_step
+            steps = np_repeat(step_v, n_trials).cumsum()
         return steps, step_v
 
     @staticmethod

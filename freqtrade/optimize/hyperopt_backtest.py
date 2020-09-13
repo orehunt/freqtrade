@@ -100,8 +100,7 @@ class Candle(IntEnum):
     BOUGHT = 1
     SOLD = 3
     END = 7  # references the last candle of a pair
-    # STOPLOSS = 12
-
+    FORCE_SOLD = 12
 
 class OrderType(IntEnum):
     LIMIT = 0
@@ -165,6 +164,15 @@ class HyperoptBacktesting(Backtesting):
             "sell_reason",
         ) == BacktestResult._fields
 
+        ask_strat = config.get("ask_strategy", {})
+        if ask_strat.get("sell_profit_only", False) or ask_strat.get(
+            "ignore_roi_if_buy_signal", False
+        ):
+            raise OperationalException(
+                "'sell_profit_only' and 'ignore_roi_if_buy_signal'"
+                " are not implemented, disable them."
+            )
+
         self.td_timeframe = Timedelta(config["timeframe"])
         self.td_half_timeframe = self.td_timeframe / 2
         self.timeframe_wnd = config.get("timeframe_window", TIMEFRAME_WND).get(
@@ -173,9 +181,9 @@ class HyperoptBacktesting(Backtesting):
 
         backtesting_amounts = config.get("backtesting_amounts", {})
         self.stoploss_enabled = backtesting_amounts.get("stoploss", False)
-        self.trailing_enabled = backtesting_amounts.get(
-            "trailing", False
-        ) and config['amounts'].get("trailing_stop", False)
+        self.trailing_enabled = backtesting_amounts.get("trailing", False) and config[
+            "amounts"
+        ].get("trailing_stop", False)
         self.roi_enabled = backtesting_amounts.get("roi", False)
         self.any_trigger = (
             self.stoploss_enabled or self.trailing_enabled or self.roi_enabled
@@ -192,13 +200,13 @@ class HyperoptBacktesting(Backtesting):
         self.account_for_spread = backtesting_amounts.get("account_for_spread", True)
         # null all config amounts for disabled ones (to compare against vanilla backtesting)
         if not self.roi_enabled:
-            config['amounts']["roi"] = {"0": 10}
+            config["amounts"]["roi"] = {"0": 10}
             config["minimal_roi"] = {"0": 10}
         if not self.trailing_enabled:
-            config['amounts']['trailing_stop'] = False
+            config["amounts"]["trailing_stop"] = False
             config["trailing_stop"] = False
         if not self.stoploss_enabled:
-            config['amounts']['stoploss'] = -100
+            config["amounts"]["stoploss"] = -100
             config["stoploss"] = -100
 
         # parent init after config overrides
@@ -544,6 +552,12 @@ class HyperoptBacktesting(Backtesting):
         NOTE: does not modify input df
         """
         loc = self.df_loc.copy()
+
+        force_sell_max_duration = self.config.get("signals", {}).get("force_sell_max_duration", False)
+        if force_sell_max_duration:
+            max_trade_duration = FORCE_SELL_AFTER.get(self.timeframe, 300)
+            df_vals[::max_trade_duration, loc["bought_or_sold"]] = Candle.SOLD
+
         bts_vals = df_vals[
             union_eq(
                 df_vals[:, loc["bought_or_sold"]],
@@ -569,6 +583,7 @@ class HyperoptBacktesting(Backtesting):
                 )
             )
         ]
+
         # add an index column
         bts_loc = loc
         bts_vals = add_columns(bts_vals, bts_loc, ("index",))

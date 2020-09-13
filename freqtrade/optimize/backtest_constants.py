@@ -67,3 +67,13 @@ TIMEFRAME_WND = {
     "1d": 90 # 3 months
 }
 DEFAULT_WND = 48
+
+FORCE_SELL_AFTER = {
+    "1m": 240, # 4h
+    "5m": 144, # 12h
+    "15m": 96, # 24h
+    "30m": 72, # 36h
+    "1h": 48, # 48h
+    "8h": 36, # 12 days
+    "1d": 24 # 24 days
+}

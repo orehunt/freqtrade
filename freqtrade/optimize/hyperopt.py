@@ -648,6 +648,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             if is_best:
                 current_best = current
                 ep.current_best_loss[rs] = v["loss"]
+                ep.last_best_loss = v["loss"]
         self.update_max_epoch(current_best, current, ep, rs=rs)
         # Save results and optimizers after every batch
         trials = json_normalize(backend.trials_list)
@@ -1169,7 +1170,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
 
         if not self.cv:
             self._setup_optimizers()
-            self._setup_loss_funcs()
+        self._setup_loss_funcs()
 
         # Count the epochs
         self._setup_epochs()
