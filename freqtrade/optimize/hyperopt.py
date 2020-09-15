@@ -1080,12 +1080,14 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                 backend.trials.exit = True
                 jobs_scheduler(parallel, 2 * jobs)
                 # since the list was passed through the manager, make a copy
-                if backend.trials.tail:
-                    backend.trials_list = [t for t in backend.trials.tail]
-                    backend.just_saved = self.log_trials(
-                        backend.trials, backend.epochs, rs=None
-                    )
-                    backend.trials.num_done -= backend.just_saved
+                if len(backend.trials.tail):
+                    for rs in backend.trials.tail.keys():
+                        if len(backend.trials.tail[rs]):
+                            backend.trials_list = [t for t in backend.trials.tail[rs]]
+                            backend.just_saved = self.log_trials(
+                                backend.trials, backend.epochs, rs=rs
+                            )
+                            backend.trials.num_done -= backend.just_saved
                 if self.use_progressbar:
                     HyperoptOut._print_progress(
                         backend.just_saved, jobs, self.trials_maxout, finish=True

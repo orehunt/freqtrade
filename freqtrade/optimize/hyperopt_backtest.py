@@ -102,6 +102,7 @@ class Candle(IntEnum):
     END = 7  # references the last candle of a pair
     FORCE_SOLD = 12
 
+
 class OrderType(IntEnum):
     LIMIT = 0
     MARKET = 1
@@ -543,7 +544,7 @@ class HyperoptBacktesting(Backtesting):
 
         return (
             df_vals,
-            len(df_vals[df_vals[:, loc["bought_or_sold"]] == Candle.BOUGHT]) < 1,
+            not (df_vals[:, loc["bought_or_sold"]] == Candle.BOUGHT).any(),
         )
 
     def boughts_to_sold(self, df_vals: ndarray) -> ndarray:
@@ -553,15 +554,24 @@ class HyperoptBacktesting(Backtesting):
         """
         loc = self.df_loc.copy()
 
-        force_sell_max_duration = self.config.get("signals", {}).get("force_sell_max_duration", False)
+        force_sell_max_duration = self.config.get("signals", {}).get(
+            "force_sell_max_duration", False
+        )
         if force_sell_max_duration:
             max_trade_duration = FORCE_SELL_AFTER.get(self.timeframe, 300)
             df_vals[::max_trade_duration, loc["bought_or_sold"]] = Candle.SOLD
 
+        # checks boughts again separately here because if force sell is applied
+        # it could have override the only bought candles, so have to exit early
+        bought_mask = df_vals[:, loc["bought_or_sold"]] == Candle.BOUGHT
+        if not bought_mask.any():
+            return np.zeros((0, df_vals.shape[1]))
+
         bts_vals = df_vals[
+            bought_mask |
             union_eq(
                 df_vals[:, loc["bought_or_sold"]],
-                [Candle.BOUGHT, Candle.SOLD, Candle.END,],
+                [Candle.SOLD, Candle.END,],
             )
         ]
         bts_vals = bts_vals[
@@ -613,6 +623,8 @@ class HyperoptBacktesting(Backtesting):
     def set_sold(self, df_vals: ndarray) -> DataFrame:
         # recompose the multi index swapping the ohlc count with a contiguous range
         bts_vals = self.boughts_to_sold(df_vals)
+        if not len(bts_vals):
+            return bts_vals
         loc = self.bts_loc
         # align sold to bought
         sold = bts_vals[
@@ -631,14 +643,13 @@ class HyperoptBacktesting(Backtesting):
         bts_vals[:, loc["next_sold_ofs"]] = repeat(
             sold[:, loc["ohlc_ofs"]], self.sold_repeats
         )
-        return bts_vals, sold
+        return bts_vals
 
-    def set_triggers(self, df_vals: ndarray) -> ndarray:
+    def set_triggers(self, df_vals: ndarray, bts_vals: ndarray) -> ndarray:
         """
         returns the df of valid boughts where trigger happens, with matching trigger data
         points for each bought
         """
-        bts_vals, sold = self.set_sold(df_vals)
         loc = self.bts_loc
         bought = bts_vals[bts_vals[:, loc["bought_or_sold"]] == Candle.BOUGHT]
         # get the index ranges of each bought->sold spans
@@ -1865,10 +1876,13 @@ class HyperoptBacktesting(Backtesting):
 
         df_vals = self.post_process(df_vals, self.pairs_offset)
 
+        bts_vals = self.set_sold(df_vals)
+
+        if not len(bts_vals):
+            return self.empty_results
+
         if self.any_trigger:
-            bts_vals = self.set_triggers(df_vals)
-        else:
-            bts_vals, _ = self.set_sold(df_vals)
+            bts_vals = self.set_triggers(df_vals, bts_vals)
 
         if len(bts_vals) < 1:
             return self.empty_results

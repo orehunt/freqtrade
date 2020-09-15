@@ -195,7 +195,7 @@ class HyperoptMulti(HyperoptOut):
         # in shared mode the void_loss value is the same across workers
         backend.trials.void_loss = VOID_LOSS
         # at the end collect the remaining trials to save here
-        backend.trials.tail = backend.manager.list([])
+        backend.trials.tail = backend.manager.dict()
         # stores the hashes of points currently getting tested
         backend.trials.testing = backend.manager.dict()
         # at the end one last batch is dispatched to save the remaining trials
@@ -532,8 +532,10 @@ class HyperoptMulti(HyperoptOut):
         is_shared = cls.shared
         # check early if this is the last run
         if trials_state.exit:
-            trials_state.tail.extend(backend.trials_list)
-            del backend.trials_list[:]
+            if len(backend.trials_list):
+                trials_state.tail[opt.rs] = backend.trials_list
+                print(backend.trials_list)
+                del backend.trials_list[:]
             return
 
         # at startup always fetch previous points from storage,

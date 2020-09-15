@@ -20,7 +20,7 @@ opt: Optimizer
 optimizers: Queue
 exploit: int = 0
 
-trials_list: List = []  # (worker local)
+trials_list = []  # (worker local)
 # each worker index position of known past trials (worker local)
 trials_index = 0
 # recently saved trials
@@ -29,7 +29,7 @@ just_saved = 0
 # is resetted once space_reduction is again 0 (from n_jobs)
 just_reduced = False
 # in multi mode, each optimizer *also* stores its list of last_best periods
-epochs_since_last_best = []
+epochs_since_last_best = [1, 1]
 
 # timer, keep track how hyperopt runtime, use it to decide when to save on storage (worker local)
 timer: float = 0
@@ -50,7 +50,7 @@ class TrialsState(Namespace):
     num_saved: int
     num_done: int
     testing: dict
-    tail: List
+    tail: Dict[int, List]
     empty_strikes: int
     void_loss: float
     table_header: int

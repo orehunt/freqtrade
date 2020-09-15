@@ -269,10 +269,11 @@ class HyperoptData:
         trials = DataFrame()
         locked = False
         try:
-            locked = trials_state.lock.acquire()
-            while not locked:
-                logger.debug("Acquiring trials state lock for reading trials")
-                locked = trials_state.lock.acquire()
+            locked = trials_state.lock.acquire() if hasattr(trials_state, "lock") else None
+            if locked is not None:
+                while not locked:
+                    logger.debug("Acquiring trials state lock for reading trials")
+                    locked = trials_state.lock.acquire()
             trials = read_hdf(
                 trials_file, key=trials_instance, where=where, start=start
             )
@@ -299,7 +300,7 @@ class HyperoptData:
         except (
             KeyError,
             AttributeError,
-        ):  # trials instance is not in the database or corrupted
+                ):  # trials instance is not in the database or corrupted
             # if corrupted
             if backup or not start:
                 try:

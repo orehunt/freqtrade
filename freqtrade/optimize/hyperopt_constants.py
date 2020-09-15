@@ -48,7 +48,7 @@ MULTI_SPACE_CONFIG = {
 
 SHARED_SPACE_CONFIG = {
   "hyperopt_list_best": ["sum", "ratio"],
-  "hyperopt_space_reduction_interval": 200,
+  "hyperopt_space_reduction_interval": 1000,
   "hyperopt_list_pct_best": "std",
   "hyperopt_list_cutoff_best": "mean",
   "hyperopt_list_profitable": True,
@@ -62,7 +62,7 @@ SHARED_SPACE_CONFIG = {
 
 SINGLE_SPACE_CONFIG = {
   "hyperopt_list_best": ["sum", "ratio"],
-  "hyperopt_space_reduction_interval": 20,
+  "hyperopt_space_reduction_interval": 100,
   "hyperopt_list_pct_best": "mean",
   "hyperopt_list_cutoff_best": "mean",
   "hyperopt_list_profitable": True,
