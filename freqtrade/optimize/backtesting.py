@@ -425,6 +425,7 @@ class Backtesting:
 
         data, timerange = self.load_bt_data()
 
+        from freqtrade.optimize.backtest_utils import check_data_startup
         all_results = {}
         for strat in self.strategylist:
             logger.info("Running backtesting for Strategy %s", strat.get_strategy_name())
@@ -434,9 +435,13 @@ class Backtesting:
             preprocessed = self.strategy.ohlcvdata_to_dataframe(data)
 
             # Trim startup period from analyzed dataframe
-            for pair, df in preprocessed.items():
-                preprocessed[pair] = trim_dataframe(df, timerange)
+            # for pair, df in preprocessed.items():
+            #     preprocessed[pair] = trim_dataframe(df, timerange)
+            preprocessed, _ = check_data_startup(preprocessed,
+                                                 self.required_startup, timerange)
+
             min_date, max_date = history.get_timerange(preprocessed)
+
 
             logger.info(f'Backtesting with data from {min_date.strftime(DATETIME_PRINT_FORMAT)} '
                         f'up to {max_date.strftime(DATETIME_PRINT_FORMAT)} '

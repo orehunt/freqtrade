@@ -4,7 +4,7 @@ from timeit import repeat
 import warnings
 import json
 import random
-from numpy import iinfo, int32, array
+from numpy import iinfo, int32, array, isin
 from numpy import repeat as np_repeat
 from pathlib import Path
 from typing import Dict, List, Any, Callable, Tuple, Union
@@ -269,7 +269,9 @@ class HyperoptData:
         trials = DataFrame()
         locked = False
         try:
-            locked = trials_state.lock.acquire() if hasattr(trials_state, "lock") else None
+            locked = (
+                trials_state.lock.acquire() if hasattr(trials_state, "lock") else None
+            )
             if locked is not None:
                 while not locked:
                     logger.debug("Acquiring trials state lock for reading trials")
@@ -300,7 +302,7 @@ class HyperoptData:
         except (
             KeyError,
             AttributeError,
-                ):  # trials instance is not in the database or corrupted
+        ):  # trials instance is not in the database or corrupted
             # if corrupted
             if backup or not start:
                 try:
@@ -882,7 +884,7 @@ class HyperoptData:
             if trials is None:
                 return False
             new_dims = self.reduce_dimensions(
-                None, self.dimensions, trials_params, min_trials=min_trials,
+                None, self.dimensions.copy(), trials_params, min_trials=min_trials,
             )
         else:
             new_dims = []
@@ -890,8 +892,14 @@ class HyperoptData:
         reduced_losses = []
         is_multi = self.mode == "multi"
         if self.mode != "single":
-            for _ in range(jobs):
-                opt = backend.optimizers.get()
+            backend.wait_for_lock(epochs.lock, "space_reduction", logger)
+            if len(epochs.pinned_optimizers) != 0 or backend.optimizers.qsize() < jobs:
+                qs = backend.optimizers.qsize()
+                ds = len(epochs.pinned_optimizers)
+                raise OperationalException(
+                    f" workers unsync, optimizers queue: {qs}, mapping: {ds}"
+                )
+            for oid, opt in epochs.pinned_optimizers.items():
                 if is_multi:
                     opt_trials, trials_params = self.filter_trials_by_opt(
                         opt.rs, trials, min_trials
@@ -913,7 +921,9 @@ class HyperoptData:
                     opt.space = Space(opt_dims)
                     del opt.Xi[:], opt.yi[:]
                     reduced_optimizers.append(opt.rs)
-                backend.optimizers.put(opt)
+                epochs.pinned_optimizers[oid] = opt
+                epochs.space_reduction[oid] = True
+            backend.epochs.lock.release()
         else:
             if new_dims:
                 # gaussian processes are instantiaded with the search space
@@ -922,7 +932,8 @@ class HyperoptData:
                 if self.opt_base_estimator() == "GP":
                     state = self.save_opt_state(opt)
                     self.apply_opt_state(
-                        self.get_optimizer(random_state=opt.rs, dimensions=new_dims), state
+                        self.get_optimizer(random_state=opt.rs, dimensions=new_dims),
+                        state,
                     )
                     self.opt = opt
                 else:
@@ -945,8 +956,6 @@ class HyperoptData:
                 trials_state=trials_state,
                 backup=True,
             )
-        # alert workers
-        epochs.space_reduction = jobs
         return True
 
     def filter_trials_by_opt(self, rs: Union[int, None], trials, min_trials) -> Tuple:
@@ -996,9 +1005,18 @@ class HyperoptData:
             else:
                 new_cats = rs_trials[dim.name].unique().tolist()
                 dm = dimensions[n]
+                # reduce priors list to filtered categories since
+                # categories probabilities are user defined
+                if dm.prior is not None and len(dm.prior):
+                    prior = array(dm.prior)[isin(dm.categories, new_cats)]
+                    prior /= prior.sum()  # readjust sum of probabilities to 1
+                else:
+                    prior = None
                 # assert dm.name == dim.name
+                # assert len(dm.categories) == len(dm.prior)
+                # assert np.sum(dm.prior) == 1
                 dimensions[n] = Categorical(
-                    new_cats, prior=dm.prior, transform=dm.transform_, name=dim.name
+                    new_cats, prior=prior, transform=dm.transform_, name=dim.name
                 )
                 # reset the kind
                 dimensions[n].kind = 2

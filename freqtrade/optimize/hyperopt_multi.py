@@ -1,6 +1,7 @@
 import warnings
 import logging
 import gc
+import os
 from psutil import virtual_memory
 from pathlib import Path
 from typing import Any, Dict, List, Tuple, Optional, Union
@@ -195,7 +196,8 @@ class HyperoptMulti(HyperoptOut):
         # in shared mode the void_loss value is the same across workers
         backend.trials.void_loss = VOID_LOSS
         # at the end collect the remaining trials to save here
-        backend.trials.tail = backend.manager.dict()
+        backend.trials.tail_dict = backend.manager.dict()
+        backend.trials.tail_list = backend.manager.list()
         # stores the hashes of points currently getting tested
         backend.trials.testing = backend.manager.dict()
         # at the end one last batch is dispatched to save the remaining trials
@@ -270,8 +272,9 @@ class HyperoptMulti(HyperoptOut):
         # check if a space reduction has been performed
         # and delete current parameters if so
         opt_available = hasattr(backend, "opt") and backend.opt
+        pid = os.getpid()
         space_reduction = (
-            epochs and epochs.space_reduction > 0 and not backend.just_reduced
+            epochs and pid in epochs.space_reduction and not backend.just_reduced
         )
         if opt_available and not space_reduction:
             opt = backend.opt
@@ -280,17 +283,15 @@ class HyperoptMulti(HyperoptOut):
                 backend.trials_index = 0
         else:
             # at worker startup or at space reduction fetch an optimizer from the queue
-            if optimizers is not None:
-                if optimizers.qsize() > 0:
-                    opt = optimizers.get(timeout=1)
-                    # make a copy of the empty opt to resume from when the global
-                    # is gced
-                    backend.opt = opt
-                    # reset index of read trials since resuming from 0
-                    backend.trials_index = 0
-                    backend.Xi_h = {}
-                    # store it back again to restore after global state is gced
-                    optimizers.put(opt)
+            if pid in epochs.pinned_optimizers:
+                opt = epochs.pinned_optimizers[pid]
+                HyperoptMulti.reset_opt_state(opt)
+                epochs.pinned_optimizers[pid] = opt
+            elif optimizers is not None and optimizers.qsize() > 0:
+                opt = optimizers.get(timeout=1)
+                HyperoptMulti.reset_opt_state(opt)
+                # store it back again to restore after global state is gced
+                optimizers.put(opt)
             else:
                 raise OperationalException(
                     "Global state was reclaimed and no optimizer instance was "
@@ -298,8 +299,7 @@ class HyperoptMulti(HyperoptOut):
                 )
         # if space reduction was performed decrease jobs counter
         if space_reduction:
-            logger.info("worker space_reduction was performed..")
-            epochs.space_reduction -= 1
+            del epochs.space_reduction[pid]
             backend.just_reduced = True
         elif backend.just_reduced:
             backend.just_reduced = False
@@ -319,7 +319,7 @@ class HyperoptMulti(HyperoptOut):
         # fit a model with the known points, either from a previous run, or read
         # from database only at the start when the global points references of each worker are empty
         params_df: DataFrame = []
-        if backend.just_saved or not opt.Xi:
+        if backend.just_saved or not len(opt.Xi):
             locked = False
             # fetch all points not already told in shared mode
             # ignoring random state
@@ -533,8 +533,10 @@ class HyperoptMulti(HyperoptOut):
         # check early if this is the last run
         if trials_state.exit:
             if len(backend.trials_list):
-                trials_state.tail[opt.rs] = backend.trials_list
-                print(backend.trials_list)
+                if is_shared:
+                    trials_state.tail_list.extend(backend.trials_list)
+                else:
+                    trials_state.tail_dict[opt.rs] = backend.trials_list
                 del backend.trials_list[:]
             return
 
@@ -551,7 +553,7 @@ class HyperoptMulti(HyperoptOut):
             cls.opt_state(s_opt=opt)
             # Terminate after enough workers didn't receive a point to test
             # only when not in the process of a space reduction
-            if epochs.space_reduction < 1:
+            if len(epochs.space_reduction) < 1:
                 trials_state.empty_strikes += 1
             if trials_state.empty_strikes >= cls.trials_max_empty:
                 trials_state.exit = True
@@ -705,7 +707,13 @@ class HyperoptMulti(HyperoptOut):
                 # default xi is 0.01, we want some 10e even lower values
                 if opt.acq_func in ("PI", "gp_hedge"):
                     _, digits, exponent = Decimal(nanvar(loss_tail)).as_tuple()
-                    xi = nanstd(loss_tail) * 10 ** -abs(len(digits) + exponent - 1)
+                    if len(digits) and digits[0]:
+                        xi = (
+                            nanstd(loss_tail) * 10 ** -abs(len(digits) + exponent - 1)
+                            or 0.01
+                        )
+                    else:
+                        xi = 0.01
                 # with EI that supports negatives we can just use negative std
                 elif opt.acq_func == "EI":
                     xi = -nanstd(loss_tail)
@@ -737,40 +745,14 @@ class HyperoptMulti(HyperoptOut):
             # at the beginning of the next test
         return opt
 
-    # def opt_adjust_acq(
-    #     self, opt: Optimizer, jobs: int, epochs: Epochs, trials_state: TrialsState
-    # ) -> Optimizer:
-    #     """ Tune exploration/exploitaion balance of optimizers """
-    #     # can only tune if we know the loss scores
-    #     if backend.Xi_h:
-    #         loss = array(list(backend.Xi_h.values()))
-    #         abs_role = abs(opt.role)
-    #         # if half past the scheduled max, change acquisition
-    #         if (
-    #             trials_state.num_saved + trials_state.num_done
-    #             > (epochs.max_epoch - epochs.current_best_epoch) // 2
-    #         ):
-    #             loss_min = loss.min()
-    #             # for explorers
-    #             if opt.role > 0:
-    #                 # calc xi in relation to the set of loss scores
-    #                 loss_max = loss.max()
-    #                 xi = (loss_max / loss_min) * ((loss_max - loss_min) / abs_role)
-    #                 # calc kappa in relation to the variance of the loss score value
-    #                 kappa = loss.var() / opt.role
-    #             elif opt.role < 0:
-    #                 # calc xi in relation to the best and last loss score
-    #                 loss_last = loss[-1]
-    #                 xi = (loss_min / loss_last) * ((loss_min - loss_last) / abs_role)
-    #                 # calc kappa in relation to the variance of the last n epochs since
-    #                 # last best
-    #                 kappa = loss[epochs.epochs_since_last_best[-1] :].var() / abs_role
-    #         # else reset to average values
-    #         else:
-    #             xi = loss.std() / abs_role
-    #             kappa = loss.var() / abs_role
-    #         opt.acq_func_kwargs = {"xi": xi, "kappa": kappa}
-    #     return opt
+    @staticmethod
+    def reset_opt_state(opt: Optimizer):
+        # make a copy of the empty opt to resume from when the global
+        # is gced
+        backend.opt = opt
+        # reset index of read trials since resuming from 0
+        backend.trials_index = 0
+        backend.Xi_h = {}
 
     @staticmethod
     def filter_void_losses(

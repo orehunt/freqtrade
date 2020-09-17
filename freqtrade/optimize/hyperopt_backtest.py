@@ -216,6 +216,9 @@ class HyperoptBacktesting(Backtesting):
         self.position_stacking = self.config.get("position_stacking", False)
         if self.config.get("max_open_trades", 0) > 0:
             logger.warn("Ignoring max open trades...")
+        self.force_sell_max_duration = self.config.get("signals", {}).get(
+            "force_sell_max_duration", False
+        )
 
     def get_results(
         self, buy_vals: ndarray, sell_vals: ndarray, ohlc: DataFrame
@@ -332,17 +335,17 @@ class HyperoptBacktesting(Backtesting):
         trade_duration[trade_duration == self.td_zero].values[
             :
         ] = self.td_half_timeframe
-        return DataFrame(
+        results = DataFrame(
             {
                 "pair": replace_values(
                     self.pairs_idx, self.pairs_name, buy_vals[:, buy_cols["pair"]]
                 ),
                 "profit_percent": profits_prc,
                 "profit_abs": profits_abs,
-                "open_date": to_datetime(buy_vals[:, buy_cols["date"]]),
+                "open_date": to_datetime(buy_vals[:, buy_cols["date"]], utc=True),
                 "open_rate": open_rate,
                 "open_fee": self.fee,
-                "close_date": to_datetime(sell_vals[:, sell_cols["date"]]),
+                "close_date": to_datetime(sell_vals[:, sell_cols["date"]], utc=True),
                 "close_rate": close_rate,
                 "close_fee": self.fee,
                 "amount": self.config["stake_amount"],
@@ -353,6 +356,13 @@ class HyperoptBacktesting(Backtesting):
                 # "close_index": sell_vals[:, sell_cols["ohlc"]].astype(int),
             }
         )
+        results.sort_values(by='open_date', inplace=True)
+        # from user_data.hyperopts.RatioLosses import ProfitIntervalLoss
+        # loss = ProfitIntervalLoss()
+        # loss.timeframe = self.timeframe
+        # loss.hyperopt_loss_function(results, len(results), min_date=self.min_date, max_date=self.max_date)
+        # exit()
+        return results
 
     def _calc_profits(
         self, open_rate: ndarray, close_rate: ndarray, dec=False, calc_abs=False
@@ -554,10 +564,7 @@ class HyperoptBacktesting(Backtesting):
         """
         loc = self.df_loc.copy()
 
-        force_sell_max_duration = self.config.get("signals", {}).get(
-            "force_sell_max_duration", False
-        )
-        if force_sell_max_duration:
+        if self.force_sell_max_duration:
             max_trade_duration = FORCE_SELL_AFTER.get(self.timeframe, 300)
             df_vals[::max_trade_duration, loc["bought_or_sold"]] = Candle.SOLD
 
@@ -1859,6 +1866,9 @@ class HyperoptBacktesting(Backtesting):
     ) -> DataFrame:
         """ NOTE: can't have default values as arguments since it is an overridden function
         """
+        self.min_date = kwargs['start_date']
+        self.max_date = kwargs['end_date']
+
         df = self.merge_pairs_df(processed)
 
         df_vals, empty = self.bought_or_sold(df)

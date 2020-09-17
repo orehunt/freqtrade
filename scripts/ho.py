@@ -429,7 +429,7 @@ class Main:
         self.ho.config["hyperopt_reset"] = False
         if not path:
             if not hasattr(self.ho, "trials_file"):
-                self.ho.setup_trials(load_trials=False)
+                self.ho._setup_trials(load_trials=False)
             path = self.ho.trials_file
         if not instance and hasattr(self.ho, "trials_instance"):
             instance = self.ho.trials_instance

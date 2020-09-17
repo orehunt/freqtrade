@@ -3,6 +3,7 @@ This module contains the hyperopt logic
 """
 
 import random
+from user_data.modules.helper import read_json_file
 import warnings
 import logging
 import json
@@ -30,6 +31,7 @@ from numpy import isfinite, iinfo, int32
 
 from freqtrade.constants import DATETIME_PRINT_FORMAT
 from freqtrade.data.converter import trim_dataframe
+from freqtrade.optimize.backtest_utils import check_data_startup
 from freqtrade.data.history import get_timerange
 from freqtrade.optimize.backtesting import Backtesting
 from freqtrade.exceptions import OperationalException
@@ -298,11 +300,12 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
 
         if backend.data:
             processed = backend.data
+            min_date, max_date = backend.min_date, backend.max_date
         else:
             processed = load(self.data_pickle_file)
             backend.data = processed
-
-        min_date, max_date = get_timerange(processed)
+            min_date, max_date = get_timerange(processed)
+            backend.min_date, backend.max_date = min_date, max_date
 
         backtesting_results = self.backtesting.backtest(
             processed=processed,
@@ -532,10 +535,10 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                     if locked:
                         backend.trials.lock.release()
                     logger.debug("Couldn't read trials from disk")
-                if backend.trials.exit or self._maybe_terminate(
-                    t, jobs, backend.trials, backend.epochs
-                ):
-                    break
+            if backend.trials.exit or self._maybe_terminate(
+                t, jobs, backend.trials, backend.epochs
+            ):
+                break
 
             a = point()
             # check for termination when getting duplicates
@@ -582,7 +585,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         cls = backend.cls
 
         if trials_state.exit:
-            trials_state.tail.extend(backend.trials_list)
+            trials_state.tail_list.extend(backend.trials_list)
             del backend.trials_list[:]
             return
         if not backend.timer:
@@ -644,7 +647,9 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                         ).items()
                     }
                 )
-            logger.debug(f"Optimizer epoch evaluated: {v['current_epoch']}, yi: {v['loss']}")
+            logger.debug(
+                f"Optimizer epoch evaluated: {v['current_epoch']}, yi: {v['loss']}"
+            )
             if is_best:
                 current_best = current
                 ep.current_best_loss[rs] = v["loss"]
@@ -769,7 +774,11 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                 "Couldn't acquire lock at startup during epochs setup."
             )
         ep = backend.epochs
-        ep.space_reduction = 0
+        # signal each worker for space reduction
+        ep.space_reduction = backend.manager.dict()
+        # map optimizers to workers ids
+        ep.pinned_optimizers = backend.manager.dict()
+
         ep.last_best_epoch = 0
         ep.last_best_loss = float(VOID_LOSS)
         is_multi = self.multi and not self.shared
@@ -1080,54 +1089,40 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                 backend.trials.exit = True
                 jobs_scheduler(parallel, 2 * jobs)
                 # since the list was passed through the manager, make a copy
-                if len(backend.trials.tail):
-                    for rs in backend.trials.tail.keys():
-                        if len(backend.trials.tail[rs]):
-                            backend.trials_list = [t for t in backend.trials.tail[rs]]
+                if len(backend.trials.tail_dict):
+                    for rs in backend.trials.tail_dict.keys():
+                        if len(backend.trials.tail_dict[rs]):
+                            backend.trials_list = [
+                                t for t in backend.trials.tail_dict[rs]
+                            ]
                             backend.just_saved = self.log_trials(
                                 backend.trials, backend.epochs, rs=rs
                             )
                             backend.trials.num_done -= backend.just_saved
+                else:
+                    backend.trials_list = [t for t in backend.trials.tail_list]
+                    backend.just_saved = self.log_trials(
+                        backend.trials, backend.epochs, rs=None
+                    )
+                    backend.trials.num_done -= backend.just_saved
+
                 if self.use_progressbar:
                     HyperoptOut._print_progress(
                         backend.just_saved, jobs, self.trials_maxout, finish=True
                     )
 
-    def start(self) -> None:
-        """ Broom Broom """
-        self.random_state = self._set_random_state(
-            self.config.get("hyperopt_random_state", None)
-        )
-        logger.info(f"Using optimizer random state: {self.random_state}")
-        backend.trials.table_header = 0
+    def _setup_data(self):
+        """ Load ohlcv data, and check that:
+        - startup period is removed
+        - there is a global minimum amount of data to test
+        """
         data, timerange = self.backtesting.load_bt_data()
         preprocessed = self.backtesting.strategy.ohlcvdata_to_dataframe(data)
 
-        # Trim startup period from analyzed dataframe
-        # make a new list of the preprocessed pairs because
-        # we delete from the preprocessed dict within the loop
-        pairs = [pair for pair in preprocessed.keys()]
-        for pair in pairs:
-            prev_len_pair_df = len(preprocessed[pair])
-            preprocessed[pair] = trim_dataframe(preprocessed[pair], timerange)
-            # trimming by timerange doesn't cut the startup period if one of the pairs
-            # starts at a later date
-            left_to_trim = (
-                prev_len_pair_df
-                - len(preprocessed[pair])
-                - self.backtesting.required_startup
-            )
-            if left_to_trim < 0:
-                preprocessed[pair] = preprocessed[pair][abs(left_to_trim) :]
-            trimmed_len_pair_df = len(preprocessed[pair])
-            if trimmed_len_pair_df < 1:
-                del preprocessed[pair]
-            else:
-                self.n_candles += trimmed_len_pair_df
-        if len(preprocessed) < 1:
-            raise OperationalException(
-                "Not enough data to support the provided startup candle count."
-            )
+        preprocessed, self.n_candles = check_data_startup(
+            preprocessed, self.backtesting.required_startup, timerange
+        )
+
         # use the dict provided by backtesting to calc the pairslist length
         # since it applies pairlist filters
         n_pairs = len(data)
@@ -1151,6 +1146,16 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         )
 
         dump(preprocessed, self.data_pickle_file)
+
+    def start(self) -> None:
+        """ Broom Broom """
+        self.random_state = self._set_random_state(
+            self.config.get("hyperopt_random_state", None)
+        )
+        logger.info(f"Using optimizer random state: {self.random_state}")
+        backend.trials.table_header = 0
+
+        self._setup_data()
 
         # We don't need exchange instance anymore while running hyperopt
         self.backtesting.exchange = None  # type: ignore
@@ -1196,13 +1201,27 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
 
         # Print best epoch
         if backend.trials.num_saved:
-            best_trial = self.load_trials(
-                self.trials_file,
-                self.trials_instance,
-                backend.trials,
-                where=f"loss in {backend.epochs.last_best_loss}",
-            )
-            best = self.trials_to_dict(best_trial)[0]
+            try:
+                best_trial = self.load_trials(
+                    self.trials_file,
+                    self.trials_instance,
+                    backend.trials,
+                    where=f"loss in {backend.epochs.last_best_loss}",
+                )
+                best = self.trials_to_dict(best_trial)[0]
+            # this happens if search space reduction has removed the best trial
+            # and no better has been found after wards..
+            # search space reduction can remove the best trial if the `cutoff_best`
+            # filtering is used
+            except IndexError:
+                trials = self.load_trials(
+                    self.trials_file,
+                    self.trials_instance,
+                    backend.trials,
+                )
+                best_trial = trials.sort_values(by='loss')[0]
+                best = self.trials_to_dict(best_trial)
+
             self.print_epoch_details(best, self.epochs_limit(), self.print_json)
         else:
             # This is printed when Ctrl+C is pressed quickly, before first epochs have

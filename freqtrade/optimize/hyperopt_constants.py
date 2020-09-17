@@ -37,7 +37,7 @@ MULTI_SPACE_CONFIG = {
   "hyperopt_space_reduction_interval": 1000,
   "hyperopt_list_pct_best": 0.33,
   "hyperopt_list_cutoff_best": 0.66,
-  "hyperopt_list_profitable": True,
+  "hyperopt_list_profitable": False,
   "hyperopt_list_step_values": {
     "range": 3
   },
@@ -51,7 +51,7 @@ SHARED_SPACE_CONFIG = {
   "hyperopt_space_reduction_interval": 1000,
   "hyperopt_list_pct_best": "std",
   "hyperopt_list_cutoff_best": "mean",
-  "hyperopt_list_profitable": True,
+  "hyperopt_list_profitable": False,
   "hyperopt_list_step_values": {
     "range": "mean"
   },

@@ -75,7 +75,12 @@ def add_columns(
     for n, c in enumerate(columns, len(cols_dict)):
         cols_dict[c] = n
     return concatenate(
-        (arr, ndarray(shape=(arr.shape[0], len(columns)), dtype=arr.dtype) if data is None else data),
+        (
+            arr,
+            ndarray(shape=(arr.shape[0], len(columns)), dtype=arr.dtype)
+            if data is None
+            else data,
+        ),
         axis=1,
     )
 
@@ -257,3 +262,35 @@ def diff_indexes(arr: ndarray, with_start=False, with_end=False) -> ndarray:
             return where(arr != shift(arr, fill=arr[0]))[0]
     except:
         return []
+
+
+from freqtrade.data.converter import trim_dataframe
+from freqtrade.configuration import TimeRange
+
+
+def check_data_startup(
+    preprocessed: dict, startup_period: int, timerange: TimeRange
+) -> Tuple[dict, int]:
+    # Trim startup period from analyzed dataframe
+    # make a new list of the preprocessed pairs because
+    # we delete from the preprocessed dict within the loop
+    pairs = [pair for pair in preprocessed.keys()]
+    n_candles = 0
+    for pair in pairs:
+        prev_len_pair_df = len(preprocessed[pair])
+        preprocessed[pair] = trim_dataframe(preprocessed[pair], timerange)
+        # trimming by timerange doesn't cut the startup period if one of the pairs
+        # starts at a later date
+        left_to_trim = prev_len_pair_df - len(preprocessed[pair]) - startup_period
+        if left_to_trim < 0:
+            preprocessed[pair] = preprocessed[pair][abs(left_to_trim) :]
+        trimmed_len_pair_df = len(preprocessed[pair])
+        if trimmed_len_pair_df < 1:
+            del preprocessed[pair]
+        else:
+            n_candles += trimmed_len_pair_df
+    if len(preprocessed) < 1:
+        raise OperationalException(
+            "Not enough data to support the provided startup candle count."
+        )
+    return preprocessed, n_candles

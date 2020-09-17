@@ -65,7 +65,7 @@ class HyperOptLossResolver(IResolver):
     initial_search_path = Path(__file__).parent.parent.joinpath("optimize").resolve()
 
     @staticmethod
-    def load_hyperoptloss(config: Dict) -> IHyperOptLoss:
+    def load_hyperoptloss(config: Dict, **kwargs) -> IHyperOptLoss:
         """
         Load the custom class from config parameter
         :param config: configuration dictionary
@@ -76,7 +76,7 @@ class HyperOptLossResolver(IResolver):
         hyperoptloss_name = config.get("hyperopt_loss") or DEFAULT_HYPEROPT_LOSS
 
         hyperoptloss = HyperOptLossResolver.load_object(
-            hyperoptloss_name, config, kwargs={}, extra_dir=config.get("hyperopt_path")
+            hyperoptloss_name, config, kwargs=kwargs, extra_dir=config.get("hyperopt_path")
         )
 
         # Assign timeframe to be used in hyperopt
