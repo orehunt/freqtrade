@@ -11,6 +11,7 @@ from collections import deque
 from math import factorial
 from typing import Any, Dict, List, Optional, Tuple, Set, Callable, Union
 from time import time as now
+from datetime import datetime
 from pathlib import Path
 from itertools import cycle
 
@@ -325,22 +326,43 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             rs,
         )
 
+    @staticmethod
+    def _set_hyperoptloss_attrs(
+        hyperoptloss: IHyperOptLoss,
+        config: dict,
+        min_date: datetime,
+        max_date: datetime,
+    ):
+        # Assign timeframe to be used in hyperopt
+        hyperoptloss.ticker_interval = str(config["timeframe"])
+        hyperoptloss.timeframe = str(config["timeframe"])
+        hyperoptloss.weighted_timeranges = config.get(
+            "hyperopt_weighted_timeranges", {}
+        )
+        hyperoptloss.min_date = min_date
+        hyperoptloss.max_date = max_date
+
     def _setup_loss_funcs(self):
         """ Map a (cycled) list of loss functions to the optimizers random states """
+        config = self.config.copy()
         if self.multi and not self.shared:
             self.calculate_loss_dict = {}
             loss_func_list = cycle(self.config.get("hyperopt_loss_multi", []))
             logger.debug(f"Cycling over loss functions: {loss_func_list}")
-            config = self.config.copy()
             # NOTE: the resolver walks over all the files in the dir on each call
             for rs in self.rngs:
                 config["hyperopt_loss"] = next(loss_func_list)
-                self.calculate_loss_dict[rs] = HyperOptLossResolver.load_hyperoptloss(
-                    config
-                ).hyperopt_loss_function
+                hyperoptloss = HyperOptLossResolver.load_hyperoptloss(config)
+                self._set_hyperoptloss_attrs(
+                    hyperoptloss, config, self.min_date, self.max_date
+                )
+                self.calculate_loss_dict[rs] = hyperoptloss.hyperopt_loss_function
         else:
             self.custom_hyperoptloss = HyperOptLossResolver.load_hyperoptloss(
                 self.config
+            )
+            self._set_hyperoptloss_attrs(
+                self.custom_hyperoptloss, config, self.min_date, self.max_date
             )
             self.calculate_loss = self.custom_hyperoptloss.hyperopt_loss_function
 
@@ -1138,6 +1160,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                 f"and timerange, min candle ratio {candles_ratio:.02} < {min_candles_ratio:.02}"
             )
         min_date, max_date = get_timerange(preprocessed)
+        self.min_date, self.max_date = min_date, max_date
 
         logger.info(
             f"Hyperopting with data from {min_date.strftime(DATETIME_PRINT_FORMAT)} "
@@ -1215,11 +1238,9 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             # filtering is used
             except IndexError:
                 trials = self.load_trials(
-                    self.trials_file,
-                    self.trials_instance,
-                    backend.trials,
+                    self.trials_file, self.trials_instance, backend.trials,
                 )
-                best_trial = trials.sort_values(by='loss')[0]
+                best_trial = trials.sort_values(by="loss")[0]
                 best = self.trials_to_dict(best_trial)
 
             self.print_epoch_details(best, self.epochs_limit(), self.print_json)

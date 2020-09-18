@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Dict, List, Any, Callable, Tuple, Union
 from abc import abstractmethod
 from time import sleep
+from datetime import datetime
 from os import makedirs
 
 
@@ -95,6 +96,8 @@ class HyperoptData:
     Xi_file: Path
 
     metrics = ("profit", "avg_profit", "duration", "trade_count", "loss")
+    min_date: datetime
+    max_date: datetime
 
     def __init__(self, config):
         self.config = config
@@ -209,17 +212,22 @@ class HyperoptData:
                 # save on storage to hdf, lock is blocking
                 locked = trials_state.lock.acquire()
                 if locked:
-                    trials.to_hdf(
-                        trials_file,
-                        key=instance_name,
-                        mode="a",
-                        complib="blosc:zstd",
-                        complevel=2,
-                        append=append,
-                        format="table",
-                        data_columns=data_columns,
-                        min_itemsize=min_itemsize,
-                    )
+                    try:
+                        trials.to_hdf(
+                            trials_file,
+                            key=instance_name,
+                            mode="a",
+                            complib="blosc:zstd",
+                            complevel=2,
+                            append=append,
+                            format="table",
+                            data_columns=data_columns,
+                            min_itemsize=min_itemsize,
+                        )
+                    except ValueError as e:
+                        bad_string = trials["results_explanation"].str.len().max()
+                        logger.info(e, "\n", f"max len string: {bad_string}")
+
                 if not backup:
                     trials_state.num_saved += num_trials
                     if final:
@@ -695,6 +703,7 @@ class HyperoptData:
         last_epoch = None
         steps, step_v = HyperoptData.find_steps(step_k, step_values, trials)
 
+        # print("looping over {steps} steps!")
         for n, s in enumerate(steps):
             try:
                 t = (

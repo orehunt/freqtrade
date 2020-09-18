@@ -1,4 +1,7 @@
 #!/bin/bash
+#conda activate freqtradej
+. .env/miniconda3/etc/profile.d/conda.sh
+conda activate freqtradej
 
 while getopts "ta:d:q:e:i:p:f:xm:ctd:s:n:g:u:l:r:y:o:v:b:j" o; do
 	case "$o" in

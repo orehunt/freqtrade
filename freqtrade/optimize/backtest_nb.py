@@ -141,7 +141,6 @@ def shift_nb(arr, num, fill_value=np.nan, ofs=Union[None, ndarray]):
     return shifted
 
 
-
 @njit(cache=True, nogil=True)
 def calc_spread(high, low, close, ofs):
     """ A Simple Estimation of Bid Ask spread

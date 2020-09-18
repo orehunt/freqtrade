@@ -3,6 +3,7 @@ from freqtrade.optimize.backtest_constants import *  # noqa ignore=F405
 from freqtrade.optimize.backtest_utils import replace_values
 from freqtrade.strategy.interface import SellType
 from typing import Tuple, Dict, Any
+from collections import Iterable
 import os
 import pandas as pd
 import numpy as np
@@ -331,6 +332,15 @@ class BacktestDebug:
         print(s_res.iloc[pos])
         print(len(events_buy), len(events_sell))
         exit()
+
+    def _check_none(self, args: Iterable):
+        for a in args:
+            if isinstance(a, dict):
+                self._check_none(a.values())
+            elif type(a) in (list, tuple):
+                self._check_none(a)
+            elif a is None:
+                raise OperationalException("found a None")
 
     def _check_counter(self, at=0) -> bool:
         self.counter += 1

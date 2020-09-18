@@ -20,7 +20,6 @@ export FREQTRADE_NOSS=
 export FREQTRADE_USERDIR=$userdir
 
 pairlists=$dir/pairlists_static.json
-
 $main_exec \
 	backtesting -c $hyperopt \
 	-c $strategy \
