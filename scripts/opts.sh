@@ -107,6 +107,8 @@ if [ -n "$tuned_amounts" ]; then
 		amounts_tuned=$dir/amounts/off.json
 	elif [ "$tuned_amounts" != "${tuned_amounts#cfg}" ]; then
 		amounts_tuned=${tuned_amounts}
+	elif [ "$tuned_amounts" != "${tuned_amounts/\//}" ]; then
+		amounts_tuned=${tuned_amounts}
 	else
 		amounts_tuned=$dir/amounts/${tuned_amounts}.json
 	fi

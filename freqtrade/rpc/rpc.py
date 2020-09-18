@@ -226,20 +226,6 @@ class RPC:
 
         for day in range(0, timescale):
             profitday = today - timedelta(days=day)
-<<<<<<< HEAD
-            trades = (
-                Trade.get_trades(
-                    trade_filter=[
-                        Trade.is_open.is_(False),
-                        Trade.close_date >= profitday,
-                        Trade.close_date < (profitday + timedelta(days=1)),
-                    ]
-                )
-                .order_by(Trade.close_date)
-                .all()
-            )
-            curdayprofit = sum(trade.close_profit_abs for trade in trades)
-=======
             trades = Trade.get_trades(trade_filter=[
                 Trade.is_open.is_(False),
                 Trade.close_date >= profitday,
@@ -247,7 +233,6 @@ class RPC:
             ]).order_by(Trade.close_date).all()
             curdayprofit = sum(
                 trade.close_profit_abs for trade in trades if trade.close_profit_abs is not None)
->>>>>>> d8fdbd656b48d3f93b4177235daa2949ae81beb2
             profit_days[profitday] = {
                 'amount': curdayprofit,
                 'trades': len(trades)
