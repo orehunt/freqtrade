@@ -1,4 +1,5 @@
 from typing import NamedTuple, Union
+from enum import IntEnum
 from numba import float64, from_dtype, int64, types
 from numba.typed import Dict as nb_Dict
 from numpy import dtype

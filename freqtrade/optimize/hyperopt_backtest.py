@@ -7,11 +7,8 @@ from numpy import (
     append,
     arange,
     array,
-    concatenate,
     empty,
-    flip,
     floor,
-    full,
     isfinite,
     isin,
     isnan,
@@ -22,14 +19,11 @@ from numpy import (
     ones,
     repeat,
     sign,
-    swapaxes,
-    tile,
     unique,
     where,
     zeros,
 )
 
-np_cummax = maximum.accumulate
 
 from freqtrade.exceptions import OperationalException
 from freqtrade.optimize.backtest_constants import *  # noqa ignore=F405
@@ -46,7 +40,6 @@ from freqtrade.optimize.debug import dbg  # noqa ignore=F405
 from freqtrade.strategy.interface import SellType
 from pandas import (
     DataFrame,
-    MultiIndex,
     Series,
     Timedelta,
     concat,
@@ -168,6 +161,7 @@ class HyperoptBacktesting(Backtesting):
         self.force_sell_max_duration = self.config.get("signals", {}).get(
             "force_sell_max_duration", False
         )
+        self.spaces = self.config.get("spaces", {})
 
     def get_results(
         self, buy_vals: ndarray, sell_vals: ndarray, ohlc: DataFrame
@@ -606,16 +600,16 @@ class HyperoptBacktesting(Backtesting):
         if self.bt_ng == "loop_candles":
             try:
                 args = [df_vals, bought, bought_ranges, bts_vals]
-                _loop_candles_select_triggers(*args)
+                bts_vals = _loop_candles_select_triggers(self, *args)
             except TypeError as e:
                 raise OperationalException(e)
         elif self.bt_ng == "chunked":
             bts_vals = _chunked_select_triggers(
-                df_vals, bought, bought_ranges, bts_vals
+                self, df_vals, bought, bought_ranges, bts_vals
             )
         elif self.bt_ng == "loop_ranges":
             args = [df_vals, bought, bought_ranges, bts_vals]
-            bts_vals = _loop_ranges_select_triggers(*args)
+            bts_vals = _loop_ranges_select_triggers(self, *args)
 
         return bts_vals
 
@@ -1067,9 +1061,7 @@ class HyperoptBacktesting(Backtesting):
 
     @property
     def no_signals_optimization(self):
-        return (
-            "buy" not in self.config["spaces"] and "sell" not in self.config["spaces"]
-        )
+        return "buy" not in self.spaces and "sell" not in self.spaces
 
     def vectorized_backtest(
         self, processed: Dict[str, DataFrame], **kwargs,
