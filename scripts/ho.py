@@ -25,7 +25,7 @@ from hashlib import sha1
 from multiprocessing import Lock
 from joblib.externals.loky import get_reusable_executor
 
-from freqtrade.optimize.tools import sequencer as ts
+from user_data.modules import sequencer as ts
 
 from freqtrade.configuration.configuration import Configuration, RunMode
 from freqtrade.optimize.hyperopt import Hyperopt

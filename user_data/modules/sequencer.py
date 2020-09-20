@@ -5,8 +5,8 @@ from typing import Any, List, Tuple
 import numpy as np
 from pandas import DataFrame
 
-from freqtrade.data.tools import kit as tk
-from freqtrade.data.tools.kit import q
+from user_data.modules import toolkit  as tk
+from user_data.modules.toolkit import q
 
 PICKLE_PATH = "/tmp/.freqtrade/testcondition/"
 RESULTS_PATH = "user_data/hyperopt_results"

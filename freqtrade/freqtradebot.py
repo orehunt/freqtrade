@@ -30,8 +30,6 @@ from freqtrade.strategy.interface import IStrategy, SellType
 from freqtrade.strategy.strategy_wrapper import strategy_safe_wrapper
 from freqtrade.wallets import Wallets
 
-import user_data.modules.helper as hlp
-
 logger = logging.getLogger(__name__)
 
 
