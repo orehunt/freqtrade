@@ -8,7 +8,7 @@ from typing import List, Tuple
 import numpy as np
 from pandas import DataFrame
 
-from user_data.modules import testsequences as ts
+from user_data.modules import sequencer as ts
 from user_data.modules import toolkit as tk
 from user_data.modules.toolkit import q
 
