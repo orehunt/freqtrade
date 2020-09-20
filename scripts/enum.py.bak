@@ -1,0 +1,35 @@
+#!/usr/bin/python
+
+enums_start = [2, 5, 0, 11, 12, 25, 29, 44, 60, 81, 103, 111, 149, 175, 215, 262, 303, 337, 387, 444]
+next_n = enums_start[-1]
+
+for u in range(next_n + 1, next_n+100):
+    enums = [*enums_start, u]
+    sums = {}
+    subs = {}
+    broken = 0
+    for i, n in enumerate(enums[:-1]):
+        for e in enums[i+1:]:
+            sm = e + n
+            if sm in sums:
+                broken = sm
+            else:
+                sums[sm] = (e, "+", n)
+            sb = e - n
+            if sb in subs:
+                broken = sb
+            else:
+                subs[sb] = (e, "-", n)
+    if not broken:
+        break
+
+if broken:
+    print("SUMS:\n")
+    print(sums, "\n")
+    print("SUBS:\n")
+    print(subs)
+    print("broken at: ", broken)
+
+if not broken:
+    print("\nsuccess!")
+    print("next_n : ", u)
