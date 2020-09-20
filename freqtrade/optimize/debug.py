@@ -347,7 +347,7 @@ class BacktestDebug:
         return self.counter < at
 
     def _wrap_backtest(
-        self, processed: Dict[str, pd.DataFrame], **kwargs,
+            self, processed: Dict[str, pd.DataFrame], **kwargs,
     ) -> pd.DataFrame:
         """ debugging """
         # results to debug
@@ -362,13 +362,13 @@ class BacktestDebug:
         # if testing only one epoch use "store" once then set it to "load"
         cache = os.getenv("FQT_DEBUG", "")
         if cache == "load":
-            results = cls.vectorized_backtest(processed)
+            results = cls.vectorized_backtest(processed, **kwargs)
             saved_results = self._load_results()
         elif cache == "store":
             self._dump_results(cls.backtest_vanilla(processed, **kwargs,))
             exit()
         elif cache == "1":
-            results = cls.vectorized_backtest(processed)
+            results = cls.vectorized_backtest(processed, **kwargs)
         elif cache == "0":
             results = cls.backtest_vanilla(processed, **kwargs)
         else:

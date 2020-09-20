@@ -4,7 +4,8 @@ OPTS="$(realpath $(dirname $_))"
 . ${OPTS}/opts.sh
 
 # indicators1="sb" indicators2="macd"
-indicators1="sb" indicators2="liqu illiqu spread"
+# indicators1="sb" indicators2="liqu illiqu spread"
+indicators1="sb" indicators2="adx act tan"
 # indicators1="tn kj sa sb ck sh lo emas emam mp mpp tl ub mb lb"
 # indicators1="tn kj sa sb ck ub mb lb"
 # indicators1="sh lo emas emam mp mpp tl ub mb lb sar"
@@ -22,18 +23,18 @@ indicators1="sb" indicators2="liqu illiqu spread"
 
 limit=35000
 if [ -n "$plot_type" ]; then
-    plot_type=plot-profit
+	plot_type=plot-profit
 else
-    plot_type=plot-dataframe
+	plot_type=plot-dataframe
 fi
 if [ -n "$sqlite" ]; then
-    source=DB
-    db="--db-url=sqlite:///$sqlite"
-    file=
+	source=DB
+	db="--db-url=sqlite:///$sqlite"
+	file=
 else
-    source=file
-    file="--export-filename=${userdir}/backtest_results/${timeframe}.json"
-    db=
+	source=file
+	file="--export-filename=${userdir}/backtest_results/${timeframe}.json"
+	db=
 fi
 
 dfArgs="--plot-limit $limit --indicators1 $indicators1 --indicators2 $indicators2"
@@ -42,21 +43,21 @@ export NUMEXPR_MAX_THREADS=16
 export FREQTRADE_NOSS=
 export FREQTRADE_USERDIR=$userdir
 freqtrade $plot_type \
-          -c $strategy \
-          -c $hyperopt \
-          -c $live \
-          -c $exchange \
-          -c $amounts \
-          -c $amounts_default \
-          -c $amounts_tuned \
-          -c $askbid \
-          -c $pairlists \
-          -c $paths \
-          -i $timeframe \
-          --userdir $userdir \
-          --trade-source=$source \
-          $file \
-          $db \
-          --timerange=$timerange \
-          $dfArgs \
-          $pairs
+	-c $strategy \
+	-c $hyperopt \
+	-c $live \
+	-c $exchange \
+	-c $amounts \
+	-c $amounts_default \
+	-c $amounts_tuned \
+	-c $askbid \
+	-c $pairlists \
+	-c $paths \
+	-i $timeframe \
+	--userdir $userdir \
+	--trade-source=$source \
+	$file \
+	$db \
+	--timerange=$timerange \
+	$dfArgs \
+	$pairs

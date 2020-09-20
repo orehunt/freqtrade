@@ -212,9 +212,11 @@ class HyperoptBacktesting(Backtesting):
                 # cast as int since using as indexer
                 roi_ofs = sell_vals[where_roi, sell_cols["trigger_ofs"]].astype(int)
                 roi_low = ohlc_vals[roi_ofs, ohlc_cols["low"]]
+                roi_high = ohlc_vals[roi_ofs, ohlc_cols["high"]]
                 roi_close_rate = calc_roi_close_rate(
                     roi_open_rate,
                     roi_low,
+                    roi_high,
                     events_roi[:, sell_cols["roi_profit"]],
                     events_roi[:, sell_cols["high_low"]],
                     self.fee,

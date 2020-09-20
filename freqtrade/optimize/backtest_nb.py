@@ -279,7 +279,12 @@ def stoploss_triggered_col(data, low, rate):
 
 @njit(cache=True, nogil=True)
 def calc_roi_close_rate(
-    open_rate: ndarray, min_rate: ndarray, roi: ndarray, high_low: ndarray, fee: float
+    open_rate: ndarray,
+    min_rate: ndarray,
+    max_rate: ndarray,
+    roi: ndarray,
+    high_low: ndarray,
+    fee: float,
 ):
     roi_rate = -(open_rate * roi + open_rate * (1 + fee)) / (fee - 1)
     return np.fmax(roi_rate, min_rate)
@@ -533,8 +538,8 @@ def iter_triggers(
             set_last_trigger(n, tf, last_trigger, fl_cols)
             triggered = False
         # data for the current trade
-        open_rate = fl_cols["bopen"][n]
-        stoploss_static, stoploss_rate = calc_stoploss_static(open_rate, fl["stoploss"])
+        buy_rate = fl_cols["bopen"][n]
+        stoploss_static, stoploss_rate = calc_stoploss_static(buy_rate, fl["stoploss"])
         # loop over the range of the current trade
         tf = b
         for i, low in enumerate(
@@ -551,7 +556,7 @@ def iter_triggers(
 
             # otherwise check against new high
             high_profit = calc_high_profit(
-                open_rate, fl_cols["ohlc_high"][tf], fl["stake_amount"], fl["fee"]
+                buy_rate, fl_cols["ohlc_high"][tf], fl["stake_amount"], fl["fee"]
             )
             stoploss_rate = calc_trailing_rate(
                 stoploss_rate, tf, bl, high_profit, fl_cols, fl

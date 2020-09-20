@@ -88,6 +88,9 @@ FORCE_SELL_AFTER = {
     "1d": 24,  # 24 days
 }
 
+# the weight of the next price point (in ohlc) compared to the current one
+SLIPPAGE_BALANCE = {"1m": 0.5, "5m": 0.3, "15m": 0.2, "1h": 0.1, "8h": 0.05, "1d": 0.03}
+
 
 class Candle(IntEnum):
     NOOP = 0

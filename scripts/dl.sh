@@ -10,7 +10,7 @@ quote=${quote:-usdt}
 pairsfile=${pairsfile:-"--pairs-file ${pairs_dir}/${exchange_name}_${quote}${spread}.json"}
 pairs=${pairs:-$pairsfile}
 # datahandler=parquet
-# datahandler=jsongz
+# datahandler=json
 datahandler=hdf5
 
 freqtrade download-data \

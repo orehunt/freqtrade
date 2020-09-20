@@ -1,4 +1,10 @@
 #!/usr/bin/env python
+"""
+Examples:
+#     timeframe jobs  nocache lossfunc      mode        timerange     epochs maxtrades   points  spaces                      clear_instance   disable_position_stacking
+ho.py -i 1h     -j 14 -b      -lo OmegaLoss -mode multi -g 20180101-  -e 800 -mt 20      -pts 1  -sgn trailing,stoploss,roi  -res             -ns
+
+"""
 
 import glob
 import json
@@ -19,7 +25,7 @@ from hashlib import sha1
 from multiprocessing import Lock
 from joblib.externals.loky import get_reusable_executor
 
-from user_data.modules import testsequences as ts
+from freqtrade.optimize.tools import sequencer as ts
 
 from freqtrade.configuration.configuration import Configuration, RunMode
 from freqtrade.optimize.hyperopt import Hyperopt
