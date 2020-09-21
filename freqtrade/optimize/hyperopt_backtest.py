@@ -124,9 +124,7 @@ class HyperoptBacktesting(Backtesting):
 
         backtesting_amounts = config.get("backtesting_amounts", {})
         self.stoploss_enabled = backtesting_amounts.get("stoploss", False)
-        self.trailing_enabled = backtesting_amounts.get("trailing", False) and config[
-            "amounts"
-        ].get("trailing_stop", False)
+        self.trailing_enabled = backtesting_amounts.get("trailing", False)
         self.roi_enabled = backtesting_amounts.get("roi", False)
         self.any_trigger = (
             self.stoploss_enabled or self.trailing_enabled or self.roi_enabled
@@ -141,19 +139,24 @@ class HyperoptBacktesting(Backtesting):
             if f
         ]
         self.account_for_spread = backtesting_amounts.get("account_for_spread", True)
-        # null all config amounts for disabled ones (to compare against vanilla backtesting)
-        if not self.roi_enabled:
-            config["amounts"]["roi"] = {"0": 10}
-            config["minimal_roi"] = {"0": 10}
-        if not self.trailing_enabled:
-            config["amounts"]["trailing_stop"] = False
-            config["trailing_stop"] = False
-        if not self.stoploss_enabled:
-            config["amounts"]["stoploss"] = -100
-            config["stoploss"] = -100
 
         # parent init after config overrides
         super().__init__(config)
+
+        # after having loaded the strategy
+        # null all config amounts for disabled ones (to compare against vanilla backtesting)
+        if not self.roi_enabled:
+            self.strategy.amounts["roi"] = {"0": 10}
+            config["minimal_roi"] = {"0": 10}
+            self.strategy.minimal_roi = {"0": 10}
+        if not self.trailing_enabled:
+            self.strategy.amounts["trailing_stop"] = False
+            config["trailing_stop"] = False
+            self.strategy.trailing_stop = False
+        if not self.stoploss_enabled:
+            self.strategy.amounts["stoploss"] = -100
+            config["stoploss"] = -100
+            self.strategy.stoploss = -100
 
         self.position_stacking = self.config.get("position_stacking", False)
         if self.config.get("max_open_trades", 0) > 0:
@@ -164,12 +167,11 @@ class HyperoptBacktesting(Backtesting):
         self.spaces = self.config.get("spaces", {})
 
     def get_results(
-        self, buy_vals: ndarray, sell_vals: ndarray, ohlc: DataFrame
+        self, buy_vals: ndarray, sell_vals: ndarray, ohlc_vals: ndarray
     ) -> DataFrame:
+        ohlc_cols = self.df_loc
         buy_cols = self.bts_loc
         sell_cols = buy_cols
-        ohlc_vals = ohlc.values.astype(float)
-        ohlc_cols = df_cols(ohlc)
         # choose sell rate depending on sell reason and set sell_reason
         # add new needed columns
         sell_vals = add_columns(sell_vals, sell_cols, ("close_rate", "trigger_ohlc"))
@@ -200,29 +202,33 @@ class HyperoptBacktesting(Backtesting):
         # since values are set cascading, the order is inverted
         # NOTE: using .astype(bool) converts nan to True
         if self.roi_enabled:
+            # assert np.isfinite(sell_vals[:, sell_cols["roi_triggered"]]).all()
             roi_triggered = sell_vals[:, sell_cols["roi_triggered"]].astype(bool)
             where_roi = where(roi_triggered)[0]
             if len(where_roi):
+                # use this only for read operations, assign on sell_vals
                 events_roi = sell_vals[roi_triggered]
                 sell_reason[where_roi] = SellType.ROI
                 for dst_col, src_col in zip(result_cols, trigger_cols):
                     sell_vals[where_roi, dst_col] = events_roi[:, src_col]
                 # calc close rate from roi profit, using low (of the trigger candle) as the minimum rate
-                roi_open_rate = buy_vals[where_roi, buy_cols["open"]]
+                roi_buy_rate = buy_vals[where_roi, buy_cols["open"]]
                 # cast as int since using as indexer
                 roi_ofs = sell_vals[where_roi, sell_cols["trigger_ofs"]].astype(int)
+                # assert (roi_ofs == ohlc_vals[roi_ofs, self.df_loc["ohlc_ofs"]]).all()
+                # the ohlc data of sell_events is not valid for triggers
+                # (since the events are generated from the bts array, which
+                # only includes ohlc data of buy/sell candles)
+                # so take the correct data from the original ohlc array
                 roi_low = ohlc_vals[roi_ofs, ohlc_cols["low"]]
-                roi_high = ohlc_vals[roi_ofs, ohlc_cols["high"]]
                 roi_close_rate = calc_roi_close_rate(
-                    roi_open_rate,
+                    roi_buy_rate,
                     roi_low,
-                    roi_high,
                     events_roi[:, sell_cols["roi_profit"]],
-                    events_roi[:, sell_cols["high_low"]],
                     self.fee,
                 )
                 roi_open_ofs = buy_vals[where_roi, buy_cols["ohlc_ofs"]].astype(int)
-                roi_open = ohlc_vals[roi_ofs, ohlc_cols["open"]]
+                roi_open = ohlc_vals[roi_open_ofs, ohlc_cols["open"]]
                 # override roi close rate with open if
                 roi_on_open_mask = (
                     # the trade lasts more than 1 candle
@@ -430,9 +436,17 @@ class HyperoptBacktesting(Backtesting):
         # get the df with the longest ohlc data since all the pairs will be padded to it
         # use float
         pair_counter = 0.0
+        # set startup offset from the most common starting index
+        # it is usually equal for all pairs unless pairs have missing data
+        first_indexes = [processed[p].index[0] for p in processed]
+        starts_idx, start_idx_counts = np.unique(first_indexes, return_counts=True)
+        self.startup_offset = starts_idx[start_idx_counts.argmax()]
         for pair, df in processed.items():
             # make sure to copy the df to not clobber the source data since it is accessed globally
             advised[pair] = self.advise_pair_df(df.copy(), pair, pair_counter)
+            # align index of pairs with possibly different startup offset
+            if advised[pair].index[0] != self.startup_offset:
+                advised[pair].index += self.startup_offset - advised[pair].index[0]
             pairs[pair] = pair_counter
             pair_counter += 1
         self.pairs = pairs
@@ -441,8 +455,6 @@ class HyperoptBacktesting(Backtesting):
         # the index shouldn't change after the advise call, so we can take the pre-advised index
         # to create the multiindex where each pair is indexed with max len
         df = concat(advised.values(), copy=False)
-        # set startup offset from the first index (should be equal for all pairs)
-        self.startup_offset = df.index[0]
         # add a column for pairs offsets to make the index unique
         # pairs_offset is the FIRST candle by contiguous index of each pair
         offsets_arr, self.pairs_offset = self._calc_pairs_offsets(df, return_ofs=True)
@@ -640,7 +652,7 @@ class HyperoptBacktesting(Backtesting):
             "bought_ranges": bought_ranges,
             "high_low": df_vals[:, self.df_loc["high_low"]],
         }
-        v["calc_offset"] = (v["sl_positive"] or v["sl_only_offset"],)
+        v["calc_offset"] = v["sl_positive"] != 0.0 or v["sl_only_offset"]
 
         # roi
         v["roi_cols_names"] = ("roi_profit", "roi_triggered")
@@ -1005,7 +1017,7 @@ class HyperoptBacktesting(Backtesting):
         self.bts_loc = bts_loc
         return events_buy, events_sell
 
-    def split_events_stack(self, bts_vals: ndarray):
+    def split_events_stack(self, bts_vals: ndarray, ohlc_vals: ndarray):
         """"""
         bts_loc = self.bts_loc
         if self.any_trigger:
@@ -1034,6 +1046,7 @@ class HyperoptBacktesting(Backtesting):
 
             events_sell = bts_vals[
                 isin(bts_vals[:, bts_loc["ohlc_ofs"]], nso)
+                # a candle with trigger can never be a sold candle
                 | isfinite(bts_vals[:, bts_loc["trigger_ofs"]])
             ]
             events_sell_repeats = ones(len(events_sell), dtype=int)
@@ -1116,10 +1129,10 @@ class HyperoptBacktesting(Backtesting):
         events_buy, events_sell = (
             self.split_events(bts_vals)
             if not self.position_stacking
-            else self.split_events_stack(bts_vals)
+            else self.split_events_stack(bts_vals, df_vals)
         )
 
         if dbg:
             dbg.bts_loc = self.bts_loc
             dbg._validate_events(events_buy, events_sell)
-        return self.get_results(events_buy, events_sell, df)
+        return self.get_results(events_buy, events_sell, df_vals)

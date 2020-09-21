@@ -902,7 +902,7 @@ class HyperoptData:
         is_multi = self.mode == "multi"
         if self.mode != "single":
             backend.wait_for_lock(epochs.lock, "space_reduction", logger)
-            if len(epochs.pinned_optimizers) != 0 or backend.optimizers.qsize() < jobs:
+            if len(epochs.space_reduction) != 0 or backend.optimizers.qsize() < jobs:
                 qs = backend.optimizers.qsize()
                 ds = len(epochs.pinned_optimizers)
                 raise OperationalException(

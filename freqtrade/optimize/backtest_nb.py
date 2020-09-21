@@ -281,9 +281,7 @@ def stoploss_triggered_col(data, low, rate):
 def calc_roi_close_rate(
     open_rate: ndarray,
     min_rate: ndarray,
-    max_rate: ndarray,
     roi: ndarray,
-    high_low: ndarray,
     fee: float,
 ):
     roi_rate = -(open_rate * roi + open_rate * (1 + fee)) / (fee - 1)
@@ -477,7 +475,7 @@ def copy_trigger_data(b, tf, n, fl_cols, it_cols):
 
 def define_callbacks(feat):
     global calc_stoploss_static, stoploss_is_triggered
-    if feat["stoploss_enabled"] or not feat["trailing_enabled"]:
+    if feat["stoploss_enabled"] or feat["trailing_enabled"]:
         calc_stoploss_static = calc_stoploss_static_op
         stoploss_is_triggered = stoploss_is_triggered_op
 

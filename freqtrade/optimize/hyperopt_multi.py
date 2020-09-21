@@ -282,16 +282,18 @@ class HyperoptMulti(HyperoptOut):
             if not backend.Xi_h and backend.trials_index:
                 backend.trials_index = 0
         else:
-            # at worker startup or at space reduction fetch an optimizer from the queue
-            if pid in epochs.pinned_optimizers:
+            # at space reduction fetch an optimizer from the pid map
+            if pid in epochs.space_reduction:
                 opt = epochs.pinned_optimizers[pid]
                 HyperoptMulti.reset_opt_state(opt)
                 epochs.pinned_optimizers[pid] = opt
+            # at worker startup  fetch an optimizer from the queue
             elif optimizers is not None and optimizers.qsize() > 0:
                 opt = optimizers.get(timeout=1)
                 HyperoptMulti.reset_opt_state(opt)
                 # store it back again to restore after global state is gced
                 optimizers.put(opt)
+                epochs.pinned_optimizers[pid] = opt
             else:
                 raise OperationalException(
                     "Global state was reclaimed and no optimizer instance was "

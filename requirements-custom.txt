@@ -5,3 +5,5 @@ psutil
 technical
 hurst
 vectorbt
+bottleneck
+numbagg

@@ -347,7 +347,7 @@ class BacktestDebug:
         return self.counter < at
 
     def _wrap_backtest(
-            self, processed: Dict[str, pd.DataFrame], **kwargs,
+        self, processed: Dict[str, pd.DataFrame], **kwargs,
     ) -> pd.DataFrame:
         """ debugging """
         # results to debug

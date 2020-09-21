@@ -24,6 +24,7 @@ from statistics import mean
 from hashlib import sha1
 from multiprocessing import Lock
 from joblib.externals.loky import get_reusable_executor
+from typing import Any, Dict
 
 from user_data.modules import sequencer as ts
 
@@ -54,7 +55,7 @@ paths = {
     "params": "params.json",
     "run": "run.json",
 }
-paths["data"] = f"f{paths['user']}/hyperopt_data"
+paths["data"] = f"{paths['user']}/hyperopt_data"
 paths["archive"] = f"{paths['user']}/hyperopt_archive"
 paths["evals"] = f"{paths['data']}/evals.json"
 paths["pos"] = f"{paths['pickle']}/pos.json"
@@ -67,7 +68,7 @@ ho: Hyperopt
 class Main:
 
     setup_logging_pre()
-    args = parse_hopt_args()
+    args: Any = parse_hopt_args()
 
     timeframe = args.i
     days = args.d
@@ -138,7 +139,7 @@ class Main:
     if sgn[0] == "":
         sgn = []
     spaces = set()
-    spaces_amounts_types = [["roi"], ["stoploss", "trailing"]]
+    amounts_groups = [("roi",), ("stoploss", "trailing")]
 
     # make a stub lock to save trials from outside hyperopt
     # stub = lambda: None
@@ -202,12 +203,12 @@ class Main:
         self.setup_config()
         setup_logging(self.config)
         logger.warning("Overriding matplotlib and ccxt.base.exchange logging levels")
-        logging.getLogger('matplotlib').setLevel(logging.WARNING)
-        logging.getLogger('ccxt.base.exchange').setLevel(logging.WARNING)
+        logging.getLogger("matplotlib").setLevel(logging.WARNING)
+        logging.getLogger("ccxt.base.exchange").setLevel(logging.WARNING)
 
         self.ho = Hyperopt(self.config)
 
-    def setup_config(self, space_type=None):
+    def setup_config(self, amounts_group=None):
         set_environment(self.args, paths, self.config)
         self.config["runmode"] = RunMode.HYPEROPT
         self.config["command"] = "hyperopt"
@@ -216,19 +217,19 @@ class Main:
             / "data"
             / self.read_json_file(self.exchange_config, "exchange")["name"]
         )
-        self.config_spaces(space_type)
+        self.config_spaces(amounts_group)
         config = Configuration.from_files(self.config_files)
         config.update(self.config)
         self.config = config
         self.config.update(self.read_json_file(self.roi_config))
         self.update_evals()
 
-    def update_config(self, space_type=None):
+    def update_config(self, amounts_group=None):
         self.config["timerange"] = self.timerange
         self.config["timeframe"] = self.timeframe
         self.calc_trades()
 
-        self.config_spaces(space_type)
+        self.config_spaces(amounts_group)
         # don't prefer sell signal when optimizing buy space
         if "buy" in self.spaces:
             self.config["ask_strategy"]["prefer_sell_signal"] = False
@@ -253,7 +254,9 @@ class Main:
                 return pairs.split(",")
             # keep n profitable pairs or discard n profitable pairs
             elif tp in ("b", "bk", "bd"):
-                exportfilename = f"{self.config['user_data_dir']}/backtest_results/{self.timeframe}*"
+                exportfilename = (
+                    f"{self.config['user_data_dir']}/backtest_results/{self.timeframe}*"
+                )
                 exportfilename = glob.glob(exportfilename)[0]
                 trades = load_trades(
                     "file",
@@ -268,7 +271,7 @@ class Main:
                 sorted_by_profit = sorted(pairs_profit, key=lambda k: pairs_profit[k])
                 if tp == "bk":
                     return sorted_by_profit[-abs(pairs_count) :]
-                else: # b, bd
+                else:  # b, bd
                     return sorted_by_profit[: -abs(pairs_count)]
             elif tp == "e":
                 exc = self.read_json_file(self.config_dir + pairs + ".json")
@@ -303,27 +306,27 @@ class Main:
         print("wrote the pairslist to:", self.exchange_config)
         return prev_pairs
 
-    def config_spaces(self, space_type=None, clear=False):
+    def config_spaces(self, amounts_group=None, clear=False):
         if clear:
             self.write_json_file({}, paths["spaces"], update=False)
         spaces_dict = {"timeframe": self.args.i}
         config = {}
-        if self.args.amt != 0 or self.args.ne:
+        if self.args.amt or self.args.ne:
             config["hyperopt_loss"] = "SharpeLoss"
-            if self.args.amt != 0:
+            if self.args.amt:
                 # disable position stacking when optimizing amounts
                 config["position_stacking"] = False
             # in -1 first run is all, then 1 by 1
             # in 1 only one run with all spaces
-            if self.args.amt in (-1, 1) and space_type == None:
+            if self.args.amt in ("all", "allone") and amounts_group == None:
                 self.spaces.update(["roi", "stoploss", "trailing"])
-            elif space_type != None:
+            elif self.args.amt == "byone" and amounts_group != None:
                 config.update(self.read_json_file(self.amounts_tuned_config))
                 # delete previous amounts when optimizing 1 by 1
                 for s in ("roi", "stoploss", "trailing"):
                     self.spaces.discard(s)
-                self.spaces.update(self.spaces_amounts_types[space_type])
-            else:
+                self.spaces.update(amounts_group)
+            elif not self.args.amt:
                 config.update(self.read_json_file(self.roi_config))
                 self.spaces.update(self.sgn if self.sgn else ["buy"])
             if self.args.ne:
@@ -362,7 +365,7 @@ class Main:
         os.environ["FQT_N_TICKERS"] = str(n_tickers)
         return n_tickers
 
-    def run_hyperopt(self, space_type=None, cv=False):
+    def run_hyperopt(self, amounts_group=None, cv=False):
         """ run freqtrade process and update the best result from hyperopt """
         # update spaces
         # go directly into CV mode from a previous run, so we skip the first optimization run
@@ -370,7 +373,7 @@ class Main:
             self.opt_cv()
             return
         else:
-            self.update_config(space_type)
+            self.update_config(amounts_group)
         print(
             Fore.GREEN
             + Style.BRIGHT
@@ -541,7 +544,7 @@ class Main:
             self.write_json_file({"cond_best": self.cond_best}, BEST_PATH, update=True)
         return prev_params, skipor
 
-    def read_json_file(self, file_path="params.json", key=""):
+    def read_json_file(self, file_path="params.json", key="") -> Dict[Any, Any]:
         with open(file_path, "r") as fe:
             fj = "".join(line for line in fe if not re.match("\s*(//|/\*|\*/)", line))
             data = json.loads(fj)
@@ -698,12 +701,12 @@ class Main:
     def print_config(self):
         config = self.config.copy()
         # convert unserializable types to str
-        config['runmode'] = str(config['runmode'])
-        config['user_data_dir'] = str(config['user_data_dir'])
-        config['datadir'] = str(config['datadir'])
-        config['exportfilename'] = str(config['exportfilename'])
-        config['spaces'] = list(config['spaces'])
-        del config['original_config']
+        config["runmode"] = str(config["runmode"])
+        config["user_data_dir"] = str(config["user_data_dir"])
+        config["datadir"] = str(config["datadir"])
+        config["exportfilename"] = str(config["exportfilename"])
+        config["spaces"] = list(config["spaces"])
+        del config["original_config"]
         # for k in config:
         #     print(k, type(config[k]))
         if self.args.path:
@@ -915,26 +918,23 @@ class Main:
             prev_params = self.process_last_condition(c, prev_params, skipand)
         return prev_params
 
-    def opt_amounts(self, spaces=args.amt):
+    def opt_amounts(self, amounts=args.amt):
         # disable ignore roi
-        self.config["ask_strategy"]["ignore_roi_if_buy_signal"] = False
+        if "roi" in self.spaces or "all" in self.spaces:
+            self.config["ask_strategy"]["ignore_roi_if_buy_signal"] = False
         # reset best
         self.write_json_file({"run_best": None}, paths["best"], update=False)
-        len_spa = len(self.spaces_amounts_types)
-        if spaces == 1:
+        if amounts == "all":
             self.run_hyperopt()
             return
         else:
-            if (
-                spaces == -1
-            ):  # this does a first run with all the limit, then loop one by one
+            if amounts == "allone":
+                # this does a first run with all the limit, then loop one by one
                 self.run_hyperopt()
-                spaces = len_spa
-            space_type = spaces % len_spa
-            while space_type < len_spa:
-                self.run_hyperopt(space_type)
-                self.update_amounts()
-                space_type += 1
+            if amounts in ("allone", "byone"):
+                for grp in self.amounts_groups:
+                    self.run_hyperopt(amounts_group=grp)
+                    self.update_amounts()
 
     def opt_amounts_per_pair(self):
         pairs_amounts_path = f"{self.config_dir}/amounts/pairs"
@@ -994,7 +994,8 @@ class Main:
         if best is None:
             logger.info("Skipping update amounts as no best trial was found")
             return
-        best = self.ho.trials_to_dict(best)[0]
+        if isinstance(best, DataFrame):
+            best = self.ho.trials_to_dict(best)[0]
         prev_best = self.read_json_file(paths["best"], "run_best")
         if len(best) < 1:
             print("update_amounts: empty results,", best)
@@ -1199,7 +1200,7 @@ class Main:
             self.concat_pairs_amounts(self.args.cat)
         elif self.args.pp:
             self.opt_amounts_per_pair()
-        elif self.args.amt != 0:
+        elif self.args.amt:
             self.opt_amounts(self.args.amt)
         elif self.args.pl:
             self.pick_limits()
