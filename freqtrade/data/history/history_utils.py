@@ -149,8 +149,7 @@ def _load_cached_data_for_updating(
     """
     start = None
     if timerange:
-        if timerange.starttype == "date":
-            # TODO: convert to date for conversion
+        if timerange.starttype == 'date':
             start = datetime.fromtimestamp(timerange.startts, tz=timezone.utc)
 
     # Intentionally don't pass timerange in - since we need to load the full dataset.

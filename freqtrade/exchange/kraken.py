@@ -4,7 +4,7 @@ from typing import Any, Dict
 
 import ccxt
 
-from freqtrade.exceptions import (DDosProtection, ExchangeError,
+from freqtrade.exceptions import (DDosProtection, InsufficientFundsError,
                                   InvalidOrderException, OperationalException,
                                   TemporaryError)
 from freqtrade.exchange import Exchange
@@ -107,7 +107,7 @@ class Kraken(Exchange):
             logger.info("stoploss order added for %s. " "stop price: %s.", pair, stop_price)
             return order
         except ccxt.InsufficientFunds as e:
-            raise ExchangeError(
+            raise InsufficientFundsError(
                 f'Insufficient funds to create {ordertype} sell order on market {pair}. '
                 f'Tried to create stoploss with amount {amount} at stoploss {stop_price}. '
                 f'Message: {e}') from e

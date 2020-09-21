@@ -229,9 +229,6 @@ class ApiServer(RPC):
             f"{BASE_URI}/forcesell", "forcesell", view_func=self._forcesell, methods=["POST"]
         )
 
-        # TODO: Implement the following
-        # help (?)
-
     @require_login
     def page_not_found(self, error):
         """

@@ -26,12 +26,18 @@ def start_download_data(args: Dict[str, Any]) -> None:
     """
     config = setup_utils_configuration(args, RunMode.UTIL_EXCHANGE)
 
+    if 'days' in config and 'timerange' in config:
+        raise OperationalException("--days and --timerange are mutually exclusive. "
+                                   "You can only specify one or the other.")
     timerange = TimeRange()
     if "days" in config:
         time_since = arrow.utcnow().shift(days=-config["days"]).strftime("%Y%m%d")
         timerange = TimeRange.parse_timerange(f"{time_since}-")
 
-    if "pairs" not in config:
+    if 'timerange' in config:
+        timerange = timerange.parse_timerange(config['timerange'])
+
+    if 'pairs' not in config:
         raise OperationalException(
             "Downloading data requires a list of pairs. "
             "Please check the documentation on how to configure this."
