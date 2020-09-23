@@ -207,8 +207,6 @@ class HyperoptData:
                 logger.debug(f"Saving {num_trials} {plural(num_trials, 'epoch')}.")
                 # cast types
                 trials = HyperoptData.cast_trials_types(trials)
-                # print(trials.loc[trials.isna().any(axis=1)])
-                trials = HyperoptData.cast_trials_types(trials)
                 # save on storage to hdf, lock is blocking
                 locked = trials_state.lock.acquire()
                 if locked:
@@ -913,8 +911,7 @@ class HyperoptData:
                     opt_trials, trials_params = self.filter_trials_by_opt(
                         opt.rs, trials, min_trials
                     )
-                    if opt_trials is None:
-                        backend.optimizers.put(opt)
+                    if opt_trials:
                         continue
                     reduced_losses.extend(opt_trials["loss"].values.tolist())
                 opt_dims = (
@@ -930,8 +927,8 @@ class HyperoptData:
                     opt.space = Space(opt_dims)
                     del opt.Xi[:], opt.yi[:]
                     reduced_optimizers.append(opt.rs)
-                epochs.pinned_optimizers[oid] = opt
-                epochs.space_reduction[oid] = True
+                    epochs.pinned_optimizers[oid] = opt
+                epochs.space_reduction[oid] = opt_dims is True
             backend.epochs.lock.release()
         else:
             if new_dims:

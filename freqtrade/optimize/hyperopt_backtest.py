@@ -146,7 +146,7 @@ class HyperoptBacktesting(Backtesting):
         # after having loaded the strategy
         # null all config amounts for disabled ones (to compare against vanilla backtesting)
         if not self.roi_enabled:
-            self.strategy.amounts["roi"] = {"0": 10}
+            self.strategy.amounts["minimal_roi"] = {0: 10}
             config["minimal_roi"] = {"0": 10}
             self.strategy.minimal_roi = {"0": 10}
         if not self.trailing_enabled:
@@ -227,12 +227,12 @@ class HyperoptBacktesting(Backtesting):
                     events_roi[:, sell_cols["roi_profit"]],
                     self.fee,
                 )
-                roi_open_ofs = buy_vals[where_roi, buy_cols["ohlc_ofs"]].astype(int)
-                roi_open = ohlc_vals[roi_open_ofs, ohlc_cols["open"]]
+                roi_buy_ofs = buy_vals[where_roi, buy_cols["ohlc_ofs"]].astype(int)
+                roi_open = ohlc_vals[roi_ofs, ohlc_cols["open"]]
                 # override roi close rate with open if
                 roi_on_open_mask = (
                     # the trade lasts more than 1 candle
-                    (roi_ofs - roi_open_ofs > 0)
+                    (roi_ofs - roi_buy_ofs > 0)
                     # and the open rate triggers roi
                     & (roi_open > roi_close_rate)
                 )

@@ -75,6 +75,7 @@ def concat_timeframes_data(
     timeframes: Union[Tuple[str, ...], None] = None,
     sort=True,
     source_df: pd.DataFrame = None,
+    df_list: List[pd.DataFrame] = [],
 ) -> pd.DataFrame:
     """
     Concatenate combinations of pairs and timeframes, using dates as index.
@@ -103,16 +104,19 @@ def concat_timeframes_data(
     else:
         data = []
         last_date = datetime.now()
-    for pair, tf, td in pairs_tf:
-        prefix = f"{tf}_{pair}_"
-        pair_df = get_data(pair=pair, timeframe=tf, last_date=last_date)
-        pair_df.set_index("date", inplace=True)
-        # longer timeframes have to be shifted, because longer candles
-        # appear later in the timeline
-        if td > base_td:
-            pair_df.index = pair_df.index + td
-        pair_df.columns = prefix + pair_df.columns
-        data.append(pair_df)
+    if not len(df_list):
+        for pair, tf, td in pairs_tf:
+            prefix = f"{tf}_{pair}_"
+            pair_df = get_data(pair=pair, timeframe=tf, last_date=last_date)
+            pair_df.set_index("date", inplace=True)
+            # longer timeframes have to be shifted, because longer candles
+            # appear later in the timeline
+            if td > base_td:
+                pair_df.index = pair_df.index + td
+            pair_df.columns = prefix + pair_df.columns
+            data.append(pair_df)
+    else:
+        data.extend(df_list)
 
     cc_df = pd.concat(data, axis=1)
     cc_df.fillna(method="pad", inplace=True)
@@ -121,4 +125,4 @@ def concat_timeframes_data(
     cc_df.dropna(inplace=True)
     cc_df.reset_index(drop=False, inplace=True)
     # print(cc_df.iloc[:10])
-    return cc_df
+    return cc_df, data if source_df is None else data[1:]

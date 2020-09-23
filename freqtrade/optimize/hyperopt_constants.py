@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 MULTI_SPACE_CONFIG = {
   "hyperopt_list_best": ["sum", "ratio"],
-  "hyperopt_space_reduction_interval": 1000,
+  "hyperopt_space_reduction_interval": 10000,
   "hyperopt_list_pct_best": 0.33,
   "hyperopt_list_cutoff_best": 0.66,
   "hyperopt_list_profitable": False,
@@ -48,7 +48,7 @@ MULTI_SPACE_CONFIG = {
 
 SHARED_SPACE_CONFIG = {
   "hyperopt_list_best": ["sum", "ratio"],
-  "hyperopt_space_reduction_interval": 1000,
+  "hyperopt_space_reduction_interval": 10000,
   "hyperopt_list_pct_best": "std",
   "hyperopt_list_cutoff_best": "mean",
   "hyperopt_list_profitable": False,

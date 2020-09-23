@@ -326,8 +326,15 @@ class Main:
                 for s in ("roi", "stoploss", "trailing"):
                     self.spaces.discard(s)
                 self.spaces.update(amounts_group)
-            elif not self.args.amt:
-                config.update(self.read_json_file(self.roi_config))
+            else:
+                if self.args.amt == "off":
+                    config["backtesting_amounts"] = {
+                        "roi": False,
+                        "trailing": False,
+                        "stoploss": False,
+                    }
+                elif not self.args.amt:
+                    config.update(self.read_json_file(self.roi_config))
                 self.spaces.update(self.sgn if self.sgn else ["buy"])
             if self.args.ne:
                 if not self.args.lo:
@@ -987,7 +994,10 @@ class Main:
             results, _, _ = self.get_trials(
                 wait=True, instance=(self.args.inst or "last"), ignore_empty=True, cv=cv
             )
-            best = results.iloc[[ua - 1]]
+            if isinstance(results, list):
+                best = results[ua - 1]
+            else:
+                best = results.iloc[[ua - 1]]
         else:
             _, best, _ = self.get_trials(wait=False, cv=cv, ignore_empty=True)
 
@@ -1200,7 +1210,7 @@ class Main:
             self.concat_pairs_amounts(self.args.cat)
         elif self.args.pp:
             self.opt_amounts_per_pair()
-        elif self.args.amt:
+        elif self.args.amt not in ("", "off"):
             self.opt_amounts(self.args.amt)
         elif self.args.pl:
             self.pick_limits()

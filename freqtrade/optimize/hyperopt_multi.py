@@ -2,6 +2,8 @@ import warnings
 import logging
 import gc
 import os
+
+from numpy.core.numeric import flatnonzero
 from psutil import virtual_memory
 from pathlib import Path
 from typing import Any, Dict, List, Tuple, Optional, Union
@@ -19,6 +21,7 @@ from multiprocessing.managers import Namespace, SyncManager
 from queue import Queue
 from pandas import read_hdf, DataFrame, HDFStore
 from numpy import (
+    asarray,
     array,
     nanvar,
     nanstd,
@@ -29,6 +32,9 @@ from numpy import (
     inf,
     nan,
 )
+
+# use math finite check for small loops
+from math import isfinite as is_finite
 from decimal import Decimal
 
 # Import IHyperOpt and IHyperOptLoss to allow unpickling classes from these modules
@@ -386,7 +392,7 @@ class HyperoptMulti(HyperoptOut):
             # this can happen if space reduction has been performed and the
             # points of the previous tests are outside the new search space
             except ValueError as e:
-                logger.debug(e)
+                logger.info(e)
         else:
             # get a new point by copy if didn't tell new ones
             opt = HyperoptMulti.opt_rand(opt)
@@ -590,7 +596,7 @@ class HyperoptMulti(HyperoptOut):
         # if opt.Xi > sss the optimizer has more points than the estimated search space size, stop
         while opt.void != -1 and len(opt.Xi) < self.search_space_size:
             asked = opt.ask(n_points=self.opt_ask_points, strategy=self.lie_strat())
-            # The optimizer doesn't return a list when points are asked with None (skopt behaviour)
+            # the optimizer doesn't return a list when points are asked with None (skopt behaviour)
             if not self.opt_ask_points:
                 asked = {hash(asked): [asked, None]}
             else:
@@ -766,8 +772,12 @@ class HyperoptMulti(HyperoptOut):
         ):
             # only exclude results at the beginning when void loss is yet to be set
             void_filtered = list(
-                filter(lambda t: t["loss"] not in (VOID_LOSS, inf, -inf, nan), trials)
+                filter(
+                    lambda t: is_finite(t["loss"]) and t["loss"] is not VOID_LOSS,
+                    trials,
+                )
             )
+            # assert isfinite([t["loss"] for t in void_filtered]).all()
         else:
             if opt.void_loss == VOID_LOSS:  # set void loss once
                 if is_shared:

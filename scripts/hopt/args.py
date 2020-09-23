@@ -19,12 +19,13 @@ def parse_hopt_args() -> dict:
     parser.add_argument("-b", help="clear backtest cache", action="store_true")
     parser.add_argument("-s", help="no sell signal", action="store_true")
     # amounts:
-    # "": disabled
+    # "": use default amounts config, don't optimize
+    # "off": disable backtesting amounts calculation
     # "all": all
     # "allone": all, then one by one
     # "byone": one by one
     parser.add_argument("-amt", help="spaces for amounts", default="", type=str)
-    parser.add_argument("-edg", help="spaces for amounts", action="store_true")
+    parser.add_argument("-edg", help="spaces for edge amounts", action="store_true")
     parser.add_argument("-pp", help="path for pairlist for profits tuning", default="")
     parser.add_argument("-ne", help="optimize evals number", type=str, default="")
     parser.add_argument(

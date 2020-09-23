@@ -55,7 +55,7 @@ while getopts "ta:d:q:e:i:p:f:xm:ctd:s:n:g:u:l:r:y:o:v:b:j" o; do
 		opt_cv=$OPTARG
 		;;
 	b) dburl="--db-url $OPTARG" ;;
-	j) debug="-v${OPTARG}" ;;
+	j) debug="v${OPTARG}" ;;
 	x) set -x ;;
 	*) ;;
 	esac

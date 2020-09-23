@@ -13,15 +13,34 @@ pairs=${pairs:-$pairsfile}
 # datahandler=json
 datahandler=hdf5
 
-freqtrade download-data \
-	--data-format-ohlcv $datahandler \
-	--data-format-trades $datahandler \
-	-c $exchange \
-	-c $amounts \
-	--exchange $exchange_name \
-	$pairs \
-	--userdir $userdir \
-	-t $timeframe \
-	--days $days \
-	--userdir $userdir \
-	$dltype
+# prefer timerange over days
+if [ -n "$timerange" ]; then
+	timespan="--timerange $timerange"
+elif [ -n "$days" ]; then
+	timespan="--days $days"
+else
+	timespan=
+fi
+declare -A timeframes
+IFS=,
+c=0
+for tf in $timeframe; do
+	timeframes[$c]=$tf
+	c=$((c + 1))
+done
+unset IFS c
+
+for tf in ${timeframes[@]}; do
+	freqtrade download-data \
+		--data-format-ohlcv $datahandler \
+		--data-format-trades $datahandler \
+		-c $exchange \
+		-c $amounts \
+		--exchange $exchange_name \
+		$pairs \
+		--userdir $userdir \
+		-t $tf \
+		$timespan \
+		--userdir $userdir \
+		$dltype
+done

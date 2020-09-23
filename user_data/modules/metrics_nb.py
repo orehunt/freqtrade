@@ -50,8 +50,6 @@ def higher_is_better_metrics(rt, af):
     hib[6] = rnb.omega_ratio_1d_nb(rt, af)
     # winrate
     hib[7] = rt[rt > 0].shape[0] / (rt[rt <= 0].shape[0] or 1)
-    # max return
-    hib[8] = rt.max()
     return normalize_scalar_log10(hib), hib
 
 

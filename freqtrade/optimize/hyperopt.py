@@ -782,7 +782,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             # CV trials are saved in their own table
             self.trials_instance += "_cv"
             # reset cv trials only if not specified
-            if self.cv and not load_instance or load_instance == "cv":
+            if not load_instance or load_instance == "cv":
                 self.clear_instance(self.trials_file, self.trials_instance)
 
     def epochs_limit(self) -> int:
