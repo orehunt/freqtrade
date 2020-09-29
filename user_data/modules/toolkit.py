@@ -57,13 +57,15 @@ def q(query, level=0, scope=locals()) -> np.ndarray:
 
     parts = list(re.search(_stx, query).groups())
     # print(parts)
-    if (len(parts) < 3):
+    if len(parts) < 3:
         print("wrong syntax: " + query)
         return
 
-    if (parts[3] == None) or \
-        (parts[1] == None) or \
-        (parts[5] == None and parts[4] == None):
+    if (
+        (parts[3] == None)
+        or (parts[1] == None)
+        or (parts[5] == None and parts[4] == None)
+    ):
         print("noop for: " + query)
         return
 
@@ -110,15 +112,15 @@ def q(query, level=0, scope=locals()) -> np.ndarray:
             d1 = True
 
         if m2 not in scope and m2 not in globals():
-            if lm2 > 0 and m2[0] != "-" and not re.search('[0-9]', m2[0]):
-                if (lm2 < 2 or m2[1] != "."):
+            if lm2 > 0 and m2[0] != "-" and not re.search("[0-9]", m2[0]):
+                if lm2 < 2 or m2[1] != ".":
                     if m2 in d:
                         m2 = "d['" + m2 + "']"
                         d2 = True
                     else:
                         m2 = "d." + m2
         else:
-            eval(f'global {m2}')
+            eval(f"global {m2}")
 
     def add_v1(s):
         if d1 is True:
@@ -158,7 +160,9 @@ def q(query, level=0, scope=locals()) -> np.ndarray:
                     if afx1 != "":
                         qc[sm1] = eval(parts[0][1:] + "*" + "qc['" + am1 + "']", scope)
                     else:
-                        qc[sm1] = eval(parts[0][1:] + "*" + "d['" + o_m1 + "']" + _v, scope)
+                        qc[sm1] = eval(
+                            parts[0][1:] + "*" + "d['" + o_m1 + "']" + _v, scope
+                        )
             else:
                 sm1 = parts[0] + am1
                 sfx1 = getc("abs(", am1)
@@ -210,7 +214,7 @@ def q(query, level=0, scope=locals()) -> np.ndarray:
                 else:
                     qc[em2] = eval("qc['" + sm2 + "']" + parts[7], scope)
     else:
-        if 'efx2' not in locals():
+        if "efx2" not in locals():
             efx2 = ""
 
     def cm1(m1):
@@ -238,7 +242,7 @@ def q(query, level=0, scope=locals()) -> np.ndarray:
 
     ## compute op
     if len(op) == 2:
-        if op[0] == '<' or op[0] == '>':
+        if op[0] == "<" or op[0] == ">":
             if op[1] in ["-", "+"]:
                 m1 = "q('" + o_m1 + parts[2] + "/" + o_m2 + parts[6] + "')"
                 afx1 = ""
@@ -247,10 +251,10 @@ def q(query, level=0, scope=locals()) -> np.ndarray:
                     pfx = o_m2
                 else:
                     pfx = ""
-                if op[1] == '-':
-                    m2 = 'd.' + pfx + '_min' + _v
-                else:    # +
-                    m2 = 'd.' + pfx + '_max' + _v
+                if op[1] == "-":
+                    m2 = "d." + pfx + "_min" + _v
+                else:  # +
+                    m2 = "d." + pfx + "_max" + _v
                 op = op[0]
             else:
                 m1 = cm1(m1)
@@ -287,15 +291,15 @@ def cc(col, r, op, s=0, scope=locals()):
         return qc[cc_id]
     else:
         cc_id_s = col + ss + ".sr"
-        if cc_id_s not in qc:    ## cached shifted series
+        if cc_id_s not in qc:  ## cached shifted series
             qc[cc_id_s] = d[col].shift(s)
         cc_id_r = cc_id_s + rs
-        if cc_id_r not in qc:    ## cached rolling
-            if r is 0:
+        if cc_id_r not in qc:  ## cached rolling
+            if r == 0:
                 qc[cc_id_r] = qc[cc_id_s]
             else:
                 qc[cc_id_r] = qc[cc_id_s].rolling(r)
-        if hasattr(qc[cc_id_r], 'values') and hasattr(qc[cc_id_r], op):
+        if hasattr(qc[cc_id_r], "values") and hasattr(qc[cc_id_r], op):
             qc[cc_id] = eval("qc['" + cc_id_r + "']" + _v + "." + op + "()", scope)
         else:
             qc[cc_id] = eval("qc['" + cc_id_r + "']." + op + "()" + _v, scope)
@@ -306,24 +310,28 @@ def cc(col, r, op, s=0, scope=locals()):
 def rd(col, smp=3):
     query = "rd_" + col + str(smp)
     if query not in qc:
-        qc[query] = (cc(col, smp, 'min') < cc(col, smp, 'max'))
+        qc[query] = cc(col, smp, "min") < cc(col, smp, "max")
     return qc[query]
 
 
 ## wall ahead w=6 # ONLY use with sa/sb
-def wa(col, smp=6, verse='>', bounds=False):
+def wa(col, smp=6, verse=">", bounds=False):
     query = "wa_" + col + str(smp) + str(verse)
     if query not in qc:
         if bounds:
-            if verse == '>':
-                qc[query] = (cc(col, smp, 'min') / cc(col, smp, 'min', -smp) > d['_max'].values)
-            elif verse == '<':
-                qc[query] = (cc(col, smp, 'max') / cc(col, smp, 'max', -smp) < d['_min'].values)
+            if verse == ">":
+                qc[query] = (
+                    cc(col, smp, "min") / cc(col, smp, "min", -smp) > d["_max"].values
+                )
+            elif verse == "<":
+                qc[query] = (
+                    cc(col, smp, "max") / cc(col, smp, "max", -smp) < d["_min"].values
+                )
         else:
-            if verse == '>':
-                qc[query] = (cc(col, smp, 'min') > cc(col, smp, 'min', -smp))
-            elif verse == '<':
-                qc[query] = (cc(col, smp, 'max') < cc(col, smp, 'max', -smp))
+            if verse == ">":
+                qc[query] = cc(col, smp, "min") > cc(col, smp, "min", -smp)
+            elif verse == "<":
+                qc[query] = cc(col, smp, "max") < cc(col, smp, "max", -smp)
     return qc[query]
 
 
@@ -331,7 +339,7 @@ def wa(col, smp=6, verse='>', bounds=False):
 def dpf(col, smp=-8):
     query = "dip_" + col + str(smp)
     if query not in qc:
-        qc[query] = (q(col) > q(col + ".n@" + str(-smp)))
+        qc[query] = q(col) > q(col + ".n@" + str(-smp))
     return qc[query]
 
 
@@ -339,7 +347,7 @@ def dpf(col, smp=-8):
 def dip(col, smp=8):
     query = "dp_" + col + str(smp)
     if query not in qc:
-        qc[query] = (d[col].values <= cc(col, smp, 'min'))
+        qc[query] = d[col].values <= cc(col, smp, "min")
     return qc[query]
 
 
@@ -347,7 +355,7 @@ def dip(col, smp=8):
 def spk(col, smp=3, ratio=1.1):
     query = "spk_" + col + str(smp) + str(ratio)
     if query not in qc:
-        qc[query] = (d[col].values / cc(col, smp, 'mean') > ratio)
+        qc[query] = d[col].values / cc(col, smp, "mean") > ratio
     return qc[query]
 
 
@@ -355,7 +363,7 @@ def spk(col, smp=3, ratio=1.1):
 def dmp(col, smp=3, ratio=0.9):
     query = "dmp_" + col + str(smp) + str(ratio)
     if query not in qc:
-        qc[query] = (d[col].values / cc(col, smp, 'mean') < ratio)
+        qc[query] = d[col].values / cc(col, smp, "mean") < ratio
     return qc[query]
 
 
@@ -363,7 +371,7 @@ def dmp(col, smp=3, ratio=0.9):
 def dt(col, smp=12, shift=1):
     query = "dt_" + col + str(smp) + str(shift)
     if query not in qc:
-        qc[query] = (cc(col, smp, 'sum') < cc(col, smp, 'sum', shift))
+        qc[query] = cc(col, smp, "sum") < cc(col, smp, "sum", shift)
     return qc[query]
 
 
@@ -371,7 +379,7 @@ def dt(col, smp=12, shift=1):
 def dtf(col, smp=12, shift=-1):
     query = "dtf_" + col + str(smp) + str(shift)
     if query not in qc:
-        qc[query] = (cc(col, smp, 'sum') > cc(col, smp, 'sum', shift))
+        qc[query] = cc(col, smp, "sum") > cc(col, smp, "sum", shift)
     return qc[query]
 
 
@@ -379,7 +387,7 @@ def dtf(col, smp=12, shift=-1):
 def ut(col, smp=12, shift=1):
     query = "ut_" + col + str(smp) + str(shift)
     if query not in qc:
-        qc[query] = (cc(col, smp, 'sum') > cc(col, smp, 'sum', shift))
+        qc[query] = cc(col, smp, "sum") > cc(col, smp, "sum", shift)
     return qc[query]
 
 
@@ -387,7 +395,7 @@ def ut(col, smp=12, shift=1):
 def utf(col, smp=12, shift=-1):
     query = "utf_" + col + str(smp) + str(shift)
     if query not in qc:
-        qc[query] = (cc(col, smp, 'sum') < cc(col, smp, 'sum', shift))
+        qc[query] = cc(col, smp, "sum") < cc(col, smp, "sum", shift)
     return qc[query]
 
 
@@ -395,7 +403,7 @@ def utf(col, smp=12, shift=-1):
 def hrz(col, smp=12):
     query = "hrz_" + col + str(smp)
     if query not in qc:
-        qc[query] = (q(col) == cc(col, smp, 'max', -smp))
+        qc[query] = q(col) == cc(col, smp, "max", -smp)
     return qc[query]
 
 
@@ -403,7 +411,7 @@ def hrz(col, smp=12):
 def pl(col1, col2, smp=6, ratio=0.9):
     query = "md_" + col1 + col2 + str(smp) + str(ratio)
     if query not in qc:
-        qc[query] = (cc(col1, smp, 'sum') / cc(col2, smp, 'sum') < ratio)
+        qc[query] = cc(col1, smp, "sum") / cc(col2, smp, "sum") < ratio
     return qc[query]
 
 
@@ -412,8 +420,8 @@ def qt(col, smp=6, noise=None):
     query = "qt_" + str(col) + str(smp) + str(noise)
     if query not in qc:
         if noise == None:
-            noise = (d['_max'].values - d['_min'].values)
-        tmp = (cc(col, smp, 'mean') / q(col))
+            noise = d["_max"].values - d["_min"].values
+        tmp = cc(col, smp, "mean") / q(col)
         qc[query] = (tmp > 1 - noise) & (tmp < 1 + noise)
     return qc[query]
 
@@ -422,8 +430,9 @@ def qt(col, smp=6, noise=None):
 def cv(col1, col2, smp=3):
     query = "cv_" + col1 + col2 + str(smp)
     if query not in qc:
-        qc[query] = (cc(col1, smp, 'sum') - cc(col2, smp, 'sum') <
-                     cc(col1, smp, 'sum', smp) - cc(col2, smp, 'sum', smp))
+        qc[query] = cc(col1, smp, "sum") - cc(col2, smp, "sum") < cc(
+            col1, smp, "sum", smp
+        ) - cc(col2, smp, "sum", smp)
     return qc[query]
 
 
@@ -431,8 +440,9 @@ def cv(col1, col2, smp=3):
 def dv(col1, col2, smp=3):
     query = "dv_" + col1 + col2 + str(smp)
     if query not in qc:
-        qc[query] = (abs(cc(col1, smp, 'sum') - cc(col2, smp, 'sum')) >
-                     abs(cc(col1, smp, 'sum', smp) - cc(col2, smp, 'sum', smp)))
+        qc[query] = abs(cc(col1, smp, "sum") - cc(col2, smp, "sum")) > abs(
+            cc(col1, smp, "sum", smp) - cc(col2, smp, "sum", smp)
+        )
     return qc[query]
 
 
@@ -440,8 +450,9 @@ def dv(col1, col2, smp=3):
 def cvf(col1, col2, smp=6):
     query = "cvf_" + col1 + col2 + str(smp)
     if query not in qc:
-        qc[query] = (cc(col1, smp, 'sum') - cc(col2, smp, 'sum') >
-                     cc(col1, smp, 'sum', -smp) - cc(col2, smp, 'sum', -smp))
+        qc[query] = cc(col1, smp, "sum") - cc(col2, smp, "sum") > cc(
+            col1, smp, "sum", -smp
+        ) - cc(col2, smp, "sum", -smp)
     return qc[query]
 
 
@@ -449,8 +460,9 @@ def cvf(col1, col2, smp=6):
 def dvf(col1, col2, smp=6):
     query = "dvf_" + col1 + col2 + str(smp)
     if query not in qc:
-        qc[query] = (cc(col1, smp, 'sum') - cc(col2, smp, 'sum') <
-                     cc(col1, smp, 'sum', -smp) - cc(col2, smp, 'sum', -smp))
+        qc[query] = cc(col1, smp, "sum") - cc(col2, smp, "sum") < cc(
+            col1, smp, "sum", -smp
+        ) - cc(col2, smp, "sum", -smp)
     return qc[query]
 
 
@@ -459,9 +471,9 @@ def abv(col1, col2, sp=3, ratio=0):
     query = "abv_" + col1 + col2 + str(ratio) + str(smp)
     if query not in qc:
         if ratio == 0:
-            qc[query] = (cc(col1, smp, 'sum') > cc(col2, smp, 'sum'))
+            qc[query] = cc(col1, smp, "sum") > cc(col2, smp, "sum")
         else:
-            qc[query] = (cc(col1, smp, 'sum') / cc(col2, smp, 'sum') > ratio)
+            qc[query] = cc(col1, smp, "sum") / cc(col2, smp, "sum") > ratio
     return qc[query]
 
 
@@ -470,25 +482,28 @@ def cr(col1, col2, smp=3, ratio=0):
     query = "cr_" + col1 + col2 + str(ratio) + str(smp)
     if query not in qc:
         if ratio == 0:
-            qc[query] = ((cc(col1, smp, 'sum') > cc(col2, smp, 'sum'))
-                         & (cc(col1, smp, 'sum', smp) < cc(col2, smp, 'sum', smp)))
+            qc[query] = (cc(col1, smp, "sum") > cc(col2, smp, "sum")) & (
+                cc(col1, smp, "sum", smp) < cc(col2, smp, "sum", smp)
+            )
         else:
-            qc[query] = ((cc(col1, smp, 'sum', smp) / cc(col2, smp, 'sum', smp) > ratio)
-                         & (cc(col1, smp, 'sum', smp) / cc(col2, smp, 'sum', smp) > ratio))
+            qc[query] = (
+                cc(col1, smp, "sum", smp) / cc(col2, smp, "sum", smp) > ratio
+            ) & (cc(col1, smp, "sum", smp) / cc(col2, smp, "sum", smp) > ratio)
     return qc[query]
 
 
 ## to cross soon col1 \\ col2 (col1 going below col2)
 def tcr(col1, col2, smp=3, ratio=0):
     query = "tcr_" + col1 + col2 + str(ratio) + str(smp)
-    change1 = cc(col1, smp, 'sum', smp) - cc(col1, smp, 'sum')
-    change2 = cc(col2, smp, 'sum', smp) - cc(col2, smp, 'sum')
+    change1 = cc(col1, smp, "sum", smp) - cc(col1, smp, "sum")
+    change2 = cc(col2, smp, "sum", smp) - cc(col2, smp, "sum")
     if query not in qc:
         if ratio == 0:
-            qc[query] = (cc(col1, smp, 'sum') - change1 < cc(col2, smp, 'sum') - change2)
+            qc[query] = cc(col1, smp, "sum") - change1 < cc(col2, smp, "sum") - change2
         else:
-            qc[query] = ((cc(col1, smp, 'sum') - change1) /
-                         (cc(col2, smp, 'sum') - change2) < ratio)
+            qc[query] = (cc(col1, smp, "sum") - change1) / (
+                cc(col2, smp, "sum") - change2
+            ) < ratio
     return qc[query]
 
 
@@ -497,15 +512,15 @@ def tpr(col, hops=2, span=1):
     span = _p[span]
     span_str = str(span)
     query = "tpr_" + col + str(hops) + span_str
-    c1 = col + '-' + col + '.s' + span_str
-    c2 = col + '.s' + span_str + '-' + col + '.s' + str(2 * span)
-    c3 = col + '.s' + str(2 * span) + '-' + col + '.s' + str(3 * span)
+    c1 = col + "-" + col + ".s" + span_str
+    c2 = col + ".s" + span_str + "-" + col + ".s" + str(2 * span)
+    c3 = col + ".s" + str(2 * span) + "-" + col + ".s" + str(3 * span)
     if query not in qc:
         if hops == 2:
-            qc[query] = ((q(c1) < q(c2)) & (q(c2) < q(c3)))
+            qc[query] = (q(c1) < q(c2)) & (q(c2) < q(c3))
         else:
             if hops == 1:
-                qc[query] = (q(c1) < q(c2))
+                qc[query] = q(c1) < q(c2)
     return qc[query]
 
 
@@ -522,15 +537,15 @@ def tpr2(col, span=1):
 def prb(col, hops=2, span=1):
     span_str = str(span)
     query = "prb_" + col + str(hops) + span_str
-    c1 = col + '-' + col + '.s' + span_str
-    c2 = col + '.s' + span_str + '-' + col + '.s' + str(2 * span)
-    c3 = col + '.s' + str(2 * span) + '-' + col + '.s' + str(3 * span)
+    c1 = col + "-" + col + ".s" + span_str
+    c2 = col + ".s" + span_str + "-" + col + ".s" + str(2 * span)
+    c3 = col + ".s" + str(2 * span) + "-" + col + ".s" + str(3 * span)
     if query not in qc:
         if hops == 2:
-            qc[query] = ((q(c1) > q(c2)) & (q(c2) > q(c3)))
+            qc[query] = (q(c1) > q(c2)) & (q(c2) > q(c3))
         else:
             if hops == 1:
-                qc[query] = (q(c1) > q(c2))
+                qc[query] = q(c1) > q(c2)
     return qc[query]
 
 
@@ -546,15 +561,15 @@ def prb1(col, span=1):
 def prbf(col, hops=2, span=1):
     span_str = str(span)
     query = "prb_" + col + str(hops) + span_str
-    c1 = col + '-' + col + '.s@' + span_str
-    c2 = col + '.s@' + span_str + '-' + col + '.s@' + str(2 * span)
-    c3 = col + '.s@' + str(2 * span) + '-' + col + '.s@' + str(3 * span)
+    c1 = col + "-" + col + ".s@" + span_str
+    c2 = col + ".s@" + span_str + "-" + col + ".s@" + str(2 * span)
+    c3 = col + ".s@" + str(2 * span) + "-" + col + ".s@" + str(3 * span)
     if query not in qc:
         if hops == 2:
-            qc[query] = ((q(c1) < q(c2)) & (q(c2) < q(c3)))
+            qc[query] = (q(c1) < q(c2)) & (q(c2) < q(c3))
         else:
             if hops == 1:
-                qc[query] = (q(c1) < q(c2))
+                qc[query] = q(c1) < q(c2)
     return qc[query]
 
 
@@ -562,8 +577,9 @@ def prbf(col, hops=2, span=1):
 def swd(col1, col2, col3):
     query = "swi_" + col1 + col2 + col3
     if query not in qc:
-        qc[query] = ((q(col1 + '-' + col2) > q(col2 + '-' + col3))
-                     & (q(col1 + '.s1-' + col2 + '.s1') < q(col2 + '.s1-' + col3 + '.s1')))
+        qc[query] = (q(col1 + "-" + col2) > q(col2 + "-" + col3)) & (
+            q(col1 + ".s1-" + col2 + ".s1") < q(col2 + ".s1-" + col3 + ".s1")
+        )
     return qc[query]
 
 
@@ -571,7 +587,7 @@ def swd(col1, col2, col3):
 def lt(col, var, mult=1):
     query = "lt_" + col + str(var) + str(mult)
     if query not in qc:
-        qc[query] = (q(col) < mult * var)
+        qc[query] = q(col) < mult * var
     return qc[query]
 
 
@@ -579,7 +595,7 @@ def lt(col, var, mult=1):
 def gt(col, var=1, mult=1):
     query = "gt_" + col + str(var) + str(mult)
     if query not in qc:
-        qc[query] = q(col + '>' + mult*var)
+        qc[query] = q(col + ">" + mult * var)
     return qc[query]
 
 
@@ -587,7 +603,7 @@ def gt(col, var=1, mult=1):
 def mea(col, var, smp=3):
     query = "mab_" + col + str(var) + str(smp)
     if query not in qc:
-        qc[query] = cc(col, smp, 'mean') > var
+        qc[query] = cc(col, smp, "mean") > var
     return qc[query]
 
 
@@ -595,12 +611,12 @@ def mea(col, var, smp=3):
 def meb(col, var, smp=3):
     query = "mab_" + col + str(var) + str(smp)
     if query not in qc:
-        qc[query] = cc(col, smp, 'mean') < var
+        qc[query] = cc(col, smp, "mean") < var
     return qc[query]
 
 
 def ltm(col, denom=1):
     query = "ltm_" + col + str(denom)
     if query not in qc:
-        qc[query] = (q(col) / cc(col, 0, 'median') < denom)
+        qc[query] = q(col) / cc(col, 0, "median") < denom
     return qc[query]
