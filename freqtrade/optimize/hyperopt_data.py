@@ -1,56 +1,48 @@
+import json
 import logging
 import os
-from timeit import repeat
-import warnings
-import json
 import random
-from numpy import iinfo, int32, array, isin
-from numpy import repeat as np_repeat
-from pathlib import Path
-from typing import Dict, List, Any, Callable, Tuple, Union
+import warnings
 from abc import abstractmethod
-from time import sleep
 from datetime import datetime
 from os import makedirs
+from pathlib import Path
+from shutil import rmtree
+from time import sleep
+from typing import Any, Callable, Dict, List, Tuple, Union
+
+import numcodecs
+import zarr as za
+from numpy import array, iinfo, int32, isin
+from numpy import repeat as np_repeat
+
+za.storage.default_compressor = za.Zstd(level=2)
 
 
-from multiprocessing.managers import Namespace
-from pandas import Series, DataFrame, HDFStore, concat, isna, read_hdf
-from numpy import arange, float64, isfinite, nanmean
-from os import path
 import io
-
-
-from freqtrade.constants import HYPEROPT_LIST_STEP_VALUES
-from freqtrade.exceptions import OperationalException, DependencyException
-from freqtrade.misc import plural, round_dict
+from os import path
 
 # Import IHyperOpt and IHyperOptLoss to allow unpickling classes from these modules
 import freqtrade.optimize.hyperopt_backend as backend
-from freqtrade.optimize.hyperopt_backend import TrialsState, Epochs
-
-# from freqtrade.optimize.hyperopt_backend import Trial
-from freqtrade.optimize.hyperopt_interface import IHyperOpt  # noqa: F401
-from freqtrade.optimize.hyperopt_loss_interface import IHyperOptLoss  # noqa: F401
-
+from freqtrade.constants import HYPEROPT_LIST_STEP_VALUES
+from freqtrade.exceptions import DependencyException, OperationalException
+from freqtrade.misc import plural, round_dict
+from freqtrade.optimize.hyperopt_backend import Epochs, TrialsState
 from freqtrade.optimize.hyperopt_constants import OPTIMIZER_CUSTOM_ATTRS, VOID_LOSS
+from numpy import arange, float64, isfinite, nanmean
+from pandas import DataFrame, Series, concat, isna, json_normalize
 
 # Suppress scikit-learn FutureWarnings from skopt
 with warnings.catch_warnings():
     warnings.filterwarnings("ignore", category=FutureWarning)
     from skopt import Optimizer
-    from skopt.space import Space, Categorical, Dimension
-# Additional regressors already pluggable into the optimizer
-# from sklearn.linear_model import ARDRegression, BayesianRidge
-# possibly interesting regressors that need predict method override
-# from sklearn.ensemble import HistGradientBoostingRegressor
-# from xgboost import XGBoostRegressor
+    from skopt.space import Categorical, Space
 
 
 logger = logging.getLogger(__name__)
 
 
-class HyperoptData:
+class HyperoptData(backend.HyperoptBase):
     """
     Data and state for Hyperopt
     """
@@ -79,7 +71,6 @@ class HyperoptData:
     trials_instance: str
     # store the indentifier string here
     trials_instances_file: Path
-    Xi_cols: List = []
     # when to save trials
     trials_timeout: float
     trials_maxout: int
@@ -98,6 +89,9 @@ class HyperoptData:
     metrics = ("profit", "avg_profit", "duration", "trade_count", "loss")
     min_date: datetime
     max_date: datetime
+
+    _store: za.storage.DirectoryStore
+    _group: za.hierarchy.Group
 
     def __init__(self, config):
         self.config = config
@@ -119,6 +113,9 @@ class HyperoptData:
         )
         self.Xi_file = self.config["user_data_dir"] / self.hyperopt_dir / "Xi.pkl"
         self.cls_file = self.config["user_data_dir"] / self.hyperopt_dir / "cls.pkl"
+        self.trials_file = self.get_trials_file(self.config, self.trials_dir)
+        self._store = za.storage.DirectoryStore(self.trials_file)
+        self._group = za.hierarchy.open_group(store=self._store)
 
     def clear_hyperopt(self) -> None:
         """
@@ -128,9 +125,11 @@ class HyperoptData:
             makedirs(self.trials_dir)
         for f in [self.trials_file]:
             p = Path(f)
+            logger.info(f"Removing `{p}`.")
             if p.is_file():
-                logger.info(f"Removing `{p}`.")
                 p.unlink()
+            elif p.is_dir():
+                rmtree(p)
 
     @staticmethod
     def _space_params(params, space: str, r: int = None) -> Dict:
@@ -150,30 +149,17 @@ class HyperoptData:
     @staticmethod
     def cast_trials_types(trials: DataFrame) -> DataFrame:
         """ Force types for ambiguous metrics """
-        sep = "."
         trials = trials.astype(
             dtype={
                 "total_profit": float64,
                 "loss": float64,
-                f"results_metrics{sep}total_profit": float64,
-                f"results_metrics{sep}avg_profit": float64,
-                f"results_metrics{sep}duration": float64,
+                "total_profit": float64,
+                "avg_profit": float64,
+                "duration": float64,
             },
             copy=False,
         ).fillna(0)
         return trials
-
-    @staticmethod
-    def alias_cols(
-        trials: DataFrame, prefix: str, sep="."
-    ) -> Tuple[DataFrame, List[str]]:
-        cols_names = trials.filter(regex=f"^{prefix}{sep}").columns  # with dot
-        stripped_names = []
-        for name in cols_names:
-            stripped = name.replace(f"{prefix}{sep}", "")
-            trials[stripped] = trials[name]
-            stripped_names.append(stripped)
-        return trials, stripped_names
 
     @staticmethod
     def save_trials(
@@ -181,6 +167,8 @@ class HyperoptData:
         trials_file: Path,
         instance_name: str,
         trials_state: TrialsState = TrialsState(),
+        indexer: Tuple = (),
+        fields: List = [],
         final: bool = False,
         backup: bool = False,
         append: bool = True,
@@ -194,37 +182,35 @@ class HyperoptData:
         locked = False
         # this is needed because it is a string that can exceed
         # the size preset by pd, and in append mode it can't be changed
-        min_itemsize = {"results_explanation": 120}
-        if "roi" in trials.columns:  # roi stored as json
-            min_itemsize["roi"] = 190
+        # min_itemsize = {"results_explanation": 120}
+        # if "roi" in trials.columns:  # roi stored as json
+        #     min_itemsize["roi"] = 190
         # NOTE: make sure to only index the columns really used for indexing
         # since each parameter is stored in a different col, the col number can
         # be very high
-        data_columns = ["Xi_h", "random_state", "loss"]
+        # data_columns = ["Xi_h", "random_state", "loss"]
 
         while not saved:
             try:
-                logger.debug(f"Saving {num_trials} {plural(num_trials, 'epoch')}.")
+                logger.debug("Saving %s %s.", num_trials, plural(num_trials, "epoch"))
                 # cast types
                 trials = HyperoptData.cast_trials_types(trials)
-                # save on storage to hdf, lock is blocking
+                # save on storage, lock is blocking
                 locked = trials_state.lock.acquire()
                 if locked:
                     try:
-                        trials.to_hdf(
+
+                        HyperoptData._to_storage(
+                            trials[fields if fields else slice(None)],
                             trials_file,
-                            key=instance_name,
-                            mode="a",
-                            complib="blosc:zstd",
-                            complevel=2,
+                            instance_name,
+                            indexer=indexer,
+                            fields=fields,
                             append=append,
-                            format="table",
-                            data_columns=data_columns,
-                            min_itemsize=min_itemsize,
                         )
+
                     except ValueError as e:
-                        bad_string = trials["results_explanation"].str.len().max()
-                        logger.info(e, "\n", f"max len string: {bad_string}")
+                        logger.info(e)
 
                 if not backup:
                     trials_state.num_saved += num_trials
@@ -235,43 +221,112 @@ class HyperoptData:
                         )
                 saved = True
             except (IOError, OSError, AttributeError) as e:
-                if locked:
-                    trials_state.lock.release()
-                # If a lock on the hdf file can't be acquired
+                # If a lock on the file can't be acquired
                 if isinstance(e, AttributeError):
                     # reset table as it has been corrupted
                     append = False
                 logger.warn(
-                    f"Couldn't access the trials storage, retrying in {interval}.."
+                    f"Couldn't access the trials storage, {e} retrying in {interval}.."
                 )
                 sleep(interval)
                 interval += 0.5
             finally:
                 if locked:
                     trials_state.lock.release()
+                    locked = False
 
-    @abstractmethod
-    def log_trials(
-        self, trials_state: TrialsState, epochs: Epochs, rs: Union[None, int]
+    def _from_group(self, fields=[], indexer=slice(None)) -> DataFrame:
+        z = self._group.get(self.trials_instance)
+        if z is None:
+            return DataFrame()
+        columns = z.attrs.get("columns")
+        cols = []
+        if fields:
+            sf = set(fields)
+            idx = []
+            for n, f in enumerate(columns):
+                if f in sf:
+                    idx.append(n)
+                    cols.append(f)
+            indexer = (indexer, idx)
+        z = self._group.get(self.trials_instance)
+        if z:
+            data = z.get_orthogonal_selection(indexer)
+        else:
+            return DataFrame()
+        # consider 1d arrays as 1 row
+        if len(data.shape) == 1:
+            data.shape = (1, data.shape[0])
+        df = DataFrame(data=data, columns=cols or columns,)
+        return df
+
+    @staticmethod
+    def _to_storage(
+        trials: DataFrame,
+        trials_location: Union[Path, za.storage.DirectoryStore],
+        key: str,
+        indexer=(),
+        fields=[],
+        append: bool = True,
     ):
-        """ Calculate epochs and save results to storage """
+        if isinstance(trials_location, Path):
+            trials_location = za.storage.DirectoryStore(trials_location)
+        g = za.open_group(store=trials_location)
+        z = g.get(key)
+        if z is not None:
+            if append:
+                z.append(trials.values)
+            else:
+                if fields:
+                    columns = g[key].attrs["columns"]
+                    indexer = (indexer, [columns[f] for f in fields])
+                z.set_coordinate_selection(indexer, value=trials.values)
+        else:
+            g.create_dataset(
+                name=key,
+                data=trials.values,
+                dtype=object,
+                object_codec=numcodecs.Pickle(),
+                shape=trials.shape,
+            )
+            g[key].attrs["columns"] = trials.columns.values.tolist()
+
+    @staticmethod
+    def _from_storage(
+        trials_location: Union[Path, za.storage.DirectoryStore],
+        key: str,
+        indexer=slice(None),
+        fields: List = [],
+    ) -> DataFrame:
+        if isinstance(trials_location, Path):
+            trials_location = za.storage.DirectoryStore(trials_location)
+        g = za.group(store=trials_location)
+        trials = g.get(key)
+        columns = g[key].attrs["columns"]
+        if trials:
+            if fields:
+                sf = set(fields)
+                fields = [n for n, f in enumerate(columns) if f in sf]
+                indexer = (indexer, fields)
+            trials = trials.get_orthogonal_selection(indexer)
+        return DataFrame(trials, columns=fields or columns)
 
     @staticmethod
     def _read_trials(
-        trials_file: Path,
+        trials_location: Union[Path, za.storage.DirectoryStore],
         trials_instance: str,
         backup: bool,
         trials_state: TrialsState = backend.trials,
-        where="",
-        start=None,
+        fields: List = [],
+        indexer=slice(None),
         use_backup=True,
-    ) -> List:
+    ) -> DataFrame:
         """
         Read hyperopt trials file
         """
         # Only log at the beginning
         if hasattr(backend.trials, "exit") and not backend.trials.exit:
-            logger.info("Reading Trials from '%s'", trials_file)
+            logger.info("Reading Trials from '%s'", trials_location)
         trials = DataFrame()
         locked = False
         try:
@@ -282,8 +337,8 @@ class HyperoptData:
                 while not locked:
                     logger.debug("Acquiring trials state lock for reading trials")
                     locked = trials_state.lock.acquire()
-            trials = read_hdf(
-                trials_file, key=trials_instance, where=where, start=start
+            trials = HyperoptData._from_storage(
+                trials_location, trials_instance, indexer, fields
             )
             if locked:
                 trials_state.lock.release()
@@ -293,7 +348,7 @@ class HyperoptData:
             if backup and len(trials) > 0:
                 HyperoptData.save_trials(
                     trials,
-                    trials_file,
+                    trials_location,
                     instance_name=f"{trials_instance}_bak",
                     trials_state=trials_state,
                     backup=True,
@@ -302,22 +357,22 @@ class HyperoptData:
                 logger.warn(
                     f"Instance table {trials_instance} appears empty, using backup..."
                 )
-                trials = read_hdf(
-                    trials_file, key=f"{trials_instance}_bak", where=where
+                trials = HyperoptData._from_storage(
+                    trials_location, "{trials_instance}_bak", indexer
                 )
         except (
             KeyError,
             AttributeError,
-        ):  # trials instance is not in the database or corrupted
+        ) as e:  # trials instance is not in the database or corrupted
             # if corrupted
-            if backup or not start:
+            if backup or not indexer:
                 try:
                     logger.warn(
                         f"Instance table {trials_instance} either "
                         "empty or corrupted, trying backup..."
                     )
-                    trials = read_hdf(
-                        trials_file, key=f"{trials_instance}_bak", where=where
+                    trials = HyperoptData._from_storage(
+                        trials_location, f"{trials_instance}_bak", indexer
                     )
                 except KeyError:
                     logger.warn(f"Backup not found...")
@@ -409,40 +464,6 @@ class HyperoptData:
         logger.info(f"CSV-File created at {csv_file} !")
 
     @staticmethod
-    def trials_to_dict(trials: DataFrame):
-        """ Convert back from json normalize, nesting levels:
-        results_metrics, params_dict : 1
-        params_details : 2
-        and drop NaN
-        """
-        sep = "."  # separator is "." (dot)
-        trials = trials.copy()
-        for prefix in ("results_metrics", "params_dict", "params_details"):
-            # startswith does not accept regexp
-            match = f"{prefix}{sep}"
-            cols_with_prefix = trials.filter(regex=match)  # with dot
-            cols_with_prefix.columns = cols_with_prefix.columns.str.replace(
-                match, "", 1
-            )
-            trials = trials.loc[:, ~trials.columns.str.startswith(match)]
-            trials[prefix] = cols_with_prefix.to_dict("records")
-
-            if prefix == "params_details":
-                # one more level for spaces
-                spaces = {c.split(sep, 1)[0] for c in cols_with_prefix.columns}
-                for s in spaces:
-                    match = f"{s}{sep}"
-                    space = cols_with_prefix.filter(regex=f"^{match}")
-                    space.columns = space.columns.str.replace(match, "", 1)
-                    cols_with_prefix = cols_with_prefix.loc[
-                        :, ~cols_with_prefix.columns.str.startswith(match)
-                    ]
-                    cols_with_prefix[s] = space.to_dict("records")
-                trials[prefix] = cols_with_prefix.to_dict("records")
-
-        return trials.to_dict("records")
-
-    @staticmethod
     def _filter_options(config: Dict[str, Any]):
         """ Parse filtering config options into dict """
         return {
@@ -482,8 +503,7 @@ class HyperoptData:
         """
         hd = HyperoptData
         filters = hd._filter_options(config)
-        # add columns without prefixes for metrics
-        trials, _ = hd.alias_cols(trials, "results_metrics")
+        trials = trials.infer_objects()
 
         if not filters["enabled"] or len(trials) < 1:
             return hd.list_or_df(trials, return_list)
@@ -741,7 +761,9 @@ class HyperoptData:
         trials: DataFrame = DataFrame()
         has_lock = hasattr(trials_state, "lock")
         # locked = False
-        if trials_file.is_file() and trials_file.stat().st_size > 0:
+        if (
+            trials_file.is_dir() or trials_file.is_file()
+        ) and trials_file.stat().st_size > 0:
             trials = HyperoptData._read_trials(
                 trials_file,
                 trials_instance,
@@ -780,11 +802,7 @@ class HyperoptData:
 
     @staticmethod
     def clear_instance(
-        trials_file: Path,
-        instance_name: str,
-        where=None,
-        trials_state=None,
-        backup=False,
+        trials_file: Path, instance_name: str, trials_state=None, backup=False,
     ) -> bool:
         success = False
         locked = trials_state.lock.acquire() if trials_state else False
@@ -795,13 +813,13 @@ class HyperoptData:
             locked = trials_state.lock.acquire()
             interval += 0.5
         try:
-            with HDFStore(trials_file) as store:
-                store.remove("/{}".format(instance_name), where=where)
+            with za.open(str(trials_file)) as store:
+                del store["{}".format(instance_name)]
                 if backup:
-                    store.remove("/{}_bak".format(instance_name), where=where)
+                    del store["{}_bak".format(instance_name)]
                 success = True
         except (KeyError, IOError, OSError, AttributeError) as e:
-            logger.debug(f"Failed clearing instance: {e}")
+            logger.debug("Failed clearing instance: %s", e)
             pass
         if locked:
             trials_state.lock.release()
@@ -816,7 +834,7 @@ class HyperoptData:
             raise DependencyException(
                 "Strategy or Hyperopt name not specified, both are required."
             )
-        trials_file = trials_dir / f"{hyperopt}_{strategy}.hdf"
+        trials_file = trials_dir / f"{hyperopt}_{strategy}"
         return trials_file
 
     def _setup_optimizers(self):
@@ -887,11 +905,11 @@ class HyperoptData:
         if is_shared_or_single:
             # update optimizers with new dimensions
             # in shared/single mode only need to compute dimensions once
-            trials, trials_params = self.filter_trials_by_opt(None, trials, min_trials)
-            if trials is None:
+            trials_flt = self.filter_trials_by_opt(None, trials, min_trials)
+            if trials_flt is None:
                 return False
             new_dims = self.reduce_dimensions(
-                None, self.dimensions.copy(), trials_params, min_trials=min_trials,
+                None, self.dimensions.copy(), trials_flt, min_trials=min_trials,
             )
         else:
             new_dims = []
@@ -908,10 +926,8 @@ class HyperoptData:
                 )
             for oid, opt in epochs.pinned_optimizers.items():
                 if is_multi:
-                    opt_trials, trials_params = self.filter_trials_by_opt(
-                        opt.rs, trials, min_trials
-                    )
-                    if opt_trials:
+                    opt_trials = self.filter_trials_by_opt(opt.rs, trials, min_trials)
+                    if opt_trials is None:
                         continue
                     reduced_losses.extend(opt_trials["loss"].values.tolist())
                 opt_dims = (
@@ -919,7 +935,7 @@ class HyperoptData:
                     new_dims
                     # in multi mode when there are filtered trials
                     or self.reduce_dimensions(
-                        opt.rs, self.dimensions, trials_params, min_trials=min_trials,
+                        opt.rs, self.dimensions, opt_trials, min_trials=min_trials,
                     )
                 )
                 # don't update space if this optimizer didn't have filtered trials
@@ -947,24 +963,16 @@ class HyperoptData:
                     del self.opt.Xi[:], self.opt.yi[:]
                 reduced_optimizers.append(self.opt.rs)
 
-        # clear storage
-        if is_shared_or_single:
-            loss_vals = trials["loss"].unique().tolist()
-        elif is_multi:
-            loss_vals = reduced_losses
-        if len(loss_vals) and len(reduced_optimizers):
-            self.clear_instance(
-                self.trials_file,
-                self.trials_instance,
-                # NOTE: disequality (instead of gt) is needed for loss values
-                # to support different loss functions
-                where=f"(loss != {loss_vals}) and random_state == {reduced_optimizers}",
-                trials_state=trials_state,
-                backup=True,
-            )
+        # needed for clearing trials outside of new space from storage
+        # if is_shared_or_single:
+        #     loss_vals = trials_flt["loss"].unique().tolist()
+        # elif is_multi:
+        #     loss_vals = reduced_losses
         return True
 
-    def filter_trials_by_opt(self, rs: Union[int, None], trials, min_trials) -> Tuple:
+    def filter_trials_by_opt(
+        self, rs: Union[int, None], trials, min_trials
+    ) -> Union[None, DataFrame]:
         # filter all the trials at once
         trials = HyperoptData.filter_trials(trials, self.space_reduction_config)
         if rs is not None:
@@ -974,31 +982,16 @@ class HyperoptData:
                 "Can't reduce space since filtered trials are less "
                 "than starting random points"
             )
-            return (None, None)
-        trials_params = trials[[*self.Xi_cols, "random_state"]]
-        sep = "."
-        trials_params.columns = trials_params.columns.str.replace(
-            f"params_dict{sep}", ""
-        )
-        logger.debug(f"Applying search space reduction over {len(trials)} trials..")
-        return trials, trials_params
+            return None
+        logger.debug("Applying search space reduction over %s trials..", len(trials))
+        return trials
 
     @staticmethod
     def reduce_dimensions(
         rs: Union[int, None], dimensions: List, trials: DataFrame, min_trials: int
     ) -> List:
         # iterate over each dimension to find new min max
-        if rs is None:
-            rs_trials = trials
-        else:
-            rs_trials = trials.loc[trials["random_state"].values == rs]
-            if len(rs_trials) < 1:
-                logger.debug(
-                    f"Optimizer {rs} has not enough filtered trials "
-                    "to apply reduction"
-                )
-                return []
-
+        rs_trials = json_normalize(trials["params_dict"])
         for n, dim in enumerate(dimensions):
             # if it's integer or real, set low and high bounds
             if dim.kind in (0, 1):

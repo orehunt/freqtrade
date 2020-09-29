@@ -23,39 +23,27 @@ with warnings.catch_warnings():
 # from xgboost import XGBoostRegressor
 
 
-class HyperoptCV:
+class HyperoptCV(HyperoptOut):
     """ cross validation """
 
     target_trials: DataFrame
     trials_maxout: int
     trials_timeout: float
-    use_progressbar: True
-
-    @abstractmethod
-    def parallel_objective(self, t: int, params, epochs: Epochs, trials_state: TrialsState):
-        """ objective run in single opt mode, run the backtest and log the results """
-
-    @abstractmethod
-    def parallel_objective_sig_handler(
-        self, t: int, params: list, epochs: Epochs, trials_state: TrialsState
-    ):
-        """ objective run in single opt mode, run the backtest and log the results """
+    use_progressbar = True
 
     def trials_params(self, offset: int, jobs: int):
         # use the right names for dimensions
         if not backend.trials.exit:
-            self.target_trials, params_cols = HyperoptData.alias_cols(
-                self.target_trials, "params_dict"
-            )
             # dump the parameters values to FS
-            params = self.target_trials.loc[:, params_cols].to_dict("records")
+            params = self.target_trials["params_dict"].values.tolist()
             epochs = len(params)
-            Xi = [list(p.values()) for p in params]
-            n_dims = len(self.dimensions)
-            dump(Xi, self.Xi_file)
+            # n_dims = len(self.dimensions)
+            dump(params, self.Xi_file)
+            # not needed anymore
+            del params
 
             # params_Xi = np.memmap(Xi_file, dtype='float64', mode='r', shape=(epochs,n_dims))
-            for t, X in enumerate(Xi[offset:]):
+            for t in range(offset, epochs):
                 if self.use_progressbar:
                     HyperoptOut._print_progress(t, jobs, self.trials_maxout)
                 yield t, []
@@ -68,8 +56,15 @@ class HyperoptCV:
     def run_cv_backtest_parallel(self, parallel: Parallel, jobs: int):
         """ evaluate a list of given parameters in parallel """
         parallel(
-            delayed(self.parallel_objective_sig_handler)(
-                t, params, backend.epochs, backend.trials, self.cls_file
+            delayed(backend.parallel_sig_handler)(
+                backend,
+                self.parallel_objective,
+                self.cls_file,
+                self.logger,
+                t,
+                params,
+                epochs=backend.epochs,
+                trials_state=backend.trials,
             )
             for t, params in self.trials_params(0, jobs)
         )

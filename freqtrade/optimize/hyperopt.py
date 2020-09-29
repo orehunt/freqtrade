@@ -14,6 +14,7 @@ from time import time as now
 from datetime import datetime
 from pathlib import Path
 from itertools import cycle
+import zarr as za
 
 from colorama import init as colorama_init
 from joblib import (
@@ -27,7 +28,7 @@ from joblib import (
     parallel_backend,
 )
 from multiprocessing.managers import Namespace
-from pandas import DataFrame, HDFStore, json_normalize, read_hdf, Timedelta
+from pandas import DataFrame, HDFStore, json_normalize, read_hdf, Timedelta, concat
 from numpy import isfinite, iinfo, int32
 
 from freqtrade.constants import DATETIME_PRINT_FORMAT
@@ -90,6 +91,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
 
     def __init__(self, config: Dict[str, Any]) -> None:
         super().__init__(config)
+        self.logger = logger
 
         # runtime
         self.n_jobs = self.config.get("hyperopt_jobs", -1)
@@ -295,7 +297,6 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             else:
                 logger.debug("Epoch evaluation didn't receive any parameters")
                 return {}
-        params_details = self._get_params_details(params_dict)
 
         self._set_params(params_dict)
 
@@ -321,7 +322,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             min_date,
             max_date,
             params_dict,
-            params_details,
+            self._get_params_details(params_dict),
             processed,
             rs,
         )
@@ -348,7 +349,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         if self.multi and not self.shared:
             self.calculate_loss_dict = {}
             loss_func_list = cycle(self.config.get("hyperopt_loss_multi", []))
-            logger.debug(f"Cycling over loss functions: {loss_func_list}")
+            logger.debug("Cycling over loss functions: %s", loss_func_list)
             # NOTE: the resolver walks over all the files in the dir on each call
             for rs in self.rngs:
                 config["hyperopt_loss"] = next(loss_func_list)
@@ -472,8 +473,15 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
     def run_backtest_parallel(self, parallel: Parallel, jobs: int):
         """ launch parallel in single opt mode, return the evaluated epochs """
         parallel(
-            delayed(self.parallel_objective)(
-                t, asked, backend.epochs, backend.trials, self.cls_file
+            delayed(backend.parallel_sig_handler)(
+                backend,
+                self.parallel_objective,
+                self.cls_file,
+                self.logger,
+                t,
+                asked,
+                epochs=backend.epochs,
+                trials_state=backend.trials,
             )
             for t, asked in self.ask_and_tell(jobs)
         )
@@ -536,7 +544,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                         params_df = read_hdf(
                             self.trials_file,
                             key=self.trials_instance,
-                            columns=[*self.Xi_cols, "loss"],
+                            columns=[*self.Xi_names, "loss"],
                             start=read_index,
                         )
                         backend.trials.lock.release()
@@ -544,19 +552,21 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                             read_index = t
                             try:
                                 opt.tell(
-                                    params_df.loc[:, self.Xi_cols].values.tolist(),
+                                    params_df.loc[:, self.Xi_names].values.tolist(),
                                     params_df["loss"].values.tolist(),
                                     fit=fit,
                                 )
-                                logger.debug(f"Optimizer now has {len(opt.Xi)} points")
+                                logger.debug(
+                                    f"Optimizer now has %s points", len(opt.Xi)
+                                )
                             # If space reduction has just been performed points
                             # might be out of space
                             except ValueError as e:
-                                logger.debug(f"Failed telling optimizer results, {e}")
-                except (KeyError, FileNotFoundError, IOError, OSError):
+                                logger.debug("Failed telling optimizer results, %s", e)
+                except (KeyError, FileNotFoundError, IOError, OSError) as e:
                     if locked:
                         backend.trials.lock.release()
-                    logger.debug("Couldn't read trials from disk")
+                    logger.debug("Couldn't read trials from disk, %s", e)
             if backend.trials.exit or self._maybe_terminate(
                 t, jobs, backend.trials, backend.epochs
             ):
@@ -579,32 +589,10 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             yield t, a
 
     @staticmethod
-    def parallel_objective_sig_handler(
-        t: int, params: list, epochs: Epochs, trials_state: TrialsState, cls_file: Path
-    ):
-        """
-        To handle Ctrl-C the worker main function has to be wrapped into a try/catch;
-        NOTE: The Manager process also needs to be configured to handle SIGINT (in the backend)
-        """
-        try:
-            return Hyperopt.parallel_objective(
-                t, params, epochs, trials_state, cls_file
-            )
-        except KeyboardInterrupt:
-            trials_state.exit = True
-            return Hyperopt.parallel_objective(
-                t, params, epochs, trials_state, cls_file
-            )
-
-    @staticmethod
-    def parallel_objective(
-        t: int, params, epochs: Epochs, trials_state: TrialsState, cls_file: Path
-    ):
+    def parallel_objective(t: int, params, epochs: Epochs, trials_state: TrialsState):
         """ Run one single test and eventually save trials """
         # flush trials if terminating
-        if not backend.cls:
-            backend.cls = load(cls_file)
-        cls = backend.cls
+        cls: Hyperopt = backend.cls
 
         if trials_state.exit:
             trials_state.tail_list.extend(backend.trials_list)
@@ -617,8 +605,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             if not backend.params_Xi:
                 backend.params_Xi = load(cls.Xi_file)
             X = backend.params_Xi[t]
-            params = {cls.dimensions[n]: p for n, p in enumerate(X)}
-            v = cls.backtest_params(params_dict=params)
+            v = cls.backtest_params(params_dict=X)
         else:
             v = cls.backtest_params(raw_params=params)
 
@@ -670,7 +657,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                     }
                 )
             logger.debug(
-                f"Optimizer epoch evaluated: {v['current_epoch']}, yi: {v['loss']}"
+                f"Optimizer epoch evaluated: %s, yi: %s", v["current_epoch"], v["loss"]
             )
             if is_best:
                 current_best = current
@@ -678,7 +665,11 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                 ep.last_best_loss = v["loss"]
         self.update_max_epoch(current_best, current, ep, rs=rs)
         # Save results and optimizers after every batch
-        trials = json_normalize(backend.trials_list)
+        trials = DataFrame(backend.trials_list)
+        # expand results metrics into columns
+        trials.drop(columns=["results_metrics", "total_profit"], inplace=True)
+        metrics = json_normalize([v["results_metrics"] for v in backend.trials_list],)
+        trials = concat([trials, metrics], copy=False, axis=1)
 
         # make a copy since print results modifies cols
         self.print_results(trials.copy(), trials_state.table_header, epochs)
@@ -699,37 +690,38 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             # optionally delete hdf file
             if self.config.get("hyperopt_clear") and not self.cv:
                 self.clear_hyperopt()
-            with HDFStore(self.trials_file) as store:
-                keys = store.keys()
-                # optionally remove previous trials of an instance
-                if self.config.get("hyperopt_reset") and not self.cv:
-                    table = "/{}".format(self.trials_instance)
-                    for tbl in (table, f"{table}_bak"):
-                        if tbl in keys:
-                            store.remove(tbl)
+            keys = self._group.keys()
+            # optionally remove previous trials of an instance
+            if self.config.get("hyperopt_reset") and not self.cv:
+                inst = "/{}".format(self.trials_instance)
+                for k in (inst, f"{inst}_bak"):
+                    if k in keys:
+                        del self._group[k], self._group[k].attrs["columns"]
             # save a list of all the tables in the store except backups
             # unique keys and exclude backups
             keys = set([k.lstrip("/").rstrip("_bak") for k in keys])
             keys.add(self.trials_instance)
-            logger.debug(f"Saving list of store keys to...{self.trials_instances_file}")
+            logger.debug(
+                "Saving list of store keys to...%s", self.trials_instances_file
+            )
             with open(self.trials_instances_file, "w") as ti:
                 json.dump(list(keys), ti)
         except KeyError:
             pass
 
-    def _setup_trials(self, load_trials=True, backup=None):
+    def _setup_trials(self, load_trials=True, backup=False):
         """ The trials instance is the key used to identify the hdf table """
         # If the Hyperopt class has been previously initialized
         if self.config.get("skip_trials_setup", False):
             return
         self.dimensions: List[Any]
         self.dimensions = self.hyperopt_space()
-        self.trials_file = self.get_trials_file(self.config, self.trials_dir)
-        self.trials_instance = "{}.{}.{}.{}".format(
+        self.trials_instance = "{}-{}/{}/{}".format(
             self.config["hyperopt_loss"],
             len(self.dimensions),
             "_".join(sorted(self.config["spaces"])),
-            hash([d.name for d in self.dimensions]),
+            # truncate hash to 4 digits
+            str(hash([d.name for d in self.dimensions]))[:4],
         )
         logger.info(
             f"Hyperopt state will be saved to " f"key {self.trials_instance:.64}[...]"
@@ -753,7 +745,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                 self.trials_file,
                 trials_instance,
                 backend.trials,
-                backup=(backup or not self.cv),
+                backup=backup,
                 clear=False,
             )
             logger.info(f"Loaded {len(self.trials)} previous trials from storage.")
@@ -771,10 +763,6 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                             len(self.trials), len(self.target_trials)
                         )
                     )
-                self.dimensions = [
-                    k.replace("params_dict.", "")
-                    for k in self.target_trials.filter(regex="^params_dict.").columns
-                ]
             elif len(self.trials) > 0 and not self.multi:
                 if self.random_state != self.trials.iloc[-1]["random_state"]:
                     logger.warn("Random state in saved trials doesn't match runtime...")
@@ -1013,7 +1001,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                 self.search_space_size,
             )
         )
-        logger.debug(f"Max epoch set to: {ep.max_epoch}")
+        logger.debug("Max epoch set to: %s", ep.max_epoch)
 
     def _setup_points(self):
         """
@@ -1038,7 +1026,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                 self.total_epochs,
                 self.ask_points,
             )
-        logger.debug(f"Min epochs set to: {self.min_epochs}")
+        logger.debug("Min epochs set to: %s", self.min_epochs)
         # reduce random points in multi mode by the number of jobs
         # because otherwise each optimizer would ask n_initial_points
         if self.multi:
@@ -1048,12 +1036,12 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         else:
             self.opt_n_initial_points = self.n_initial_points
         if not self.cv:
-            logger.debug(f"Initial points: ~{self.n_initial_points}")
+            logger.debug("Initial points: ~%s", self.n_initial_points)
         # each column is a parameter, needed to read points from storage
         # in cv mode we take the params names from the saved epochs columns
         col = "params_dict.{d.name}" if not self.cv else "{d}"
-        self.Xi_cols = [col.format(d=d) for d in self.dimensions]
-        logger.info(f"Parameters set for optimization: {len(self.Xi_cols)}")
+        self.Xi_names = tuple(col.format(d=d) for d in self.dimensions)
+        logger.info(f"Parameters set for optimization: {len(self.Xi_names)}")
 
     def _maybe_terminate(
         self, t: int, jobs: int, trials_state: TrialsState, epochs: Epochs
@@ -1067,7 +1055,9 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                 "check the loss function and the search space."
             )
             self.void_output_backoff = True
-        if not done:
+        # if trials_maxout is 1 there is no buffering
+        # so an empty buffer is not an indicator of emptyness
+        if not done and self.trials_maxout > 1:
             trials_state.empty_strikes += 1
         cvg_ratio = (epochs.convergence / total) if total > 0 else 0
         if cvg_ratio > self.max_convergence_ratio:
@@ -1121,7 +1111,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                                 backend.trials, backend.epochs, rs=rs
                             )
                             backend.trials.num_done -= backend.just_saved
-                else:
+                elif len(backend.trials.tail_list):
                     backend.trials_list = [t for t in backend.trials.tail_list]
                     backend.just_saved = self.log_trials(
                         backend.trials, backend.epochs, rs=None
@@ -1138,6 +1128,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         - startup period is removed
         - there is a global minimum amount of data to test
         """
+
         data, timerange = self.backtesting.load_bt_data()
         preprocessed = self.backtesting.strategy.ohlcvdata_to_dataframe(data)
 
@@ -1231,7 +1222,6 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                     backend.trials,
                     where=f"loss in {backend.epochs.last_best_loss}",
                 )
-                best = self.trials_to_dict(best_trial)[0]
             # this happens if search space reduction has removed the best trial
             # and no better has been found after wards..
             # search space reduction can remove the best trial if the `cutoff_best`
@@ -1240,10 +1230,14 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                 trials = self.load_trials(
                     self.trials_file, self.trials_instance, backend.trials,
                 )
-                best_trial = trials.sort_values(by="loss")[0]
-                best = self.trials_to_dict(best_trial)
+                best_trial = (
+                    trials.sort_values(by="loss").iloc[:1].to_dict(orient="records")
+                )[:1]
 
-            self.print_epoch_details(best, self.epochs_limit(), self.print_json)
+            if best_trial:
+                self.print_epoch_details(
+                    best_trial[0], self.epochs_limit(), self.print_json
+                )
         else:
             # This is printed when Ctrl+C is pressed quickly, before first epochs have
             # a chance to be evaluated.

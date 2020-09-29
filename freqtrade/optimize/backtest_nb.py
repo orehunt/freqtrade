@@ -576,3 +576,11 @@ def iter_triggers(
     if triggered and bl["not_position_stacking"]:
         fl_cols["col_last_trigger"][last_trigger:n_bought] = tf
     return
+
+def add_list_items_nb(items: List, ls: nb.typed.List):
+    for i in items:
+        append_list_item(i, ls)
+
+@njit(cache=True)
+def append_list_item(item, ls):
+    ls.append(item)

@@ -9,6 +9,7 @@ from freqtrade.state import RunMode
 
 logger = logging.getLogger(__name__)
 
+
 def start_hyperopt_list(args: Dict[str, Any]) -> None:
     """
     List hyperopt epochs previously evaluated
@@ -27,7 +28,9 @@ def start_hyperopt_list(args: Dict[str, Any]) -> None:
 
     filters = ho._filter_options(config)
 
-    trials_file = config.get("hyperopt_list_trials_file", ho.get_trials_file(config, ho.trials_dir))
+    trials_file = config.get(
+        "hyperopt_list_trials_file", ho.get_trials_file(config, ho.trials_dir)
+    )
     trials_instances_file = config.get(
         "hyperopt_list_trials_instances_file", ho.trials_instances_file
     )
@@ -35,7 +38,9 @@ def start_hyperopt_list(args: Dict[str, Any]) -> None:
     # Previous evaluations
     trials = ho.load_trials(
         trials_file,
-        config.get("hyperopt_trials_instance", ho.get_last_instance(trials_instances_file)),
+        config.get(
+            "hyperopt_trials_instance", ho.get_last_instance(trials_instances_file)
+        ),
     )
     total_epochs = len(trials)
     logger.info(f"Loaded {total_epochs} trials...")
@@ -50,18 +55,26 @@ def start_hyperopt_list(args: Dict[str, Any]) -> None:
         try:
             print(
                 ho.get_result_table(
-                    config, trials, total_epochs, not filters["best"], print_colorized, 0
+                    config,
+                    trials,
+                    total_epochs,
+                    not filters["best"],
+                    print_colorized,
+                    0,
                 )
             )
         except KeyboardInterrupt:
             print("User interrupted..")
 
     if n_trials and not no_details:
-        best = trials.sort_values("loss").iloc[0:]
-        ho.print_epoch_details(ho.trials_to_dict(best)[0], total_epochs, print_json, no_header)
+        best = trials.sort_values("loss").iloc[:1].to_dict(orient="records")[:1]
+        if best:
+            ho.print_epoch_details(best[0], total_epochs, print_json, no_header)
 
     if n_trials and export_csv:
-        ho.export_csv_file(config, trials, total_epochs, not filters["best"], export_csv)
+        ho.export_csv_file(
+            config, trials, total_epochs, not filters["best"], export_csv
+        )
 
 
 def start_hyperopt_show(args: Dict[str, Any]) -> None:
@@ -78,7 +91,9 @@ def start_hyperopt_show(args: Dict[str, Any]) -> None:
 
     ho = HyperoptOut(config)
 
-    trials_file = config.get("hyperopt_list_trials_file", ho.get_trials_file(config, ho.trials_dir))
+    trials_file = config.get(
+        "hyperopt_list_trials_file", ho.get_trials_file(config, ho.trials_dir)
+    )
     trials_instances_file = config.get(
         "hyperopt_list_trials_instances_file", ho.trials_instances_file
     )
@@ -87,7 +102,9 @@ def start_hyperopt_show(args: Dict[str, Any]) -> None:
     # Previous evaluations
     trials = hd.load_trials(
         trials_file,
-        config.get("hyperopt_trials_instance", ho.get_last_instance(trials_instances_file)),
+        config.get(
+            "hyperopt_trials_instance", ho.get_last_instance(trials_instances_file)
+        ),
     )
     i = 1
     for c, t in enumerate(trials):

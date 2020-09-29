@@ -189,11 +189,11 @@ class HyperoptOut(HyperoptData):
             [
                 "Best",
                 "current_epoch",
-                "results_metrics.trade_count",
-                "results_metrics.avg_profit",
-                "results_metrics.total_profit",
-                "results_metrics.profit",
-                "results_metrics.duration",
+                "trade_count",
+                "avg_profit",
+                "total_profit",
+                "profit",
+                "duration",
                 "loss",
                 "is_initial_point",
                 "is_best",
@@ -329,8 +329,7 @@ class HyperoptOut(HyperoptData):
         color = "green"
         opt_format = (
             (
-                "Avg: {Style.BRIGHT}{Fore.BLUE}{backend.epochs.last_best_epoch}"
-                "+{backend.epochs.avg_last_occurrence} "
+                "Avg: {Style.BRIGHT}{Fore.BLUE}{backend.epochs.avg_last_occurrence} "
                 "{Style.RESET_ALL}"
                 "Exp: {Style.BRIGHT}{Fore.CYAN}{backend.epochs.explo} "
                 "{Style.RESET_ALL}"
@@ -381,8 +380,12 @@ class HyperoptOut(HyperoptData):
 
     @staticmethod
     def _print_progress(t: int, jobs: int, maxout: int, finish=False):
-        backend.pbar["total"].update(
-            backend.trials.num_saved - backend.pbar["total"].count
-        )
-        if finish:
-            backend.pbar["total"].close()
+        try:
+            backend.pbar["total"].update(
+                backend.trials.num_saved - backend.pbar["total"].count
+            )
+            if finish:
+                backend.pbar["total"].close()
+        # for the enlighten manager
+        except:
+            logger.debug("failed to print progress, probably just forcefully killed.")

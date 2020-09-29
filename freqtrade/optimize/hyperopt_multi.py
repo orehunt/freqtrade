@@ -1,50 +1,45 @@
-import warnings
-import logging
 import gc
+import logging
 import os
-
-from numpy.core.numeric import flatnonzero
-from psutil import virtual_memory
-from pathlib import Path
-from typing import Any, Dict, List, Tuple, Optional, Union
-from abc import abstractmethod
-from time import time as now
+import warnings
+from decimal import Decimal
 from functools import partial
+
+# use math finite check for small loops
+from math import isfinite as is_finite
+from multiprocessing.managers import SyncManager
+from queue import Queue
+from time import time as now
+from typing import Dict, List, Optional, Tuple, Union
+
+# Import IHyperOpt and IHyperOptLoss to allow unpickling classes from these modules
+import freqtrade.optimize.hyperopt_backend as backend
+from freqtrade.exceptions import OperationalException
+from freqtrade.optimize.hyperopt_backend import Epochs, TrialsState
+from freqtrade.optimize.hyperopt_constants import VOID_LOSS
+from freqtrade.optimize.hyperopt_out import HyperoptOut
+from joblib import Parallel, delayed, hash
+from numpy import (
+    array,
+    asarray,
+    inf,
+    isfinite,
+    isin,
+    nan,
+    nanmax,
+    nanmean,
+    nanmin,
+    nanstd,
+    nanvar,
+)
+from numpy.core.numeric import flatnonzero
+from pandas import DataFrame
+from psutil import virtual_memory
 
 # from pyinstrument import Profiler
 
 # profiler = Profiler()
 
-from joblib import Parallel, delayed, wrap_non_picklable_objects, hash, load
-from multiprocessing.managers import Namespace, SyncManager
-
-from queue import Queue
-from pandas import read_hdf, DataFrame, HDFStore
-from numpy import (
-    asarray,
-    array,
-    nanvar,
-    nanstd,
-    nanmean,
-    nanmin,
-    nanmax,
-    isfinite,
-    inf,
-    nan,
-)
-
-# use math finite check for small loops
-from math import isfinite as is_finite
-from decimal import Decimal
-
-# Import IHyperOpt and IHyperOptLoss to allow unpickling classes from these modules
-import freqtrade.optimize.hyperopt_backend as backend
-from freqtrade.optimize.hyperopt_backend import TrialsState, Epochs
-from freqtrade.optimize.hyperopt_out import HyperoptOut
-from freqtrade.optimize.hyperopt_constants import VOID_LOSS
-from freqtrade.optimize.hyperopt_interface import IHyperOpt  # noqa: F401
-from freqtrade.optimize.hyperopt_loss_interface import IHyperOptLoss  # noqa: F401
-from freqtrade.exceptions import OperationalException
 
 # Suppress scikit-learn FutureWarnings from skopt
 with warnings.catch_warnings():
@@ -56,34 +51,14 @@ with warnings.catch_warnings():
 # from sklearn.ensemble import HistGradientBoostingRegressor
 # from xgboost import XGBoostRegressor
 
-logger = logging.getLogger(__name__)
-
 
 class HyperoptMulti(HyperoptOut):
     """ Run the optimization with multiple optimizers """
 
     # stop warning against missing results after a while
     void_output_backoff = False
-    Xi_cols: List[Tuple] = []
+    Xi_names: Tuple = ()
     use_progressbar = True
-
-    @abstractmethod
-    def backtest_params(
-        self,
-        raw_params: List[Any] = None,
-        iteration=None,
-        params_dict: Dict[str, Any] = None,
-    ):
-        """
-        Used Optimize function. Called once per epoch to optimize whatever is configured.
-        Keep this function as optimized as possible!
-        """
-
-    @abstractmethod
-    def _maybe_terminate(
-        self, t: int, jobs: int, trials_state: TrialsState, epochs: Epochs
-    ):
-        """ Decide if the iterator should stop execution based on trials or epochs counts """
 
     def epochs_iterator(self, jobs: int):
         """ Dispatches jobs to parallel indefinitely """
@@ -111,6 +86,7 @@ class HyperoptMulti(HyperoptOut):
                 self.apply_space_reduction(jobs, backend.trials, backend.epochs)
             if self.use_progressbar:
                 HyperoptOut._print_progress(t, jobs, self.trials_maxout)
+            self.logger.debug("yiedling %s", t)
             yield t
 
     def setup_multi(self):
@@ -223,7 +199,7 @@ class HyperoptMulti(HyperoptOut):
         backend.cls = None
         backend.data = {}
         backend.trials_index = 0
-        just_saved = 0
+        backend.just_saved = 0
         backend.trials_list = []
         backend.timer = 0
         backend.opt = None
@@ -236,20 +212,30 @@ class HyperoptMulti(HyperoptOut):
         """ Clear the global state of each worker """
         # run it twice the worker count to work around parallel scheduling multiple
         # tasks to the same worker
-        parallel((delayed(self.setup_worker_backend)() for t in range(2 * jobs)))
+        parallel(
+            (
+                delayed(backend.parallel_sig_handler)(
+                    backend, self.setup_worker_backend, None, None
+                )
+                for _ in range(2 * jobs)
+            )
+        )
 
     def run_multi_backtest_parallel(self, parallel: Parallel, jobs: int):
         """ Launch parallel in multi opt mode,
         scheduling the specified number of trials,
         passing the needed objects handled by the manager """
         parallel(
-            delayed(self.parallel_opt_objective_sig_handler)(
+            delayed(backend.parallel_sig_handler)(
+                backend,
+                self.parallel_opt_objective,
+                self.cls_file,
+                self.logger,
                 t,
                 jobs,
-                backend.optimizers,
-                backend.epochs,
-                backend.trials,
-                self.cls_file,
+                optimizers=backend.optimizers,
+                epochs=backend.epochs,
+                trials_state=backend.trials,
             )
             for t in self.epochs_iterator(jobs)
         )
@@ -317,6 +303,10 @@ class HyperoptMulti(HyperoptOut):
     def opt_params_Xi(v: dict):
         return list(v["params_dict"].values())
 
+    @staticmethod
+    def dict_values(dict_list: List[dict]):
+        return [list(d.values()) for d in dict_list]
+
     def opt_startup_points(
         self, opt: Optimizer, trials_state: TrialsState, is_shared: bool
     ) -> Optimizer:
@@ -335,42 +325,43 @@ class HyperoptMulti(HyperoptOut):
                 # Only wait if the optimizer has no points at all (startup)
                 locked = trials_state.lock.acquire(len(opt.Xi) < 1)
                 if locked:
-                    where = (
-                        [f"Xi_h != {list(backend.Xi_h.keys())}"]
-                        if backend.Xi_h
-                        else None
+                    params_df = self._from_group(
+                        fields=["loss", "Xi_h", "params_dict", "random_state"],
+                        indexer=(slice(backend.trials_index, None)),
                     )
-                    params_df = read_hdf(
-                        self.trials_file,
-                        key=self.trials_instance,
-                        where=where,
-                        columns=[*self.Xi_cols, "loss", "Xi_h", "random_state"],
-                        start=backend.trials_index,
-                    )
+                    if len(params_df) and backend.Xi_h:
+                        params_df.drop(
+                            flatnonzero(
+                                isin(
+                                    params_df["Xi_h"].values, list(backend.Xi_h.keys())
+                                )
+                            ),
+                            axis=0,
+                            inplace=True,
+                        )
                     trials_state.lock.release()
-            except (
-                KeyError,
-                FileNotFoundError,
-                IOError,
-                OSError,
-            ):
+            except (KeyError, FileNotFoundError, IOError, OSError,) as e:
                 # only happens when df is empty and empty df is not saved
                 # on disk by pytables or is being written
                 if locked:
                     trials_state.lock.release()
-                logger.debug("Couldn't read trials from disk")
+                self.logger.debug("Couldn't read trials from disk %s", e)
+                raise e
         if len(params_df) > 0:
             backend.trials_index += len(params_df)
             # only in shared mode, we tell all the points
+            # (these lists are very small)
             if is_shared:
-                Xi = params_df.loc[:, self.Xi_cols].values.tolist()
+                Xi = self.dict_values(params_df["params_dict"].values.tolist())
                 yi = params_df["loss"].values.tolist()
             elif not opt.Xi:
                 # while in multi opt, still have to add startup points
                 prev_opt_params = params_df.loc[
                     params_df["random_state"].values == opt.rs
                 ]
-                Xi = prev_opt_params.loc[:, self.Xi_cols].values.tolist()
+                Xi = self.dict_values(
+                    prev_opt_params.loc[:, "params_dict"].values.tolist()
+                )
                 yi = prev_opt_params["loss"].values.tolist()
             else:
                 Xi, yi = [], []
@@ -388,13 +379,19 @@ class HyperoptMulti(HyperoptOut):
             )
         if backend.Xi:  # or just tell prev points
             try:
+                self.logger.debug(
+                    "adjourning the optimizer with %s new points...", len(backend.Xi)
+                )
                 opt.tell(backend.Xi, backend.yi)
             # this can happen if space reduction has been performed and the
             # points of the previous tests are outside the new search space
             except ValueError as e:
-                logger.info(e)
+                self.logger.info(e)
         else:
             # get a new point by copy if didn't tell new ones
+            self.logger.debug(
+                "no new points were found to tell, rolling a new optimizer.."
+            )
             opt = HyperoptMulti.opt_rand(opt)
 
         del backend.Xi[:], backend.yi[:]
@@ -491,45 +488,15 @@ class HyperoptMulti(HyperoptOut):
             backend.just_saved = 0
 
     @staticmethod
-    def parallel_opt_objective_sig_handler(
-        t: int,
-        jobs: int,
-        optimizers: Queue,
-        epochs: Epochs,
-        trials_state: TrialsState,
-        cls_file: Path,
-    ):
-        """
-        To handle Ctrl-C the worker main function has to be wrapped into a try/catch;
-        NOTE: The Manager process also needs to be configured to handle SIGINT (in the backend)
-        """
-        try:
-            return HyperoptMulti.parallel_opt_objective(
-                t, jobs, optimizers, epochs, trials_state, cls_file
-            )
-        except KeyboardInterrupt:
-            trials_state.exit = True
-            return HyperoptMulti.parallel_opt_objective(
-                t, jobs, optimizers, epochs, trials_state, cls_file
-            )
-
-    @staticmethod
     def parallel_opt_objective(
-        t: int,
-        jobs: int,
-        optimizers: Queue,
-        epochs: Epochs,
-        trials_state: TrialsState,
-        cls_file: Path,
+        t: int, jobs: int, optimizers: Queue, epochs: Epochs, trials_state: TrialsState,
     ):
         """
         An objective run in multi opt mode;
         Shared: optimizers share the results as soon as they are completed;
         Multi: optimizers share results but only following the points asked by the model
         """
-        if not backend.cls:
-            backend.cls = load(cls_file)
-        cls: HyperoptMulti = backend.cls
+        cls = backend.cls
 
         if not backend.timer:
             backend.timer = now()
@@ -566,7 +533,7 @@ class HyperoptMulti(HyperoptOut):
             if trials_state.empty_strikes >= cls.trials_max_empty:
                 trials_state.exit = True
                 # NOTE: this warning is not formatted..
-                logger.warn("Reached empty strikes.")
+                self.logger.warn("Reached empty strikes.")
             return
         # run the backtest for each point to do (untested_Xi)
         trials = [
@@ -595,6 +562,7 @@ class HyperoptMulti(HyperoptOut):
         # if opt.void == -1 the optimizer failed to give a new point (between dispatches), stop
         # if opt.Xi > sss the optimizer has more points than the estimated search space size, stop
         while opt.void != -1 and len(opt.Xi) < self.search_space_size:
+            self.logger.debug("asking the oracle for points..")
             asked = opt.ask(n_points=self.opt_ask_points, strategy=self.lie_strat())
             # the optimizer doesn't return a list when points are asked with None (skopt behaviour)
             if not self.opt_ask_points:
@@ -602,13 +570,16 @@ class HyperoptMulti(HyperoptOut):
             else:
                 asked = {hash(a): [a, None] for a in asked}
             # check if some points have been evaluated by other optimizers
+            self.logger.debug("checking if points returned by optimizer are cached...")
             prev_asked = HyperoptMulti.opt_get_past_points(asked)
             for h in prev_asked:
                 # is the loss set?
                 past_Xi = prev_asked[h][0]
                 past_yi = prev_asked[h][1]
                 if past_yi is not None:
-                    logger.debug("A point was previously asked by another worker..")
+                    self.logger.debug(
+                        "A point was previously asked by another worker.."
+                    )
                     epochs.convergence += 1
                     if past_Xi not in tested_Xi:
                         tested_Xi.append(past_Xi)

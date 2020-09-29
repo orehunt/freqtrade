@@ -33,6 +33,7 @@ class IHyperOpt(ABC):
     Class attributes you can use:
         ticker_interval -> int: value of the ticker interval to use for the strategy
     """
+
     ticker_interval: str  # DEPRECATED
     timeframe: str
 
@@ -40,22 +41,26 @@ class IHyperOpt(ABC):
         self.config = config
 
         # Assign ticker_interval to be used in hyperopt
-        IHyperOpt.ticker_interval = str(config['timeframe'])  # DEPRECATED
-        IHyperOpt.timeframe = str(config['timeframe'])
+        IHyperOpt.ticker_interval = str(config["timeframe"])  # DEPRECATED
+        IHyperOpt.timeframe = str(config["timeframe"])
 
     @staticmethod
     def buy_strategy_generator(params: Dict[str, Any]) -> Callable:
         """
         Create a buy strategy generator.
         """
-        raise OperationalException(_format_exception_message("buy_strategy_generator", "buy"))
+        raise OperationalException(
+            _format_exception_message("buy_strategy_generator", "buy")
+        )
 
     @staticmethod
     def sell_strategy_generator(params: Dict[str, Any]) -> Callable:
         """
         Create a sell strategy generator.
         """
-        raise OperationalException(_format_exception_message("sell_strategy_generator", "sell"))
+        raise OperationalException(
+            _format_exception_message("sell_strategy_generator", "sell")
+        )
 
     @staticmethod
     def indicator_space() -> List[Dimension]:
@@ -69,7 +74,9 @@ class IHyperOpt(ABC):
         """
         Create a sell indicator space.
         """
-        raise OperationalException(_format_exception_message("sell_indicator_space", "sell"))
+        raise OperationalException(
+            _format_exception_message("sell_indicator_space", "sell")
+        )
 
     @staticmethod
     def generate_roi_table(params: Dict) -> Dict[int, float]:
@@ -135,7 +142,7 @@ class IHyperOpt(ABC):
             "roi_p3_min": 0.01 * roi_p_scale * roi_p_alpha,
             "roi_p3_max": 0.20 * roi_p_scale * roi_p_alpha,
         }
-        logger.debug(f"Using roi space limits: {roi_limits}")
+        logger.debug("Using roi space limits: %s", roi_limits)
         p = {
             "roi_t1": roi_limits["roi_t1_min"],
             "roi_t2": roi_limits["roi_t2_min"],
@@ -144,7 +151,9 @@ class IHyperOpt(ABC):
             "roi_p2": roi_limits["roi_p2_min"],
             "roi_p3": roi_limits["roi_p3_min"],
         }
-        logger.debug(f"Min roi table: {round_dict(IHyperOpt.generate_roi_table(p), 5)}")
+        logger.debug(
+            f"Min roi table: %s", round_dict(IHyperOpt.generate_roi_table(p), 5)
+        )
         p = {
             "roi_t1": roi_limits["roi_t1_max"],
             "roi_t2": roi_limits["roi_t2_max"],
@@ -153,7 +162,9 @@ class IHyperOpt(ABC):
             "roi_p2": roi_limits["roi_p2_max"],
             "roi_p3": roi_limits["roi_p3_max"],
         }
-        logger.debug(f"Max roi table: {round_dict(IHyperOpt.generate_roi_table(p), 5)}")
+        logger.debug(
+            f"Max roi table: %s", round_dict(IHyperOpt.generate_roi_table(p), 5)
+        )
 
         return [
             Integer(roi_limits["roi_t1_min"], roi_limits["roi_t1_max"], name="roi_t1"),
@@ -185,9 +196,12 @@ class IHyperOpt(ABC):
             "trailing_stop": params["trailing_stop"],
             "trailing_stop_positive": params["trailing_stop_positive"],
             "trailing_stop_positive_offset": (
-                params["trailing_stop_positive"] + params["trailing_stop_positive_offset_p1"]
+                params["trailing_stop_positive"]
+                + params["trailing_stop_positive_offset_p1"]
             ),
-            "trailing_only_offset_is_reached": params["trailing_only_offset_is_reached"],
+            "trailing_only_offset_is_reached": params[
+                "trailing_only_offset_is_reached"
+            ],
         }
 
     @staticmethod
@@ -220,10 +234,10 @@ class IHyperOpt(ABC):
     # Why do I still need such shamanic mantras in modern python?
     def __getstate__(self):
         state = self.__dict__.copy()
-        state['timeframe'] = self.timeframe
+        state["timeframe"] = self.timeframe
         return state
 
     def __setstate__(self, state):
         self.__dict__.update(state)
-        IHyperOpt.ticker_interval = state['timeframe']
-        IHyperOpt.timeframe = state['timeframe']
+        IHyperOpt.ticker_interval = state["timeframe"]
+        IHyperOpt.timeframe = state["timeframe"]

@@ -15,7 +15,7 @@ mgr: Manager = None
 
 
 def error_callback(e, q: Queue):
-    print(e)
+    print(f"{__name__}.get_all_signals:", e)
     q.put((None, None))
 
 
@@ -70,8 +70,8 @@ def read_json_file(file_path: str, key=""):
 
 
 def concat_timeframes_data(
-    pairs: Union[Tuple[str, ...], Tuple[Tuple[str, str], ...]],
-    get_data: Callable,
+    pairs: Union[Tuple[str, ...], Tuple[Tuple[str, str], ...], None],
+    get_data: Union[Callable, None] = None,
     timeframes: Union[Tuple[str, ...], None] = None,
     sort=True,
     source_df: pd.DataFrame = None,
@@ -88,15 +88,16 @@ def concat_timeframes_data(
     :param get_data: callable accepting arguments 'pair', 'timeframe' and 'last_date'
         the fuction which retrieves the data for each combination
     """
-    pairlist = pairs if timeframes is None else tuple(product(pairs, timeframes))
-    pairs_tf = np.empty((len(pairlist), 3), dtype="O")
-    pairs_tf[:, :2] = np.asarray(pairlist)
-    # strings to timedelta
-    pairs_tf[:, 2] = pd.to_timedelta(pairs_tf[:, 1])
-    if sort:
-        # from shorter to longer, this also inverts pairs order, but shouldn't matter
-        pairs_tf = pairs_tf[np.argsort(pairs_tf[:, 1])]
-    base_td = pairs_tf[-1, 2]
+    if pairs is not None:
+        pairlist = pairs if timeframes is None else tuple(product(pairs, timeframes))
+        pairs_tf = np.empty((len(pairlist), 3), dtype="O")
+        pairs_tf[:, :2] = np.asarray(pairlist)
+        # strings to timedelta
+        pairs_tf[:, 2] = pd.to_timedelta(pairs_tf[:, 1])
+        if sort:
+            # from shorter to longer, this also inverts pairs order, but shouldn't matter
+            pairs_tf = pairs_tf[np.argsort(pairs_tf[:, 1])]
+        base_td = pairs_tf[-1, 2]
     if source_df is not None:
         source_df.set_index("date", inplace=True)
         data = [source_df]
@@ -107,6 +108,7 @@ def concat_timeframes_data(
     if not len(df_list):
         for pair, tf, td in pairs_tf:
             prefix = f"{tf}_{pair}_"
+            prefixes.append(prefix)
             pair_df = get_data(pair=pair, timeframe=tf, last_date=last_date)
             pair_df.set_index("date", inplace=True)
             # longer timeframes have to be shifted, because longer candles
@@ -118,11 +120,11 @@ def concat_timeframes_data(
     else:
         data.extend(df_list)
 
-    cc_df = pd.concat(data, axis=1)
+    cc_df = pd.concat(data, axis=1, join="outer", copy=False)
     cc_df.fillna(method="pad", inplace=True)
     # this should drop only starting rows if concatenated dfs start
     # from different dates
     cc_df.dropna(inplace=True)
     cc_df.reset_index(drop=False, inplace=True)
     # print(cc_df.iloc[:10])
-    return cc_df, data if source_df is None else data[1:]
+    return (cc_df, data) if source_df is None else data[1:]

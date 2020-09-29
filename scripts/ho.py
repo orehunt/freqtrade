@@ -205,6 +205,10 @@ class Main:
         logger.warning("Overriding matplotlib and ccxt.base.exchange logging levels")
         logging.getLogger("matplotlib").setLevel(logging.WARNING)
         logging.getLogger("ccxt.base.exchange").setLevel(logging.WARNING)
+        logging.getLogger("numba.core").setLevel(logging.WARNING)
+        # logging.getLogger("numba.core.ssa").setLevel(logging.WARNING)
+        # logging.getLogger("numba.core.interpreter").setLevel(logging.WARNING)
+        # logging.getLogger("numba.core.byteflow").setLevel(logging.WARNING)
 
         self.ho = Hyperopt(self.config)
 

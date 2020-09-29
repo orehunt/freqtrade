@@ -1,18 +1,19 @@
-from typing import Any, Dict, List, Union
-from datetime import datetime
-from queue import Queue
-from multiprocessing.managers import SyncManager, Namespace
-from threading import Lock
-from pathlib import Path
 import signal
+from abc import abstractmethod
+from datetime import datetime
 from functools import partial
 from logging import Logger
+from multiprocessing.managers import Namespace, SyncManager
+from pathlib import Path
+from queue import Queue
+from threading import Lock
+from typing import Any, Callable, Dict, List, Union
 
 from pandas import DataFrame
 from skopt import Optimizer
 
 hyperopt: Any = None
-cls: Union[None, Path] = None
+cls: Any = None
 data: Dict[str, DataFrame] = {}
 min_date: Union[None, datetime] = None
 max_date: Union[None, datetime] = None
@@ -83,6 +84,38 @@ class Epochs(Namespace):
 epochs: Epochs
 
 
+def parallel_sig_handler(
+    backend,
+    fn: Callable,
+    cls_file: Union[None, Path],
+    logger: Union[None, Logger],
+    *args,
+    **kwargs,
+):
+    """
+    To handle Ctrl-C the worker main function has to be wrapped into a try/catch;
+    NOTE: The Manager process also needs to be configured to handle SIGINT (in the backend)
+    """
+    if not backend.cls and cls_file:
+        from joblib import load
+
+        backend.cls = load(cls_file)
+        if logger:
+            from freqtrade.loggers import setup_logging, setup_logging_pre
+
+            setup_logging_pre()
+            setup_logging(backend.cls.config)
+            logger.debug("loaded hyperopt class from %s", cls_file)
+    try:
+        return fn(*args, **kwargs)
+    except KeyboardInterrupt:
+        logger.debug("received keyboard interrupt, flushing remaining trials..")
+        trials_state = kwargs.get("trials_state")
+        if trials_state:
+            trials_state.exit = True
+        return fn(*args, **kwargs)
+
+
 def manager_sig_handler(signal, frame, trials_state: TrialsState):
     trials_state.exit = True
     return
@@ -99,3 +132,38 @@ def wait_for_lock(lock: Lock, message: str, logger: Logger):
     while not locked:
         logger.debug(msg)
         locked = lock.acquire()
+
+
+class HyperoptBase:
+    dimensions: List[Any]
+    logger: Logger
+
+    @abstractmethod
+    def backtest_params(
+        self,
+        raw_params: List[Any] = None,
+        iteration=None,
+        params_dict: Dict[str, Any] = None,
+    ):
+        """
+        Used Optimize function. Called once per epoch to optimize whatever is configured.
+        Keep this function as optimized as possible!
+        """
+
+    @abstractmethod
+    def _maybe_terminate(
+        self, t: int, jobs: int, trials_state: TrialsState, epochs: Epochs
+    ):
+        """ Decide if the iterator should stop execution based on trials or epochs counts """
+
+    @abstractmethod
+    def parallel_objective(
+        self, t: int, params, epochs: Epochs, trials_state: TrialsState
+    ):
+        """ objective run in single opt mode, run the backtest and log the results """
+
+    @abstractmethod
+    def log_trials(
+        self, trials_state: TrialsState, epochs: Epochs, rs: Union[None, int]
+    ):
+        """ Calculate epochs and save results to storage """

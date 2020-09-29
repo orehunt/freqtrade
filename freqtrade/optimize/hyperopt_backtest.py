@@ -3,6 +3,20 @@ from enum import IntEnum
 from types import SimpleNamespace
 from typing import Dict, List, Tuple, Union
 
+import pandas as pd
+from freqtrade.exceptions import OperationalException
+from freqtrade.optimize.backtest_constants import *  # noqa ignore=F405
+from freqtrade.optimize.backtest_constants import Candle
+from freqtrade.optimize.backtest_engine_chunked import _chunked_select_triggers
+from freqtrade.optimize.backtest_engine_loop_candles import (
+    _loop_candles_select_triggers,
+)
+from freqtrade.optimize.backtest_engine_loop_ranges import _loop_ranges_select_triggers
+from freqtrade.optimize.backtest_nb import *  # noqa ignore=F405
+from freqtrade.optimize.backtest_utils import *  # noqa ignore=F405
+from freqtrade.optimize.backtesting import Backtesting, BacktestResult
+from freqtrade.optimize.debug import dbg  # noqa ignore=F405
+from freqtrade.strategy.interface import SellType
 from numpy import (
     append,
     arange,
@@ -23,29 +37,7 @@ from numpy import (
     where,
     zeros,
 )
-
-
-from freqtrade.exceptions import OperationalException
-from freqtrade.optimize.backtest_constants import *  # noqa ignore=F405
-from freqtrade.optimize.backtest_constants import Candle
-from freqtrade.optimize.backtest_engine_chunked import _chunked_select_triggers
-from freqtrade.optimize.backtest_engine_loop_candles import (
-    _loop_candles_select_triggers,
-)
-from freqtrade.optimize.backtest_engine_loop_ranges import _loop_ranges_select_triggers
-from freqtrade.optimize.backtest_nb import *  # noqa ignore=F405
-from freqtrade.optimize.backtest_utils import *  # noqa ignore=F405
-from freqtrade.optimize.backtesting import Backtesting, BacktestResult
-from freqtrade.optimize.debug import dbg  # noqa ignore=F405
-from freqtrade.strategy.interface import SellType
-from pandas import (
-    DataFrame,
-    Series,
-    Timedelta,
-    concat,
-    to_datetime,
-    to_timedelta,
-)
+from pandas import DataFrame, Series, Timedelta, concat, to_datetime, to_timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -396,7 +388,7 @@ class HyperoptBacktesting(Backtesting):
         # cast date as int to prevent time conversion when accessing values
         df["date"] = df["date"].values.astype(float)
         # only return required cols
-        return df.iloc[:, where(union_eq(df.columns.values, MERGE_COLS))[0]]
+        return df[MERGE_COLS]
 
     def post_process(self, df_vals: ndarray, ofs=None):
         """
@@ -527,7 +519,7 @@ class HyperoptBacktesting(Backtesting):
 
         bts_vals = df_vals[
             bought_mask
-            | union_eq(df_vals[:, loc["bought_or_sold"]], [Candle.SOLD, Candle.END,],)
+            | isin(df_vals[:, loc["bought_or_sold"]], [Candle.SOLD, Candle.END])
         ]
         bts_vals = bts_vals[
             # exclude duplicate sold
@@ -583,7 +575,7 @@ class HyperoptBacktesting(Backtesting):
         loc = self.bts_loc
         # align sold to bought
         sold = bts_vals[
-            union_eq(bts_vals[:, loc["bought_or_sold"]], [Candle.SOLD, Candle.END],)
+            np.isin(bts_vals[:, loc["bought_or_sold"]], [Candle.SOLD, Candle.END])
         ]
         # if no sell sig is provided a limit on the trade duration could be applied..
         # if len(sold) < 1:
@@ -995,7 +987,7 @@ class HyperoptBacktesting(Backtesting):
             events_buy = bts_vals[
                 (bts_vals[:, bts_loc["bought_or_sold"]] == Candle.BOUGHT)
                 & (
-                    union_eq(
+                    np.isin(
                         shift(bts_vals[:, bts_loc["bought_or_sold"]], fill=Candle.SOLD),
                         # check for END too otherwise the first bought of mid-pairs
                         # wouldn't be included
