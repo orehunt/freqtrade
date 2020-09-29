@@ -5,9 +5,9 @@ This module manage Telegram communication
 """
 import json
 import logging
-import arrow
 from typing import Any, Callable, Dict
 
+import arrow
 from tabulate import tabulate
 from telegram import ParseMode, ReplyKeyboardMarkup, Update
 from telegram.error import NetworkError, TelegramError
@@ -18,9 +18,10 @@ from freqtrade.__init__ import __version__
 from freqtrade.rpc import RPC, RPCException, RPCMessageType
 from freqtrade.rpc.fiat_convert import CryptoToFiatConverter
 
+
 logger = logging.getLogger(__name__)
 
-logger.debug("Included module rpc.telegram ...")
+logger.debug('Included module rpc.telegram ...')
 
 MAX_TELEGRAM_MESSAGE_LENGTH = 4096
 
@@ -34,20 +35,27 @@ def authorized_only(command_handler: Callable[..., None]) -> Callable[..., Any]:
 
     def wrapper(self, *args, **kwargs):
         """ Decorator logic """
-        update = kwargs.get("update") or args[0]
+        update = kwargs.get('update') or args[0]
 
         # Reject unauthorized messages
-        chat_id = int(self._config["telegram"]["chat_id"])
+        chat_id = int(self._config['telegram']['chat_id'])
 
         if int(update.message.chat_id) != chat_id:
-            logger.info("Rejected unauthorized message from: %s", update.message.chat_id)
+            logger.info(
+                'Rejected unauthorized message from: %s',
+                update.message.chat_id
+            )
             return wrapper
 
-        logger.info("Executing handler: %s for chat_id: %s", command_handler.__name__, chat_id)
+        logger.info(
+            'Executing handler: %s for chat_id: %s',
+            command_handler.__name__,
+            chat_id
+        )
         try:
             return command_handler(self, *args, **kwargs)
         except BaseException:
-            logger.exception("Exception occurred within Telegram module")
+            logger.exception('Exception occurred within Telegram module')
 
     return wrapper
 
@@ -66,7 +74,7 @@ class Telegram(RPC):
         self._updater: Updater = None
         self._config = freqtrade.config
         self._init()
-        if self._config.get("fiat_display_currency", None):
+        if self._config.get('fiat_display_currency', None):
             self._fiat_converter = CryptoToFiatConverter()
 
     def _init(self) -> None:
@@ -75,9 +83,8 @@ class Telegram(RPC):
         registers all known command handlers
         and starts polling for message updates
         """
-        self._updater = Updater(
-            token=self._config["telegram"]["token"], workers=0, use_context=True
-        )
+        self._updater = Updater(token=self._config['telegram']['token'], workers=0,
+                                use_context=True)
 
         # Register command handler and start telegram message polling
         handles = [
@@ -106,10 +113,14 @@ class Telegram(RPC):
         for handle in handles:
             self._updater.dispatcher.add_handler(handle)
         self._updater.start_polling(
-            clean=True, bootstrap_retries=-1, timeout=30, read_latency=60,
+            clean=True,
+            bootstrap_retries=-1,
+            timeout=30,
+            read_latency=60,
         )
         logger.info(
-            "rpc.telegram is listening for following commands: %s", [h.command for h in handles]
+            'rpc.telegram is listening for following commands: %s',
+            [h.command for h in handles]
         )
 
     def cleanup(self) -> None:
@@ -122,13 +133,19 @@ class Telegram(RPC):
     def send_msg(self, msg: Dict[str, Any]) -> None:
         """ Send a message to telegram channel """
 
-        if msg["type"] == RPCMessageType.BUY_NOTIFICATION:
+        noti = self._config['telegram'].get('notification_settings', {}
+                                            ).get(str(msg['type']), 'on')
+        if noti == 'off':
+            logger.info(f"Notification '{msg['type']}' not sent.")
+            # Notification disabled
+            return
+
+        if msg['type'] == RPCMessageType.BUY_NOTIFICATION:
             if self._fiat_converter:
-                msg["stake_amount_fiat"] = self._fiat_converter.convert_amount(
-                    msg["stake_amount"], msg["stake_currency"], msg["fiat_currency"]
-                )
+                msg['stake_amount_fiat'] = self._fiat_converter.convert_amount(
+                    msg['stake_amount'], msg['stake_currency'], msg['fiat_currency'])
             else:
-                msg["stake_amount_fiat"] = 0
+                msg['stake_amount_fiat'] = 0
 
             message = ("\N{LARGE BLUE CIRCLE} *{exchange}:* Buying {pair}\n"
                        "*Amount:* `{amount:.8f}`\n"
@@ -136,7 +153,7 @@ class Telegram(RPC):
                        "*Current Rate:* `{current_rate:.8f}`\n"
                        "*Total:* `({stake_amount:.6f} {stake_currency}").format(**msg)
 
-            if msg.get("fiat_currency", None):
+            if msg.get('fiat_currency', None):
                 message += ", {stake_amount_fiat:.3f} {fiat_currency}".format(**msg)
             message += ")`"
 
@@ -175,19 +192,19 @@ class Telegram(RPC):
             message = ("\N{WARNING SIGN} *{exchange}:* Cancelling Open Sell Order "
                        "for {pair}. Reason: {reason}").format(**msg)
 
-        elif msg["type"] == RPCMessageType.STATUS_NOTIFICATION:
-            message = "*Status:* `{status}`".format(**msg)
+        elif msg['type'] == RPCMessageType.STATUS_NOTIFICATION:
+            message = '*Status:* `{status}`'.format(**msg)
 
         elif msg['type'] == RPCMessageType.WARNING_NOTIFICATION:
             message = '\N{WARNING SIGN} *Warning:* `{status}`'.format(**msg)
 
-        elif msg["type"] == RPCMessageType.CUSTOM_NOTIFICATION:
-            message = "{status}".format(**msg)
+        elif msg['type'] == RPCMessageType.STARTUP_NOTIFICATION:
+            message = '{status}'.format(**msg)
 
         else:
-            raise NotImplementedError("Unknown message type: {}".format(msg["type"]))
+            raise NotImplementedError('Unknown message type: {}'.format(msg['type']))
 
-        self._send_msg(message)
+        self._send_msg(message, disable_notification=(noti == 'silent'))
 
     def _get_sell_emoji(self, msg):
         """
@@ -213,7 +230,7 @@ class Telegram(RPC):
         :return: None
         """
 
-        if "table" in context.args:
+        if 'table' in context.args:
             self._status_table(update, context)
             return
 
@@ -227,7 +244,7 @@ class Telegram(RPC):
                     "*Current Pair:* {pair}",
                     "*Amount:* `{amount} ({stake_amount} {base_currency})`",
                     "*Open Rate:* `{open_rate:.8f}`",
-                    "*Close Rate:* `{close_rate}`" if r["close_rate"] else "",
+                    "*Close Rate:* `{close_rate}`" if r['close_rate'] else "",
                     "*Current Rate:* `{current_rate:.8f}`",
                     ("*Close Profit:* `{close_profit_pct}`"
                      if r['close_profit_pct'] is not None else ""),
@@ -269,10 +286,9 @@ class Telegram(RPC):
         :return: None
         """
         try:
-            statlist, head = self._rpc_status_table(
-                self._config["stake_currency"], self._config.get("fiat_display_currency", "")
-            )
-            message = tabulate(statlist, headers=head, tablefmt="simple")
+            statlist, head = self._rpc_status_table(self._config['stake_currency'],
+                                                    self._config.get('fiat_display_currency', ''))
+            message = tabulate(statlist, headers=head, tablefmt='simple')
             self._send_msg(f"<pre>{message}</pre>", parse_mode=ParseMode.HTML)
         except RPCException as e:
             self._send_msg(str(e))
@@ -286,18 +302,17 @@ class Telegram(RPC):
         :param update: message update
         :return: None
         """
-        stake_cur = self._config["stake_currency"]
-        fiat_disp_cur = self._config.get("fiat_display_currency", "")
+        stake_cur = self._config['stake_currency']
+        fiat_disp_cur = self._config.get('fiat_display_currency', '')
         try:
             timescale = int(context.args[0])
         except (TypeError, ValueError, IndexError):
             timescale = 7
         try:
-            stats = self._rpc_daily_profit(timescale, stake_cur, fiat_disp_cur)
-            stats_tab = tabulate(
-                stats,
-                headers=["Day", f"Profit {stake_cur}", f"Profit {fiat_disp_cur}", f"Trades"],
-                tablefmt="simple",
+            stats = self._rpc_daily_profit(
+                timescale,
+                stake_cur,
+                fiat_disp_cur
             )
             stats_tab = tabulate(
                 [[day['date'],
@@ -325,8 +340,8 @@ class Telegram(RPC):
         :param update: message update
         :return: None
         """
-        stake_cur = self._config["stake_currency"]
-        fiat_disp_cur = self._config.get("fiat_display_currency", "")
+        stake_cur = self._config['stake_currency']
+        fiat_disp_cur = self._config.get('fiat_display_currency', '')
 
         stats = self._rpc_trade_statistics(
             stake_cur,
@@ -377,12 +392,11 @@ class Telegram(RPC):
     def _balance(self, update: Update, context: CallbackContext) -> None:
         """ Handler for /balance """
         try:
-            result = self._rpc_balance(
-                self._config["stake_currency"], self._config.get("fiat_display_currency", "")
-            )
+            result = self._rpc_balance(self._config['stake_currency'],
+                                       self._config.get('fiat_display_currency', ''))
 
-            output = ""
-            if self._config["dry_run"]:
+            output = ''
+            if self._config['dry_run']:
                 output += (
                     f"*Warning:* Simulated balances in Dry Mode.\n"
                     "This mode is still experimental!\n"
@@ -423,7 +437,7 @@ class Telegram(RPC):
         :return: None
         """
         msg = self._rpc_start()
-        self._send_msg("Status: `{status}`".format(**msg))
+        self._send_msg('Status: `{status}`'.format(**msg))
 
     @authorized_only
     def _stop(self, update: Update, context: CallbackContext) -> None:
@@ -435,7 +449,7 @@ class Telegram(RPC):
         :return: None
         """
         msg = self._rpc_stop()
-        self._send_msg("Status: `{status}`".format(**msg))
+        self._send_msg('Status: `{status}`'.format(**msg))
 
     @authorized_only
     def _reload_config(self, update: Update, context: CallbackContext) -> None:
@@ -459,7 +473,7 @@ class Telegram(RPC):
         :return: None
         """
         msg = self._rpc_stopbuy()
-        self._send_msg("Status: `{status}`".format(**msg))
+        self._send_msg('Status: `{status}`'.format(**msg))
 
     @authorized_only
     def _forcesell(self, update: Update, context: CallbackContext) -> None:
@@ -474,7 +488,7 @@ class Telegram(RPC):
         trade_id = context.args[0] if len(context.args) > 0 else None
         try:
             msg = self._rpc_forcesell(trade_id)
-            self._send_msg("Forcesell Result: `{result}`".format(**msg))
+            self._send_msg('Forcesell Result: `{result}`'.format(**msg))
 
         except RPCException as e:
             self._send_msg(str(e))
@@ -563,13 +577,13 @@ class Telegram(RPC):
         """
         try:
             trades = self._rpc_performance()
-            stats = "\n".join(
-                "{index}.\t<code>{pair}\t{profit:.2f}% ({count})</code>".format(
-                    index=i + 1, pair=trade["pair"], profit=trade["profit"], count=trade["count"]
-                )
-                for i, trade in enumerate(trades)
-            )
-            message = "<b>Performance:</b>\n{}".format(stats)
+            stats = '\n'.join('{index}.\t<code>{pair}\t{profit:.2f}% ({count})</code>'.format(
+                index=i + 1,
+                pair=trade['pair'],
+                profit=trade['profit'],
+                count=trade['count']
+            ) for i, trade in enumerate(trades))
+            message = '<b>Performance:</b>\n{}'.format(stats)
             self._send_msg(message, parse_mode=ParseMode.HTML)
         except RPCException as e:
             self._send_msg(str(e))
@@ -585,11 +599,9 @@ class Telegram(RPC):
         """
         try:
             counts = self._rpc_count()
-            message = tabulate(
-                {k: [v] for k, v in counts.items()},
-                headers=["current", "max", "total stake"],
-                tablefmt="simple",
-            )
+            message = tabulate({k: [v] for k, v in counts.items()},
+                               headers=['current', 'max', 'total stake'],
+                               tablefmt='simple')
             message = "<pre>{}</pre>".format(message)
             logger.debug(message)
             self._send_msg(message, parse_mode=ParseMode.HTML)
@@ -676,8 +688,8 @@ class Telegram(RPC):
         """
         try:
             edge_pairs = self._rpc_edge()
-            edge_pairs_tab = tabulate(edge_pairs, headers="keys", tablefmt="simple")
-            message = f"<b>Edge only validated following pairs:</b>\n<pre>{edge_pairs_tab}</pre>"
+            edge_pairs_tab = tabulate(edge_pairs, headers='keys', tablefmt='simple')
+            message = f'<b>Edge only validated following pairs:</b>\n<pre>{edge_pairs_tab}</pre>'
             self._send_msg(message, parse_mode=ParseMode.HTML)
         except RPCException as e:
             self._send_msg(str(e))
@@ -732,7 +744,7 @@ class Telegram(RPC):
         :param update: message update
         :return: None
         """
-        self._send_msg("*Version:* `{}`".format(__version__))
+        self._send_msg('*Version:* `{}`'.format(__version__))
 
     @authorized_only
     def _show_config(self, update: Update, context: CallbackContext) -> None:
@@ -744,7 +756,7 @@ class Telegram(RPC):
         :return: None
         """
         val = self._rpc_show_config()
-        if val["trailing_stop"]:
+        if val['trailing_stop']:
             sl_info = (
                 f"*Initial Stoploss:* `{val['stoploss']}`\n"
                 f"*Trailing stop positive:* `{val['trailing_stop_positive']}`\n"
@@ -769,7 +781,8 @@ class Telegram(RPC):
             f"*Current state:* `{val['state']}`"
         )
 
-    def _send_msg(self, msg: str, parse_mode: ParseMode = ParseMode.MARKDOWN) -> None:
+    def _send_msg(self, msg: str, parse_mode: ParseMode = ParseMode.MARKDOWN,
+                  disable_notification: bool = False) -> None:
         """
         Send given markdown message
         :param msg: message
@@ -778,33 +791,37 @@ class Telegram(RPC):
         :return: None
         """
 
-        keyboard = [
-            ["/daily", "/profit", "/balance"],
-            ["/status", "/status table", "/performance"],
-            ["/count", "/start", "/stop", "/help"],
-        ]
+        keyboard = [['/daily', '/profit', '/balance'],
+                    ['/status', '/status table', '/performance'],
+                    ['/count', '/start', '/stop', '/help']]
 
         reply_markup = ReplyKeyboardMarkup(keyboard)
 
         try:
             try:
                 self._updater.bot.send_message(
-                    self._config["telegram"]["chat_id"],
+                    self._config['telegram']['chat_id'],
                     text=msg,
                     parse_mode=parse_mode,
                     reply_markup=reply_markup,
+                    disable_notification=disable_notification,
                 )
             except NetworkError as network_err:
                 # Sometimes the telegram server resets the current connection,
                 # if this is the case we send the message again.
                 logger.warning(
-                    "Telegram NetworkError: %s! Trying one more time.", network_err.message
+                    'Telegram NetworkError: %s! Trying one more time.',
+                    network_err.message
                 )
                 self._updater.bot.send_message(
-                    self._config["telegram"]["chat_id"],
+                    self._config['telegram']['chat_id'],
                     text=msg,
                     parse_mode=parse_mode,
                     reply_markup=reply_markup,
+                    disable_notification=disable_notification,
                 )
         except TelegramError as telegram_err:
-            logger.warning("TelegramError: %s! Giving up on that message.", telegram_err.message)
+            logger.warning(
+                'TelegramError: %s! Giving up on that message.',
+                telegram_err.message
+            )

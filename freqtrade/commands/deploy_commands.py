@@ -10,6 +10,7 @@ from freqtrade.exceptions import OperationalException
 from freqtrade.misc import render_template, render_template_with_fallback
 from freqtrade.state import RunMode
 
+
 logger = logging.getLogger(__name__)
 
 

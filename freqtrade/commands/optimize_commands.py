@@ -63,6 +63,7 @@ def start_hyperopt(args: Dict[str, Any]) -> None:
     # Import here to avoid loading hyperopt module when it's not used
     try:
         from filelock import FileLock, Timeout
+
         from freqtrade.optimize.hyperopt import Hyperopt
     except ImportError as e:
         raise OperationalException(

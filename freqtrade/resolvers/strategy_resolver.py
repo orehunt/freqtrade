@@ -16,6 +16,7 @@ from freqtrade.exceptions import OperationalException
 from freqtrade.resolvers import IResolver
 from freqtrade.strategy.interface import IStrategy
 
+
 logger = logging.getLogger(__name__)
 
 

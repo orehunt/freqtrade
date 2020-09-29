@@ -22,6 +22,7 @@ from freqtrade.persistence import Trade
 from freqtrade.strategy.strategy_wrapper import strategy_safe_wrapper
 from freqtrade.wallets import Wallets
 
+
 logger = logging.getLogger(__name__)
 testing = "pytest" in sys.modules
 
