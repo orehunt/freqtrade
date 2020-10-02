@@ -1,15 +1,14 @@
-import os
-from typing import Callable, Dict, Union, Tuple, List
-from itertools import product
-from datetime import datetime
-from joblib import cpu_count, wrap_non_picklable_objects
-import pandas as pd
-import numpy as np
-from multiprocessing import Pool, Manager, Queue
-from functools import partial
 import json
+import os
+from functools import partial
+from multiprocessing import Manager, Pool, Queue
+from typing import Callable, Dict
+
+import pandas as pd
+from joblib import cpu_count, wrap_non_picklable_objects
 
 from freqtrade.exceptions import OperationalException
+
 
 mgr: Manager = None
 
@@ -67,64 +66,3 @@ def read_json_file(file_path: str, key=""):
                 return None
         else:
             return json.load(fp)
-
-
-def concat_timeframes_data(
-    pairs: Union[Tuple[str, ...], Tuple[Tuple[str, str], ...], None],
-    get_data: Union[Callable, None] = None,
-    timeframes: Union[Tuple[str, ...], None] = None,
-    sort=True,
-    source_df: pd.DataFrame = None,
-    df_list: List[pd.DataFrame] = [],
-) -> pd.DataFrame:
-    """
-    Concatenate combinations of pairs and timeframes, using dates as index.
-    The smaller timeframe is taken as base
-
-    :param pairs: List of strings or tuples
-        tuples in the form (pair, timeframe)
-    :param timeframes: List of strings
-        if provided the data will be the product of pairs and timeframes lists
-    :param get_data: callable accepting arguments 'pair', 'timeframe' and 'last_date'
-        the fuction which retrieves the data for each combination
-    """
-    if pairs is not None:
-        pairlist = pairs if timeframes is None else tuple(product(pairs, timeframes))
-        pairs_tf = np.empty((len(pairlist), 3), dtype="O")
-        pairs_tf[:, :2] = np.asarray(pairlist)
-        # strings to timedelta
-        pairs_tf[:, 2] = pd.to_timedelta(pairs_tf[:, 1])
-        if sort:
-            # from shorter to longer, this also inverts pairs order, but shouldn't matter
-            pairs_tf = pairs_tf[np.argsort(pairs_tf[:, 1])]
-        base_td = pairs_tf[-1, 2]
-    if source_df is not None:
-        source_df.set_index("date", inplace=True)
-        data = [source_df]
-        last_date = source_df.index.max()
-    else:
-        data = []
-        last_date = datetime.now()
-    if not len(df_list):
-        for pair, tf, td in pairs_tf:
-            prefix = f"{tf}_{pair}_"
-            prefixes.append(prefix)
-            pair_df = get_data(pair=pair, timeframe=tf, last_date=last_date)
-            pair_df.set_index("date", inplace=True)
-            # longer timeframes have to be shifted, because longer candles
-            # appear later in the timeline
-            if td > base_td:
-                pair_df.index = pair_df.index + td
-            pair_df.columns = prefix + pair_df.columns
-            data.append(pair_df)
-    else:
-        data.extend(df_list)
-
-    cc_df = pd.concat(data, axis=1, join="outer", copy=False)
-    cc_df.fillna(method="pad", inplace=True)
-    # this should drop only starting rows if concatenated dfs start
-    # from different dates
-    cc_df.dropna(inplace=True)
-    cc_df.reset_index(drop=False, inplace=True)
-    # print(cc_df.iloc[:10])
-    return (cc_df, data) if source_df is None else data[1:]

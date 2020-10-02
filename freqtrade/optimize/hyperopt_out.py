@@ -133,7 +133,7 @@ class HyperoptOut(HyperoptData):
             self.get_result_table(
                 self.config,
                 trials,
-                self.epochs_limit(),
+                self.epochs_limit,
                 self.print_all,
                 self.print_colorized,
                 table_header,
@@ -329,7 +329,9 @@ class HyperoptOut(HyperoptData):
         color = "green"
         opt_format = (
             (
-                "Avg: {Style.BRIGHT}{Fore.BLUE}{backend.epochs.avg_last_occurrence} "
+                "Imp: {Style.BRIGHT}{Fore.WHITE}{backend.epochs.improvement:.3} "
+                "{Style.RESET_ALL}"
+                "Avg: {Style.BRIGHT}{Fore.BLUE}{backend.epochs.average:1.2e} "
                 "{Style.RESET_ALL}"
                 "Exp: {Style.BRIGHT}{Fore.CYAN}{backend.epochs.explo} "
                 "{Style.RESET_ALL}"

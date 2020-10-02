@@ -1,29 +1,64 @@
+from freqtrade.strategy.interface import IStrategy
 import numba as nb
 import numpy as np
 from numba import njit
 import pandas as pd
-from typing import List, Tuple, Union, Iterable, Dict
+from typing import Any, Dict, Iterable, List, Tuple, Union, Callable
 from freqtrade.optimize.backtest_nb import cummax
 from itertools import product
 
+cache = {}
 
-def pairs_timeframes(
-    pairs: Tuple[Union[Tuple[str], Tuple[str, str]]],
-    timeframes=None,
-    only_timeframes=False,
-    sort=False,
+
+def concat_pairs_df(
+    ref: Dict[str, Any],
+    cc_pairs: Tuple[str, ...],
+    cc_tf: Tuple[str, ...],
+    strategy: IStrategy,
 ):
-    pairlist = pairs if timeframes is None else tuple(product(pairs, timeframes))
-    if only_timeframes:
-        return pd.to_timedelta([t[1] for t in pairlist]).values.astype(int)
-    pairs_tf = np.empty((len(pairlist), 3), dtype="O")
-    pairs_tf[:, :2] = np.asarray(pairlist)
-    # strings to timedelta
-    pairs_tf[:, 2] = pd.to_timedelta(pairs_tf[:, 1])
-    if sort:
-        # from shorter to longer, this also inverts pairs order, but shouldn't matter
-        pairs_tf = pairs_tf[np.argsort(pairs_tf[:, 1])]
-    return pairs_tf
+    ref_tf, ref_pair, ref_d = ref["timeframe"], ref["pair"], ref["data"]
+    key = (
+        ref_d["date"].iloc[-1],
+        *cc_tf,
+        *cc_pairs,
+    )
+    merge_dict = {(ref_pair, ref_tf): ref_d}
+
+    if key in cache:
+        ref_d.set_index("date", inplace=True)
+        merge_dict.update(cache[key])
+        return merge_pairs_df(df_dict=merge_dict)
+
+    cc_dict = {}
+    last_date = ref_d["date"].iloc[-1]
+    ref_td = pd.Timedelta(ref_tf)
+    tds = pd.to_timedelta(cc_tf)
+
+    for pair in cc_pairs:
+        for n, td in enumerate(tds):
+            pair_df = strategy.get_pairs_data(
+                pair=pair, timeframe=cc_tf[n], last_date=last_date
+            )
+            if td > ref_td:
+                pair_df["date"].values[:] += td
+            pair_df.set_index("date", inplace=True)
+            cc_dict[(pair, cc_tf[n])] = pair_df
+
+    ref_d.set_index("date", inplace=True)
+    # get columns (after date is set as index)
+    # to keep base ohlcv names for the ref pair
+    ref_columns = ref_d.columns
+
+    merge_dict.update(cc_dict)
+    cc_df = pd.concat(merge_dict, axis=1, copy=False)
+
+    cc_df.columns = cc_df.columns.to_flat_index()
+    cc_df[ref_columns] = cc_df[((ref_pair, ref_tf, c) for c in ref_columns)]
+
+    cc_df.fillna(method="pad", inplace=True)
+    cc_df.reset_index(drop=False, inplace=True)
+    cache[key] = cc_dict
+    return cc_df
 
 
 def merge_pairs_df(df_dict: Dict[Tuple[str, str], pd.DataFrame]):
@@ -169,3 +204,82 @@ def repeat_rows(arr, repeats, out=None):
 #             for c in columns:
 #                 new_names.append(t + "_" + p + "_" + c)
 #     return new_names
+#
+
+
+def pairs_timeframes(
+    pairs: Union[Tuple[str, ...], Tuple[Tuple[str, str], ...], None],
+    timeframes=None,
+    only_timeframes=False,
+    sort=False,
+):
+    pairlist = pairs if timeframes is None else tuple(product(pairs, timeframes))
+    if only_timeframes:
+        return pd.to_timedelta([t[1] for t in pairlist]).values.astype(int)
+    pairs_tf = np.empty((len(pairlist), 3), dtype="O")
+    pairs_tf[:, :2] = np.asarray(pairlist)
+    # strings to timedelta
+    pairs_tf[:, 2] = pd.to_timedelta(pairs_tf[:, 1])
+    if sort:
+        # from shorter to longer, this also inverts pairs order, but shouldn't matter
+        pairs_tf = pairs_tf[np.argsort(pairs_tf[:, 1])]
+    return pairs_tf
+
+
+def concat_timeframes_data(
+    pairs: Union[Tuple[str, ...], Tuple[Tuple[str, str], ...], None],
+    get_data: Union[Callable, None] = None,
+    timeframes: Union[Tuple[str, ...], None] = None,
+    sort=True,
+    source_df: pd.DataFrame = None,
+    df_list: List[pd.DataFrame] = [],
+) -> pd.DataFrame:
+    """
+    Concatenate combinations of pairs and timeframes, using dates as index.
+    The smaller timeframe is taken as base
+
+    :param pairs: List of strings or tuples
+        tuples in the form (pair, timeframe)
+    :param get_data: callable accepting arguments 'pair', 'timeframe' and 'last_date'
+        the fuction which retrieves the data for each combination
+    :param timeframes: List of strings
+        if provided the data will be the product of pairs and timeframes lists
+    :param sort: order the resulting dataframe by length of timeframes
+    :param source_df: the starting dataframe against which cache is checked
+    :param df_list: a list of frames to concatenate, takes precedence over pairs list
+    """
+    if pairs is not None:
+        pairs_tf = pairs_timeframes(pairs, timeframes, sort=sort)
+        base_td = pairs_tf[-1, 2]
+    elif not df_list:
+        raise OperationalException("a list of pairs, or a list of frames is required")
+    if source_df is not None:
+        source_df.set_index("date", inplace=True)
+        data = [source_df]
+        last_date = source_df.index.max()
+    else:
+        data = []
+        last_date = datetime.now()
+    if not len(df_list):
+        for pair, tf, td in pairs_tf:
+            prefix = f"{tf}_{pair}_"
+            prefixes.append(prefix)
+            pair_df = get_data(pair=pair, timeframe=tf, last_date=last_date)
+            pair_df.set_index("date", inplace=True)
+            # longer timeframes have to be shifted, because longer candles
+            # appear later in the timeline
+            if td > base_td:
+                pair_df.index = pair_df.index + td
+            pair_df.columns = prefix + pair_df.columns
+            data.append(pair_df)
+    else:
+        data.extend(df_list)
+
+    cc_df = pd.concat(data, axis=1, join="outer", copy=False)
+    cc_df.fillna(method="pad", inplace=True)
+    # this should drop only starting rows if concatenated dfs start
+    # from different dates
+    cc_df.dropna(inplace=True)
+    cc_df.reset_index(drop=False, inplace=True)
+    # print(cc_df.iloc[:10])
+    return cc_df, data if source_df is None else data[1:]

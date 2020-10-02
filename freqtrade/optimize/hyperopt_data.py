@@ -2,19 +2,19 @@ import json
 import logging
 import os
 import random
-import warnings
-from abc import abstractmethod
 from datetime import datetime
 from os import makedirs
 from pathlib import Path
 from shutil import rmtree
 from time import sleep
-from typing import Any, Callable, Dict, List, Tuple, Union
+from typing import Any, Callable, Dict, Iterable, List, Tuple, Union
 
 import numcodecs
+import numpy as np
 import zarr as za
-from numpy import array, iinfo, int32, isin
+from numpy import array, iinfo, int32
 from numpy import repeat as np_repeat
+
 
 za.storage.default_compressor = za.Zstd(level=2)
 
@@ -22,21 +22,16 @@ za.storage.default_compressor = za.Zstd(level=2)
 import io
 from os import path
 
+from numpy import arange, float64, isfinite, nanmean
+from pandas import DataFrame, Series, concat, isna, json_normalize
+
 # Import IHyperOpt and IHyperOptLoss to allow unpickling classes from these modules
 import freqtrade.optimize.hyperopt_backend as backend
 from freqtrade.constants import HYPEROPT_LIST_STEP_VALUES
 from freqtrade.exceptions import DependencyException, OperationalException
 from freqtrade.misc import plural, round_dict
 from freqtrade.optimize.hyperopt_backend import Epochs, TrialsState
-from freqtrade.optimize.hyperopt_constants import OPTIMIZER_CUSTOM_ATTRS, VOID_LOSS
-from numpy import arange, float64, isfinite, nanmean
-from pandas import DataFrame, Series, concat, isna, json_normalize
-
-# Suppress scikit-learn FutureWarnings from skopt
-with warnings.catch_warnings():
-    warnings.filterwarnings("ignore", category=FutureWarning)
-    from skopt import Optimizer
-    from skopt.space import Categorical, Space
+from freqtrade.optimize.optimizer import IOptimizer, Parameter
 
 
 logger = logging.getLogger(__name__)
@@ -61,7 +56,7 @@ class HyperoptData(backend.HyperoptBase):
 
     # evaluations
     min_epochs: int
-    epochs_limit: Callable
+    epochs_limit: int
     total_epochs: int
     trials: DataFrame
     space_reduction_interval: int
@@ -78,13 +73,17 @@ class HyperoptData(backend.HyperoptBase):
     trials_file: Path
     trials_dir: Path
 
-    opt: Optimizer
+    opt: IOptimizer
     # list of all the optimizers random states
-    rngs: List
+    rngs: List[int]
     # path where the hyperopt state loaded by workers is dumped
     cls_file: Path
     # path used by CV to store parameters values loaded by workers
     Xi_file: Path
+    # tune exploration/exploitation based on heuristics
+    adjust_acquisition = True
+    parameters: List[Parameter]
+    n_rand = 10
 
     metrics = ("profit", "avg_profit", "duration", "trade_count", "loss")
     min_date: datetime
@@ -96,7 +95,7 @@ class HyperoptData(backend.HyperoptBase):
     def __init__(self, config):
         self.config = config
 
-        self.total_epochs = self.config["epochs"] if "epochs" in self.config else 0
+        self.total_epochs = self.config.get("epochs", 0)
 
         self.hyperopt_dir = "hyperopt_data"
 
@@ -109,7 +108,7 @@ class HyperoptData(backend.HyperoptBase):
             self.config["user_data_dir"] / self.hyperopt_dir / "trials_instances.json"
         )
         self.data_pickle_file = (
-            self.config["user_data_dir"] / self.hyperopt_dir / "hyperopt_tickerdata.pkl"
+            self.config["user_data_dir"] / self.hyperopt_dir / "processed_data.pkl"
         )
         self.Xi_file = self.config["user_data_dir"] / self.hyperopt_dir / "Xi.pkl"
         self.cls_file = self.config["user_data_dir"] / self.hyperopt_dir / "cls.pkl"
@@ -497,6 +496,10 @@ class HyperoptData(backend.HyperoptBase):
             return d
 
     @staticmethod
+    def params_Xi(v: dict):
+        return list(v["params_dict"].values())
+
+    @staticmethod
     def filter_trials(trials: Any, config: Dict[str, Any], return_list=False) -> Any:
         """
         Filter our items from the list of hyperopt trials
@@ -857,8 +860,6 @@ class HyperoptData(backend.HyperoptBase):
                 prev_rngs = []
             rngs = []
             random.seed(self.random_state)
-            n_explorers = self.n_explorers
-            n_exploiters = self.n_exploiters
             for _ in range(max_opts):  # generate optimizers
                 # random state is preserved
                 if len(prev_rngs) > 0:
@@ -867,29 +868,16 @@ class HyperoptData(backend.HyperoptBase):
                     rs = random.randint(0, iinfo(int32).max)
                 # in multi mode generate a new optimizer
                 # to randomize the base estimator
-                opt_copy = self.get_optimizer(rs)
-                opt_copy.void_loss = VOID_LOSS
-                opt_copy.void = False
-                opt_copy.rs = rs
-                # assign role
-                if n_explorers:
-                    # explorers are positive
-                    opt_copy.role = n_explorers
-                    n_explorers -= 1
-                elif n_exploiters:
-                    # exploiters are negative
-                    opt_copy.role = -n_exploiters
-                    n_exploiters -= 1
+                opt_copy = self.get_optimizer(
+                    random_state=rs, parameters=self.parameters
+                )
                 rngs.append(rs)
                 backend.optimizers.put(opt_copy)
             del opt_copy
             self.rngs = rngs
         else:
-            self.opt = self.get_optimizer()
-            self.opt.void_loss = VOID_LOSS
-            self.opt.void = False
-            self.opt.rs = self.random_state
-            self.rngs = self.opt.rs
+            self.opt = self.get_optimizer(self.random_state, parameters=self.parameters)
+            self.rngs = [self.opt.rs]
 
     def apply_space_reduction(
         self, jobs: int, trials_state: TrialsState, epochs: Epochs
@@ -900,7 +888,7 @@ class HyperoptData(backend.HyperoptBase):
         )
         if not len(trials):
             return False
-        min_trials = self.opt_n_initial_points
+        min_trials = self.n_rand
         is_shared_or_single = self.shared or not self.multi
         if is_shared_or_single:
             # update optimizers with new dimensions
@@ -908,15 +896,13 @@ class HyperoptData(backend.HyperoptBase):
             trials_flt = self.filter_trials_by_opt(None, trials, min_trials)
             if trials_flt is None:
                 return False
-            new_dims = self.reduce_dimensions(
-                None, self.dimensions.copy(), trials_flt, min_trials=min_trials,
-            )
+            new_pars = self.reduce_spaces(self.parameters.copy(), trials_flt)
         else:
-            new_dims = []
+            new_pars = []
         reduced_optimizers = []
         reduced_losses = []
-        is_multi = self.mode == "multi"
         if self.mode != "single":
+            # make sure all workers are idle
             backend.wait_for_lock(epochs.lock, "space_reduction", logger)
             if len(epochs.space_reduction) != 0 or backend.optimizers.qsize() < jobs:
                 qs = backend.optimizers.qsize()
@@ -925,42 +911,27 @@ class HyperoptData(backend.HyperoptBase):
                     f" workers unsync, optimizers queue: {qs}, mapping: {ds}"
                 )
             for oid, opt in epochs.pinned_optimizers.items():
-                if is_multi:
+                if self.multi:
                     opt_trials = self.filter_trials_by_opt(opt.rs, trials, min_trials)
                     if opt_trials is None:
                         continue
                     reduced_losses.extend(opt_trials["loss"].values.tolist())
-                opt_dims = (
+                opt_pars = (
                     # in shared or single mode
-                    new_dims
+                    new_pars
                     # in multi mode when there are filtered trials
-                    or self.reduce_dimensions(
-                        opt.rs, self.dimensions, opt_trials, min_trials=min_trials,
-                    )
+                    or self.reduce_spaces(self.parameters.copy(), opt_trials,)
                 )
                 # don't update space if this optimizer didn't have filtered trials
-                if opt_dims:
-                    opt.space = Space(opt_dims)
-                    del opt.Xi[:], opt.yi[:]
+                if opt_pars:
+                    opt.create_optimizer(opt_pars)
                     reduced_optimizers.append(opt.rs)
                     epochs.pinned_optimizers[oid] = opt
-                epochs.space_reduction[oid] = opt_dims is True
+                epochs.space_reduction[oid] = opt_pars is True
             backend.epochs.lock.release()
         else:
-            if new_dims:
-                # gaussian processes are instantiaded with the search space
-                # so recreate the optimizer
-                opt = self.opt
-                if self.opt_base_estimator() == "GP":
-                    state = self.save_opt_state(opt)
-                    self.apply_opt_state(
-                        self.get_optimizer(random_state=opt.rs, dimensions=new_dims),
-                        state,
-                    )
-                    self.opt = opt
-                else:
-                    self.opt.space = Space(new_dims)
-                    del self.opt.Xi[:], self.opt.yi[:]
+            if new_pars:
+                self.opt.create_optimizer(new_pars)
                 reduced_optimizers.append(self.opt.rs)
 
         # needed for clearing trials outside of new space from storage
@@ -987,72 +958,47 @@ class HyperoptData(backend.HyperoptBase):
         return trials
 
     @staticmethod
-    def reduce_dimensions(
-        rs: Union[int, None], dimensions: List, trials: DataFrame, min_trials: int
-    ) -> List:
-        # iterate over each dimension to find new min max
+    def reduce_spaces(parameters: List, trials: DataFrame) -> List:
+        # iterate over each parameter to find new min max
         rs_trials = json_normalize(trials["params_dict"])
-        for n, dim in enumerate(dimensions):
-            # if it's integer or real, set low and high bounds
-            if dim.kind in (0, 1):
-                dm = dimensions[n]
-                dm.low = rs_trials[dim.name].values.min()
-                dm.high = rs_trials[dim.name].values.max()
-                # when bounds change transformer needs to be updated (skopt)
-                dm.set_transformer(dm.transform_)
-            # else set categories
-            else:
-                new_cats = rs_trials[dim.name].unique().tolist()
-                dm = dimensions[n]
-                # reduce priors list to filtered categories since
-                # categories probabilities are user defined
-                if dm.prior is not None and len(dm.prior):
-                    prior = array(dm.prior)[isin(dm.categories, new_cats)]
-                    prior /= prior.sum()  # readjust sum of probabilities to 1
-                else:
-                    prior = None
-                # assert dm.name == dim.name
-                # assert len(dm.categories) == len(dm.prior)
-                # assert np.sum(dm.prior) == 1
-                dimensions[n] = Categorical(
-                    new_cats, prior=prior, transform=dm.transform_, name=dim.name
-                )
-                # reset the kind
-                dimensions[n].kind = 2
-        return dimensions
+        for n, par in enumerate(parameters):
+            p = parameters[n]
+            HyperoptData.min_max_parameter(p, rs_trials)
+
+        return parameters
 
     @staticmethod
-    def opt_rand(opt: Optimizer, rand: int = None, seed: bool = True) -> Optimizer:
-        """
-        Return a new instance of the optimizer with modified rng, from the previous
-        optimizer random state
-        """
-        if seed:
-            if not rand:
-                rand = opt.rng.randint(0, VOID_LOSS)
-            opt.rng.seed(rand)
-        opt, opt.void_loss, opt.void, opt.rs = (
-            opt.copy(random_state=opt.rng),
-            opt.void_loss,
-            opt.void,
-            opt.rs,
-        )
-        return opt
+    def col_min_max(p, df):
+        p.low = df[p.name].values.min()
+        p.high = df[p.name].values.max()
 
     @staticmethod
-    def opt_clear(opt: Optimizer):
-        """ Delete models and points from an optimizer instance """
-        del opt.models[:], opt.Xi[:], opt.yi[:]
-        return opt
-
-    @staticmethod
-    def save_opt_state(opt: Optimizer) -> Dict:
-        state = {}
-        for attr in OPTIMIZER_CUSTOM_ATTRS:
-            state[attr] = getattr(opt, attr)
-        return state
-
-    @staticmethod
-    def apply_opt_state(opt: Optimizer, state: Dict) -> Optimizer:
-        for attr in OPTIMIZER_CUSTOM_ATTRS:
-            setattr(opt, attr, state[attr])
+    def min_max_parameter(p: Parameter, rs_trials: DataFrame):
+        # if it's a range, set low and high bounds
+        if p.kind == 1:
+            HyperoptData.col_min_max(p, rs_trials)
+        # category elements not present in filtered trials are removed
+        elif p.kind == 0:
+            new_cats = rs_trials[p.name].unique().tolist()
+            # reduce priors list to filtered categories since
+            # categories probabilities are user defined
+            p.sub = new_cats
+            # if prior is a list of probabilities, renormalize to 1.
+            if "prior" in p.meta:
+                prior = p.meta["prior"]
+                if isinstance(prior, Iterable):
+                    arr = np.asarray(prior)
+                    prior = arr / arr.sum()
+                    p.meta["prior"] = prior
+        else:
+            if isinstance(p.sub, np.ndarray):
+                HyperoptData.col_min_max(p, rs_trials)
+            elif isinstance(p.sub, Parameter):
+                HyperoptData.min_max_parameter(p.sub, rs_trials)
+            elif isinstance(p.sub, Iterable):
+                for el in p.sub:
+                    if isinstance(el, Parameter):
+                        HyperoptData.min_max_parameter(el, rs_trials)
+                    elif isinstance(el, np.ndarray):
+                        raise NotImplementedError("mixed types reduction not supported")
+                        # HyperoptData.col_min_max(el, rs_trials)

@@ -112,10 +112,15 @@ class Main:
     )
     # optimizer
     config["epochs"] = args.e
-    config["mode"] = args.mode
-    config["lie_strat"] = args.lie
-    config["effort"] = args.f
-    config["ask_points"] = args.pts
+    config["hyperopt_mode"] = args.mode
+    try:
+        opt_config = {"lie_strat" : args.lie,
+                      "algo": args.alg
+                      }
+        config["hyperopt_optimizer"].update(opt_config)
+    except KeyError:
+        config["hyperopt_optimizer"] = opt_config
+    config["hyperopt_ask_points"] = args.pts
     config["hyperopt_random_state"] = args.rand if args.rand else None
     config["hyperopt_loss"] = "DecideCoreLoss" if not args.lo else args.lo
 
@@ -1113,7 +1118,7 @@ class Main:
         if self.args.mode != "cv":
             assert self.timerange == OPT_TR
         # cross validate on the other two time ranges
-        self.config["mode"] = "cv"
+        self.config["hyperopt_mode"] = "cv"
         # on the first cv sample all the metrics for good trials
         self.config.update(
             {
@@ -1162,12 +1167,12 @@ class Main:
         # reset options
         self.timerange = OPT_TR
         # change mode if we started from cv (resume)
-        self.config["mode"] = self.args.mode if self.args.mode != "cv" else "shared"
+        self.config["hyperopt_mode"] = self.args.mode if self.args.mode != "cv" else "shared"
         self.config["hyperopt_clear"] = self.args.clr
         self.config["hyperopt_reset"] = self.args.res
         self.config["hyperopt_trials_instance"] = False
         self.config["hyperopt_list_filter"] = False
-        self.config["skip_trials_setup"] = False
+        self.config["hyperopt_skip_trials_setup"] = False
 
     def opt_conds(self):
         """

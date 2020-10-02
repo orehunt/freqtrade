@@ -7,12 +7,13 @@ from multiprocessing.managers import Namespace, SyncManager
 from pathlib import Path
 from queue import Queue
 from threading import Lock
-from typing import Any, Callable, Dict, List, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 
 from pandas import DataFrame
-from skopt import Optimizer
 
-hyperopt: Any = None
+from freqtrade.optimize.optimizer import IOptimizer, Parameter
+
+
 cls: Any = None
 data: Dict[str, DataFrame] = {}
 min_date: Union[None, datetime] = None
@@ -21,7 +22,7 @@ manager: SyncManager
 pbar: dict = {}
 
 # Each worker stores the optimizer in the global state
-opt: Optimizer
+opt: IOptimizer
 optimizers: Queue
 exploit: int = 0
 
@@ -33,8 +34,6 @@ just_saved = 0
 # flag to remember if a worker has recently reset its optimizer parameters pool
 # is resetted if worker is not in reduction dict
 just_reduced = False
-# in multi mode, each optimizer *also* stores its list of last_best periods
-epochs_since_last_best = [1, 1]
 
 # timer, keep track how hyperopt runtime, use it to decide when to save on storage (worker local)
 timer: float = 0
@@ -67,17 +66,17 @@ trials = TrialsState()
 # trials counting, accessed by lock
 class Epochs(Namespace):
     # optimizers mapped to workers (PID or WID)
-    pinned_optimizers: Dict[int, Optimizer]
+    pinned_optimizers: Dict[int, IOptimizer]
     lock: Lock
     convergence: int
-    epochs_since_last_best: List
+    improvement: float
+    average: float
     explo: int
     current_best_loss: Dict[Union[None, int], float]
     last_best_loss: float
     current_best_epoch: Dict[Union[None, int], int]
     last_best_epoch: int
     max_epoch: int
-    avg_last_occurrence: int
     space_reduction: Dict[int, bool]
 
 
@@ -137,6 +136,9 @@ def wait_for_lock(lock: Lock, message: str, logger: Logger):
 class HyperoptBase:
     dimensions: List[Any]
     logger: Logger
+    ask_points: int
+    n_jobs: int
+    random_state: int
 
     @abstractmethod
     def backtest_params(
@@ -167,3 +169,9 @@ class HyperoptBase:
         self, trials_state: TrialsState, epochs: Epochs, rs: Union[None, int]
     ):
         """ Calculate epochs and save results to storage """
+
+    @abstractmethod
+    def get_optimizer(
+        self, random_state: Optional[int] = None, parameters: List[Parameter] = []
+    ) -> IOptimizer:
+        """ Create an optimizer with instance config """
