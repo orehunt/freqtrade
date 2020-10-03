@@ -1,3 +1,5 @@
 {
-    "reportUnboundVariable": false
+  "reportUnboundVariable": false,
+  "venvPath": ".venv/miniconda3/envs",
+  "venv": "freqtradej"
 }

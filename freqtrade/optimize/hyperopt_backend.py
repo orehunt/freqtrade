@@ -1,9 +1,11 @@
 import signal
 from abc import abstractmethod
 from datetime import datetime
+import logging
 from functools import partial
 from logging import Logger
-from multiprocessing.managers import Namespace, SyncManager
+from multiprocessing.managers import Namespace, SharedMemoryManager, SyncManager
+from multiprocessing.shared_memory import ShareableList
 from pathlib import Path
 from queue import Queue
 from threading import Lock
@@ -19,6 +21,7 @@ data: Dict[str, DataFrame] = {}
 min_date: Union[None, datetime] = None
 max_date: Union[None, datetime] = None
 manager: SyncManager
+sm_manager: SharedMemoryManager
 pbar: dict = {}
 
 # Each worker stores the optimizer in the global state
@@ -59,6 +62,7 @@ class TrialsState(Namespace):
     empty_strikes: int
     void_loss: float
     table_header: int
+    last_results: Dict[int, List]
 
 
 trials = TrialsState()
@@ -84,7 +88,6 @@ epochs: Epochs
 
 
 def parallel_sig_handler(
-    backend,
     fn: Callable,
     cls_file: Union[None, Path],
     logger: Union[None, Logger],
@@ -95,15 +98,17 @@ def parallel_sig_handler(
     To handle Ctrl-C the worker main function has to be wrapped into a try/catch;
     NOTE: The Manager process also needs to be configured to handle SIGINT (in the backend)
     """
-    if not backend.cls and cls_file:
+    global cls
+    if not cls and cls_file:
         from joblib import load
 
-        backend.cls = load(cls_file)
+        cls = load(cls_file)
         if logger:
             from freqtrade.loggers import setup_logging, setup_logging_pre
 
             setup_logging_pre()
-            setup_logging(backend.cls.config)
+            setup_logging(cls.config)
+            _silence_noisy_modules()
             logger.debug("loaded hyperopt class from %s", cls_file)
     try:
         return fn(*args, **kwargs)
@@ -175,3 +180,10 @@ class HyperoptBase:
         self, random_state: Optional[int] = None, parameters: List[Parameter] = []
     ) -> IOptimizer:
         """ Create an optimizer with instance config """
+
+def _silence_noisy_modules():
+    logging.getLogger("matplotlib").setLevel(logging.WARNING)
+    logging.getLogger("ccxt.base.exchange").setLevel(logging.WARNING)
+    logging.getLogger("numba.core.ssa").setLevel(logging.WARNING)
+    logging.getLogger("numba.core.interpreter").setLevel(logging.WARNING)
+    logging.getLogger("numba.core.byteflow").setLevel(logging.WARNING)

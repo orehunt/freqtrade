@@ -84,6 +84,8 @@ class HyperoptData(backend.HyperoptBase):
     adjust_acquisition = True
     parameters: List[Parameter]
     n_rand = 10
+    # True if optimization mode is shared or multi
+    async_sched = False
 
     metrics = ("profit", "avg_profit", "duration", "trade_count", "loss")
     min_date: datetime
@@ -95,7 +97,7 @@ class HyperoptData(backend.HyperoptBase):
     def __init__(self, config):
         self.config = config
 
-        self.total_epochs = self.config.get("epochs", 0)
+        self.total_epochs = self.config.get("hyperopt_epochs", 0)
 
         self.hyperopt_dir = "hyperopt_data"
 
@@ -500,7 +502,7 @@ class HyperoptData(backend.HyperoptBase):
         return list(v["params_dict"].values())
 
     @staticmethod
-    def filter_trials(trials: Any, config: Dict[str, Any], return_list=False) -> Any:
+    def filter_trials(trials: Any, config: Dict[str, Any], return_list=False, intensity=1) -> Any:
         """
         Filter our items from the list of hyperopt trials
         """
@@ -534,9 +536,10 @@ class HyperoptData(backend.HyperoptBase):
             if filters["dedup"]:
                 flt_trials.append(hd.dedup_trials(trials))
             if filters["best"]:
-                flt_trials.append(hd.norm_best(trials, filters))
-            flt_trials.append(hd.sample_trials(trials, filters))
+                flt_trials.append(hd.norm_best(trials, filters, intensity))
+            flt_trials.append(hd.sample_trials(trials, filters, intensity))
             return hd.list_or_df(
+                # filtering can overlap, drop dups
                 concat(flt_trials).drop_duplicates(subset="current_epoch"), return_list
             )
         else:
@@ -546,6 +549,7 @@ class HyperoptData(backend.HyperoptBase):
     def trim_bounds(
         trials: DataFrame, trail_enabled: Any, col: str, bound: str, val: Any
     ) -> DataFrame:
+        """ range calculations require adjustments to the bounds of the trials metrics """
         if bound not in ("min", "max"):
             raise OperationalException("Wrong min max choice")
         if len(trials) < 1:
@@ -572,7 +576,7 @@ class HyperoptData(backend.HyperoptBase):
             return flt(trials, val)
 
     @staticmethod
-    def norm_best(trials: Any, filters: dict) -> List:
+    def norm_best(trials: Any, filters: dict, intensity=1) -> List:
         """ Normalize metrics and sort by sum or minimum score """
         metrics = ("profit", "avg_profit", "duration", "trade_count", "loss")
 
@@ -619,9 +623,10 @@ class HyperoptData(backend.HyperoptBase):
             pct_best = trials["norm_sum"].values.mean()
         else:
             pct_best = filters["pct_best"]
-        n_best = int(len(trials) * pct_best // len(types_best))
-        if n_best < 2:
-            n_best = 2
+        n_best = int(len(trials) * pct_best * intensity // len(types_best))
+        n_types = len(types_best)
+        if n_best < n_types:
+            n_best = max(1, n_types)
 
         if "ratio" in types_best:
             # filter the trials to the ones that meet the min_ratio for all the metrics
@@ -642,7 +647,7 @@ class HyperoptData(backend.HyperoptBase):
         return concat(dedup_metrics).drop_duplicates(subset="current_epoch")
 
     @staticmethod
-    def sample_trials(trials: DataFrame, filters: Dict) -> DataFrame:
+    def sample_trials(trials: DataFrame, filters: Dict, intensity=1) -> DataFrame:
         """
         Pick one trial, every `step_value` of `step_metric`...
         or pick n == `range` trials for every `step_metric`...
@@ -662,15 +667,16 @@ class HyperoptData(backend.HyperoptBase):
                 for sort_k in sort_keys:
                     flt_trials.extend(
                         HyperoptData.step_over_trials(
-                            step_k, step_values, sort_k, trials
+                            step_k, step_values, sort_k, trials, intensity
                         )
                     )
         else:
             flt_trials = [trials]
         if flt_trials:
+            # stepping can overlap, dedup
             return concat(flt_trials).drop_duplicates(subset="current_epoch")
         else:
-            return Series()
+            return DataFrame()
 
     @staticmethod
     def find_steps(
@@ -715,7 +721,7 @@ class HyperoptData(backend.HyperoptBase):
 
     @staticmethod
     def step_over_trials(
-        step_k: str, step_values: Dict, sort_k: str, trials: DataFrame
+            step_k: str, step_values: Dict, sort_k: str, trials: DataFrame, intensity=1
     ) -> List:
         """ Apply the sampling of a metric_key:sort_key combination over the trials """
         # for duration and loss we sort by the minimum
@@ -723,9 +729,12 @@ class HyperoptData(backend.HyperoptBase):
         flt_trials = []
         last_epoch = None
         steps, step_v = HyperoptData.find_steps(step_k, step_values, trials)
+        # adjust steps by the given intensity
+        steps = steps[::int(len(steps) / intensity) or len(steps)]
+        step_v /= intensity
 
         # print("looping over {steps} steps!")
-        for n, s in enumerate(steps):
+        for _, s in enumerate(steps):
             try:
                 t = (
                     # the trials between the current step
@@ -846,7 +855,7 @@ class HyperoptData(backend.HyperoptBase):
         adds a few attributes to determine logic of execution during trials evaluation
         """
         # try to load previous optimizers
-        if self.multi:
+        if self.async_sched:
             # on startup distribute reproduced optimizers
             backend.optimizers = backend.manager.Queue()
             max_opts = self.n_jobs
@@ -865,7 +874,7 @@ class HyperoptData(backend.HyperoptBase):
                 if len(prev_rngs) > 0:
                     rs = prev_rngs.pop(0)
                 else:
-                    rs = random.randint(0, iinfo(int32).max)
+                    rs = random.randint(0, np.int32(iinfo(int32).max))
                 # in multi mode generate a new optimizer
                 # to randomize the base estimator
                 opt_copy = self.get_optimizer(

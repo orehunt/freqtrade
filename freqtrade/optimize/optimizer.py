@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from abc import abstractmethod
 from enum import IntEnum
 from types import SimpleNamespace
@@ -8,12 +9,16 @@ from typing import Any, Dict, Iterable, List, Tuple, Union
 import numpy as np
 from sklearn.utils import check_random_state
 
+from freqtrade.exceptions import OperationalException
+
 
 VOID_LOSS = float(
     np.iinfo(np.int32).max
 )  # just a big enough number to be a bad point in the loss optimization
 
 PARAMETER_TYPES = ["cat", "range", "mix"]
+
+logger = logging.getLogger(__name__)
 
 
 class ParameterKind(IntEnum):
@@ -77,7 +82,7 @@ def analyze_parameters(parameters: Iterable[Parameter], precision=16):
             if "int" in par.meta:
                 n_pars += max(1, par.high - par.low)
             else:
-                left, right = f"{par.low/par.high:.{precision}}".split(".")
+                left, right = f"{par.low/(par.high or 1.):.{precision}}".split(".")
                 base = len(left)
                 exp = int(right)
                 n_pars += (exp * 10 + (base * precision * 10)) or 10
@@ -97,8 +102,8 @@ def _factorial(n):
     return (
         n * np.log(n)
         - n
-        + np.log(n * (1 + 4 * n * (1 + 2 * n))) / 6
-        + np.log(np.pi) / 2
+        + np.log(n * (1. + 4. * n * (1. + 2. * n))) / 6.
+        + np.log(np.pi) / 2.
     )
 
 
@@ -150,6 +155,8 @@ class IOptimizer:
 
     """ Number of initial random points """
     n_rand: int
+    """ A suggested epochs limit """
+    n_epochs: int
     """ Points per trial, how many observations to run between epochs """
     ask_points: int
     """ Hint to help the optimizer decide what to use """
@@ -168,6 +175,7 @@ class IOptimizer:
         self.rng = check_random_state(self.rs)
         self.n_jobs = config.get("n_jobs", 1)
         self.n_rand = config.get("n_rand", 1)
+        self.n_rand = config.get("n_epochs", 10)
         self.ask_points = config.get("ask_points", 1)
         self.algo = config.get("algo", "rand")
 
@@ -176,6 +184,7 @@ class IOptimizer:
         self._params = list(parameters)
         self._args = args
         self._kwargs = kwargs
+        self._setup_missing_tags_handler()
         self.create_optimizer(parameters, config, *args, **kwargs)
 
     def copy(self, rand: int = None, new_seed: bool = False) -> IOptimizer:
@@ -186,15 +195,67 @@ class IOptimizer:
         if new_seed:
             if not rand:
                 rand = self.rng.randint(0, VOID_LOSS)
-            self.rng.seed(rand)
 
         opt = self.__class__(
-            self._params, self.rs, self._config, *self._args, **self._kwargs
+            self._params, rand or self.rs, self._config, *self._args, **self._kwargs
         )
         opt.void_loss = self.void_loss
         opt.void = self.void
-        opt.rs = self.rs
+        # change the random state but keep the initial rs as ID
+        if rand:
+            opt.rs = self.rs
         return opt
+
+    def validate_tags(self, meta: Dict):
+        for tg in meta:
+            if tg not in self.supported_tags:
+                logger.warning(
+                    "metatag {} not supported by optimizer {}".format(
+                        tg, self.__class__.__name__
+                    )
+                )
+
+    def _setup_missing_tags_handler(self):
+        mtc = self._config.get("meta_tag_conflict", "warn")
+        if mtc == "warn":
+            setattr(self, "handle_missing_tag, ", self._warn_missing_tag)
+        elif mtc == "term":
+            setattr(self, "handle_missing_tag, ", self._term_missing_tag)
+        elif mtc == "quiet":
+            setattr(self, "handle_missing_tag, ", lambda: None)
+        else:
+            raise OperationalException(
+                "tag conflict option {} not understood".format(mtc)
+            )
+
+    def _warn_missing_tag(self, tag: Tuple[str, str]):
+        logger.warning("option %s for tag %s is not supported!", tag[0], tag[1])
+
+    def _term_missing_tag(self, tag: Tuple[str, str]):
+        raise OperationalException(
+            "execution couldn't continue because option %s for tag %s is not supported!".format(
+                tag[0], tag[1]
+            )
+        )
+
+    @abstractmethod
+    def _setup_mode(self):
+        """ Configure optimizer based on mode of operation """
+        if self.algo == "rand":
+            pass
+        elif not self.algo or self.algo == "auto":
+            if self.mode == "single":
+                pass
+            elif self.mode == "shared":
+                pass
+            else:
+                pass
+        else:
+            pass
+
+    @abstractmethod
+    def handle_missing_tag(self, tag: Tuple[str, str]):
+        """ Should terminate or warn about the missing configuration option """
 
     @staticmethod
     def clear(opt):
@@ -225,6 +286,16 @@ class IOptimizer:
     @abstractmethod
     def explore(self, loss_tail: List[float], current_best: float, *args, **kwargs):
         """ Tune search for exploration """
+
+    @property
+    def can_tune(self) -> bool:
+        """ Optimizer should return True if it provides eploit/explore methods """
+        return False
+
+    @property
+    @abstractmethod
+    def supported_tags(self):
+        """ Set of tags supported for parameter definition """
 
     @property
     @abstractmethod

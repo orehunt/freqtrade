@@ -24,7 +24,7 @@ from statistics import mean
 from hashlib import sha1
 from multiprocessing import Lock
 from joblib.externals.loky import get_reusable_executor
-from typing import Any, Dict
+from typing import Any, Dict, Tuple
 
 from user_data.modules import sequencer as ts
 
@@ -111,16 +111,14 @@ class Main:
         "cv" if (args.cv and not args.kn) else None
     )
     # optimizer
-    config["epochs"] = args.e
+    config["hyperopt_epochs"] = args.e
     config["hyperopt_mode"] = args.mode
-    try:
-        opt_config = {"lie_strat" : args.lie,
-                      "algo": args.alg
-                      }
-        config["hyperopt_optimizer"].update(opt_config)
-    except KeyError:
-        config["hyperopt_optimizer"] = opt_config
+    opt_config = {"lie_strat" : args.lie,
+                    "algo": args.alg,
+                    "meta_tag_conflict": args.mtc
+                    }
     config["hyperopt_ask_points"] = args.pts
+    config["hyperopt_initial_points"] = args.rpt or (32 // args.j)
     config["hyperopt_random_state"] = args.rand if args.rand else None
     config["hyperopt_loss"] = "DecideCoreLoss" if not args.lo else args.lo
 
@@ -210,10 +208,9 @@ class Main:
         logger.warning("Overriding matplotlib and ccxt.base.exchange logging levels")
         logging.getLogger("matplotlib").setLevel(logging.WARNING)
         logging.getLogger("ccxt.base.exchange").setLevel(logging.WARNING)
-        logging.getLogger("numba.core").setLevel(logging.WARNING)
-        # logging.getLogger("numba.core.ssa").setLevel(logging.WARNING)
-        # logging.getLogger("numba.core.interpreter").setLevel(logging.WARNING)
-        # logging.getLogger("numba.core.byteflow").setLevel(logging.WARNING)
+        logging.getLogger("numba.core.ssa").setLevel(logging.WARNING)
+        logging.getLogger("numba.core.interpreter").setLevel(logging.WARNING)
+        logging.getLogger("numba.core.byteflow").setLevel(logging.WARNING)
 
         self.ho = Hyperopt(self.config)
 
@@ -229,6 +226,8 @@ class Main:
         self.config_spaces(amounts_group)
         config = Configuration.from_files(self.config_files)
         config.update(self.config)
+        # don't clobber the optimizer config dict, only overwrite
+        config.get("hyperopt_optimizer", {}).update(self.opt_config)
         self.config = config
         self.config.update(self.read_json_file(self.roi_config))
         self.update_evals()
@@ -446,20 +445,24 @@ class Main:
 
     def get_trials(
         self, wait=1, path=None, instance=None, ignore_empty=False, cv=False
-    ) -> (DataFrame, dict, dict):
-        # remove clear flag before setup if we are getting trials
+    ) -> Tuple[Any, Any, Any]:
+        # sanity checks, remove clear flag before setup if we are getting trials
         clear_status = self.ho.config["hyperopt_clear"]
         reset_status = self.ho.config["hyperopt_reset"]
         self.ho.config["hyperopt_clear"] = False
         self.ho.config["hyperopt_reset"] = False
+        # get path
         if not path:
             if not hasattr(self.ho, "trials_file"):
                 self.ho._setup_trials(load_trials=False)
             path = self.ho.trials_file
+        # get instance
         if not instance and hasattr(self.ho, "trials_instance"):
             instance = self.ho.trials_instance
         elif instance == "last":
             instance = self.ho.get_last_instance(self.ho.trials_instances_file, cv=cv)
+
+        # try to wait for path, or exit
         if wait:
             tries = 0
             while not os.path.exists(path) and tries < 3:
@@ -468,6 +471,7 @@ class Main:
         if not os.path.exists(path):
             return {}, {}, {}
         if cv:
+            # make sure instance is from cv, without repeating
             instance = instance.replace("_cv", "") + "_cv"
         try:
             trials = self.ho.load_trials(path, instance)
@@ -482,9 +486,9 @@ class Main:
             else:
                 return [], {}, {}
         # the last epoch is needed to check correct paramters in case of continuing epochs
-        last = self.ho.trials_to_dict(trials.iloc[-1:, :])[0]
+        last = trials.iloc[-1:].to_dict('records')[0]
         # sort is ascending, and loss min is better so iloc[:1] to get the best value
-        best = self.ho.trials_to_dict(trials.sort_values("loss").iloc[:1, :])[0]
+        best = trials.sort_values("loss").iloc[:1].to_dict('records')[0]
         return trials, best, last
 
     prev_cond, cond_best, run_best = {}, inf, inf
@@ -685,7 +689,7 @@ class Main:
             instance = self.ho.get_last_instance(self.ho.trials_instances_file)
         trials, _, _ = self.get_trials(instance=instance, cv=(mode == "cv"))
         idx = int(num) - 1  # human
-        trial = self.ho.trials_to_dict(trials.iloc[idx : idx + 1, :])[0]
+        trial = trials.iloc[idx : idx + 1, :].iloc[:1].to_dict('records')[0]
         self.ho.print_epoch_details(trial, len(trials), True)
         # print(json.dumps(trial["params_details"]))
 
@@ -1014,7 +1018,7 @@ class Main:
             logger.info("Skipping update amounts as no best trial was found")
             return
         if isinstance(best, DataFrame):
-            best = self.ho.trials_to_dict(best)[0]
+            best = best.iloc[:1].to_dict('records')[0]
         prev_best = self.read_json_file(paths["best"], "run_best")
         if len(best) < 1:
             print("update_amounts: empty results,", best)
@@ -1053,9 +1057,7 @@ class Main:
         path = path.split(":")
         idx = int(path[1]) if len(path) > 1 else None
         path = path[0]
-        trial = self.ho.trials_to_dict(results.loc[results["current_epoch"] == epoch])[
-            0
-        ]
+        trial = results.loc[results["current_epoch"] == epoch].iloc[:1].to_dict('records')[0]
         params = trial["params_dict"]
         data = self.read_json_file(path)
         if idx is not None:
@@ -1083,7 +1085,7 @@ class Main:
         base.update({"amounts": pairs_amounts})
         return self.write_json_file(base, "pairs_amounts.json", update=False)
 
-    def cv_reduce(self):
+    def cv_reduce(self, intensity=1):
         n_tr = len(CV_TR) - 1
         if not hasattr(self, "reduce"):
             self.reduce = {}
@@ -1144,12 +1146,15 @@ class Main:
         )
         # loop over timeranges split for CV
         # apply linear reduction based on number of timeranges
+        cv_len = len(CV_TR)
         for tr in CV_TR:
             self.timerange = tr
             self.run_hyperopt(cv=True)
             self.cv_reduce()
             # after first cv fetch from cv saved trials
             self.config["hyperopt_trials_instance"] = "cv"
+            # keep reducing the desired number of epochs
+            self.config["hyperopt_epochs"] /= cv_len
             # only allow unprofitable on the first cv; after that
             # only allow unprofitable if different pairs are getting optimized next
             if not self.args.pa:

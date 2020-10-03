@@ -63,7 +63,9 @@ def parse_hopt_args() -> dict:
         "-cv", help="load CV trials instead of optimized trials", action="store_true"
     )
     parser.add_argument("-lie", help="lie strategy", default="cl_min")
-    parser.add_argument("-pts", help="number of initial points", type=int, default=1)
+    parser.add_argument("-mtc", help="optimizer meta tags conflict ", default="warn")
+    parser.add_argument("-pts", help="number of points per trial", type=int, default=1)
+    parser.add_argument("-rpt", help="number of initial (random) points", type=int, default=0)
     parser.add_argument("-log", help="log to file", action="store_true", default="")
     parser.add_argument("-dbg", help="debug", default=0, type=int)
     parser.add_argument(

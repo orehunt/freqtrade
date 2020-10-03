@@ -1,17 +1,20 @@
 import warnings
-from psutil import virtual_memory
+from decimal import Decimal
 from itertools import cycle
 from typing import Iterable, List, Optional
-from numpy import nanvar, nanstd, nanmean, nanmin
-from decimal import Decimal
 
-from ..optimizer import RANGE, IOptimizer
+from numpy import nanmean, nanmin, nanstd, nanvar
+from psutil import virtual_memory
+
+from freqtrade.exceptions import OperationalException
+
+from ..optimizer import CAT, RANGE, IOptimizer
 
 
 with warnings.catch_warnings():
     warnings.filterwarnings("ignore", category=FutureWarning)
     from skopt import Optimizer
-    from skopt.space import Categorical, Integer, Real, Dimension
+    from skopt.space import Categorical, Dimension, Integer, Real
 
 # supported strategies when asking for multiple points to the optimizer
 LIE_STRATS = ["cl_min", "cl_mean", "cl_max"]
@@ -42,18 +45,26 @@ class SkoptOptimizer(IOptimizer):
     _fit = False
 
     def ask(self, n=None, *args, **kwargs):
-        if n in (0, 1):
+        if n == 0:
             n = None
         if not self._fit:
-             self._opt.update_next()
+            # start = now()
+            if hasattr(self._opt, "_next_x"):
+                delattr(self._opt, "_next_x")
+            self._opt.update_next()
+            # print("update next took:", now() - start, self.rs)
+        # start = now()
         asked = self._opt.ask(n, strategy=self._lie_strat)
-        self._fit = False
+        # print("asking took:", now() - start, self.rs)
+        if self._fit:
+            self._fit = False
         return [asked] if n is None else asked
 
     def tell(self, Xi, yi, fit=False, *args, **kwargs):
         told = self._opt.tell(Xi, yi, fit)
-        self._fit = fit
-        return  told
+        if fit and not self._fit:
+            self._fit = True
+        return told
 
     def create_optimizer(
         self, parameters: Optional[Iterable] = None, config={}
@@ -90,6 +101,7 @@ class SkoptOptimizer(IOptimizer):
                     len(self._params), self.n_jobs, self.ask_points
                 ),
             },
+            acq_func_kwargs={},
             model_queue_size=self.n_models,
             random_state=self.rs,
         )
@@ -101,13 +113,21 @@ class SkoptOptimizer(IOptimizer):
         for par in parameters:
             m = par.meta
             if par.kind == RANGE:
-                prior = "log-uniform" if m.get("dist") == "log" else "uniform"
+                dist = m.get("dist", "uni")
+                if dist == "uni":
+                    prior = "uniform"
+                elif dist == "log":
+                    prior = "log-uniform"
+                else:
+                    self.handle_missing_tag(("dist", dist))
                 base = m.get("log_base", 10)
                 enc = m.get("enc", "idem")
                 if enc == "idem":
                     trans = "identity"
                 elif enc == "norm":
                     trans = "normalize"
+                else:
+                    self.handle_missing_tag(("enc", enc))
                 if "int" in par.meta:
                     if self._all_real:
                         self._all_real = False
@@ -134,7 +154,7 @@ class SkoptOptimizer(IOptimizer):
                             **m["kwargs"]
                         ),
                     )
-            else:
+            elif par.kind == CAT:
                 if self._all_real:
                     self._all_real = False
                 enc = m.get("enc", "bool")
@@ -146,10 +166,16 @@ class SkoptOptimizer(IOptimizer):
                     trans = "identity"
                 elif enc == "str":
                     trans = "string"
+                else:
+                    self.handle_missing_tag(("enc", enc))
                 new_space.append(
                     Categorical(
                         par.sub, name=par.name, prior=m.get("dist"), transform=trans
                     )
+                )
+            else:
+                raise OperationalException(
+                    "mixed parameters are not supported by skopt"
                 )
         self._space = new_space
 
@@ -163,18 +189,23 @@ class SkoptOptimizer(IOptimizer):
             self.opt_acq_optimizer = "sampling"
         # The GaussianProcessRegressor is heavy, which makes it not a good default
         # however longer backtests might make it a better tradeoff
-        elif self.algo == "GP":
-            self.opt_base_estimator = "GP"
-            self.chosen_acq_func = "gp_hedge"
-            self.opt_acq_optimizer = "lbfgs"
-        if self.mode in ("multi", "shared"):
-            self.opt_acq_optimizer = "auto"
-            if self.mode == "shared":
-                self.opt_base_estimator = "GBRT"
-                self.chosen_acq_func = self.acq_funcs
-            else:
-                self.opt_base_estimator = self.estimators
+        elif not self.algo or self.algo == "auto":
+            if self.mode == "single":
+                self.opt_base_estimator = "GP"
                 self.chosen_acq_func = "gp_hedge"
+                self.opt_acq_optimizer = "lbfgs"
+            else:
+                self.opt_acq_optimizer = "auto"
+                if self.mode == "shared":
+                    self.opt_base_estimator = "GBRT"
+                    self.chosen_acq_func = self.acq_funcs
+                else:
+                    self.opt_base_estimator = self.estimators
+                    self.chosen_acq_func = "gp_hedge"
+        else:
+            self.opt_base_estimator = self.algo
+            self.chosen_acq_func = self._config.get("acq_func", "gp_hedge")
+            self.opt_acq_optimizer = self._config.get("acq_opt", "auto")
 
     def exploit(self, loss_tail: List[float], current_best: float, *args, **kwargs):
         xi = kappa = None
@@ -198,13 +229,17 @@ class SkoptOptimizer(IOptimizer):
 
     def explore(self, loss_tail: List[float], current_best: float, *args, **kwargs):
         xi = kappa = None
-        loss_last = kwargs['loss_last']
-        tail_position = kwargs['tail_position']
+        loss_last = kwargs["loss_last"]
+        tail_position = kwargs["tail_position"]
         if self._opt.acq_func in ("PI", "EI", "gp_hedge"):
             xi = nanstd(loss_last) * tail_position
         if self._opt.acq_func in ("LCB", "gp_hedge"):
             kappa = nanvar(loss_last) * tail_position
         self._opt.acq_func_kwargs.update({"xi": xi, "kappa": kappa})
+
+    @property
+    def can_tune(self) -> bool:
+        return True
 
     def _setup_lie_strat(self):
         # lie strategy
@@ -239,7 +274,11 @@ class SkoptOptimizer(IOptimizer):
         """ Calculate the number of points the optimizer samples, based on available host memory """
         available_mem = SkoptOptimizer.available_bytes()
         # get size of one parameter
-        return int(available_mem / (4 * n_dimensions * n_jobs * ask_points))
+        return int(available_mem / (4 * n_dimensions * abs(n_jobs) * ask_points))
+
+    @property
+    def supported_tags(self):
+        return {"enc", "dist", "log_base", "int"}
 
     @property
     def yi(self):

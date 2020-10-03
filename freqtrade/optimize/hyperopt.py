@@ -314,7 +314,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         """ Map a (cycled) list of loss functions to the optimizers random states """
         self.adjust_acquisition = self.config.get("hyperopt_adjust_acquisition", True)
         config = self.config.copy()
-        if self.multi and not self.shared:
+        if self.multi:
             self.calculate_loss_dict = {}
             loss_func_list = cycle(self.config.get("hyperopt_loss_multi", []))
             logger.debug("Cycling over loss functions: %s", loss_func_list)
@@ -398,12 +398,21 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
     def get_optimizer(self, random_state: int = None, parameters=[]) -> IOptimizer:
         " Construct an optimizer object "
         config = self.config.get("hyperopt_optimizer", {})
+        config["mode"] = self.mode
+        config["n_rand"] = self.n_rand
+        config["ask_points"] = self.ask_points
+        config["n_jobs"] = self.config.get("hyperopt_jobs", -1)
+        config["n_epochs"] = self.config.get("hyperopt_epochs", 10)
         opt_type = config.get("type", "SkoptOptimizer")
         kwargs = {"seed": random_state}
         if opt_type == "SkoptOptimizer":
             from freqtrade.optimize.opts.skopt import SkoptOptimizer
 
             opt = SkoptOptimizer(parameters, config=config, **kwargs)
+        elif opt_type == "SherpaOptimizer":
+            from freqtrade.optimize.opts.sherpa import SherpaOptimizer
+
+            opt = SherpaOptimizer(parameters, config=config, **kwargs)
         else:
             raise OperationalException(f"Error loading optimizer type {opt_type}")
         return opt.create_optimizer(parameters, config)
@@ -412,7 +421,6 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         """ launch parallel in single opt mode, return the evaluated epochs """
         parallel(
             delayed(backend.parallel_sig_handler)(
-                backend,
                 self.parallel_objective,
                 self.cls_file,
                 self.logger,
@@ -456,7 +464,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                 opt, jobs, backend.epochs, backend.trials, is_shared=True
             )
             fit = len(to_ask) < 1  # # only fit when out of points
-            if sri and t % sri < 1:
+            if sri and sri // (t or 1) < 1:
                 if self.apply_space_reduction(jobs, backend.trials, backend.epochs):
                     read_index = 0
             opt = self.opt
@@ -467,7 +475,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                     locked = backend.trials.lock.acquire(fit)
                     if locked:
                         params_df = self._from_group(
-                            fields=["loss", "params_dict"],
+                            fields=["loss", "params_dict", "Xi_h"],
                             indexer=slice(read_index, None),
                         )
                         backend.trials.lock.release()
@@ -475,7 +483,9 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                             read_index = t
                             try:
                                 opt.tell(
-                                    self.dict_values(params_df["params_dict"].values.tolist()),
+                                    self.dict_values(
+                                        params_df["params_dict"].values.tolist()
+                                    ),
                                     params_df["loss"].values.tolist(),
                                     fit=fit,
                                 )
@@ -486,13 +496,18 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                             # might be out of space
                             except ValueError as e:
                                 logger.debug("Failed telling optimizer results, %s", e)
-                            backend.epochs.average = (np.nanmean(opt.yi[-self.n_jobs:]) + backend.epochs.average) / 2
+                            backend.epochs.average = (
+                                np.nanmean(opt.yi[-self.n_jobs :])
+                                + backend.epochs.average
+                            ) / 2
                 except (KeyError, FileNotFoundError, IOError, OSError) as e:
                     if locked:
                         backend.trials.lock.release()
                     logger.debug("Couldn't read trials from disk, %s", e)
-            if backend.trials and backend.trials.exit or self._maybe_terminate(
-                t, jobs, backend.trials, backend.epochs
+            if (
+                backend.trials
+                and backend.trials.exit
+                or self._maybe_terminate(t, jobs, backend.trials, backend.epochs)
             ):
                 break
 
@@ -559,7 +574,6 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
 
         batch_start = trials_state.num_saved
         current = batch_start + 1
-        current_best = ep.current_best_epoch[rs]
         has_roi_space = self.has_space("roi")
         i = 0
         # current best loss
@@ -673,10 +687,41 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             logger.info(f"Loaded {len(self.trials)} previous trials from storage.")
 
             if self.cv:
-                if len(self.trials) < 1:
+                tr_len = len(self.trials)
+                if tr_len < 1:
                     raise OperationalException("CV requires a starting dataset.")
-                # in cross validation apply filtering
-                self.target_trials = self.filter_trials(self.trials, self.config)
+                # in cross validation apply progressive filtering, tuned by hyperopt_epochs
+                intensity = prev_its = 1
+                backtrack = False
+                # use a ~0.1 histeresis for desired number of filtered epochs
+                min_tt = int(self.total_epochs * 0.9)
+                max_tt = int(self.total_epochs * 1.1)
+                if tr_len > min_tt:
+                    while True:
+                        logger.debug("filtering trials with intensity: %s", intensity)
+                        self.target_trials = self.filter_trials(self.trials, self.config, intensity=intensity)
+                        logger.debug("filtered trials to: %s", len(self.target_trials))
+                        # backtrack means we applied a previous intensity because we probably
+                        # offshoot the calculation
+                        if backtrack or self.total_epochs < 1:
+                            break
+                        tt_len = len(self.target_trials)
+                        # don't filter if the filtered trials are below setting
+                        if tt_len < min_tt and intensity == 1:
+                            logger.debug("cannot filter trials since %s < %s", tt_len, min_tt)
+                            self.target_trials = self.trials
+                            break
+                        elif tt_len > max_tt:
+                            logger.debug("increasing intensity since %s > %s", tt_len, max_tt)
+                            prev_its = intensity
+                            intensity *= self.total_epochs / tt_len
+                        elif tt_len < min_tt:
+                            logger.debug("backtracking filtering because %s < %s", tt_len, min_tt)
+                            backtrack = True
+                            intensity = prev_its
+                        else:
+                            break
+
                 if len(self.target_trials) < 1:
                     logger.warn("Filtering returned 0 trials, using original dataset.")
                     self.target_trials = self.trials
@@ -686,7 +731,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                             len(self.trials), len(self.target_trials)
                         )
                     )
-            elif len(self.trials) > 0 and not self.multi:
+            elif len(self.trials) > 0 and not self.async_sched:
                 if self.random_state != self.trials.iloc[-1]["random_state"]:
                     logger.warn("Random state in saved trials doesn't match runtime...")
         if self.cv:
@@ -768,9 +813,9 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
     def _setup_space_reduction(self):
         """ Choose which configuration to use when applying space reduction """
         config = self.config
-        if config.get("override_space_reduction_config", False):
+        if config.get("hyperopt_spc_red_config", False):
             self.space_reduction_interval = config.get(
-                "hyperopt_space_reduction_interval", iinfo(int32).max
+                "hyperopt_spc_red_interval", iinfo(int32).max
             )
             if self.space_reduction_interval == iinfo(int32).max:
                 return
@@ -787,7 +832,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                 from freqtrade.optimize.hyperopt_constants import SINGLE_SPACE_CONFIG
 
                 config = SINGLE_SPACE_CONFIG
-        self.space_reduction_interval = config["hyperopt_space_reduction_interval"]
+        self.space_reduction_interval = config["hyperopt_spc_red_interval"]
         self.space_reduction_config = config
 
     def _set_random_state(self, random_state: Optional[int]) -> int:
@@ -836,7 +881,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             trials_state.exit = True
         elif (
             not done
-            and self.search_space_size < total + self.epochs_limit
+            and self.search_space_size < np.log(total + self.epochs_limit)
             and not self.cv
         ) or trials_state.empty_strikes > self.trials_max_empty:
             logger.error("Terminating Hyperopt because trials were empty.")
@@ -853,6 +898,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         """ main parallel loop """
         # dump the object state which will be loaded by every worker
         # instead of pickling functions around
+        logger.debug("dumping pickled hyperopt object to path: %s", self.cls_file)
         dump(wrap_non_picklable_objects(self), self.cls_file)
         with parallel_backend("loky", inner_max_num_threads=2):
             with Parallel(n_jobs=self.n_jobs, verbose=0, backend="loky") as parallel:
@@ -973,7 +1019,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
 
         if self.cv:
             jobs_scheduler = self.run_cv_backtest_parallel
-        elif self.multi:
+        elif self.async_sched:
             jobs_scheduler = self.run_multi_backtest_parallel
         else:
             jobs_scheduler = self.run_backtest_parallel
@@ -1019,6 +1065,6 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         del state["trials"]
         if self.cv:
             del state["target_trials"]
-        elif not self.parallel:
+        elif not self.async_sched:
             del state["opt"]
         return state

@@ -104,7 +104,7 @@ def setup_logging(config: Dict[str, Any]) -> None:
     logging.root.setLevel(logging.INFO if verbosity < 1 else logging.DEBUG)
     _set_loggers(verbosity, config.get("api_server", {}).get("verbosity", "info"))
 
-    logger.info("Verbosity set to %s", verbosity)
+    logger.debug("Verbosity set to %s", verbosity)
     if config.get("print_colorized"):
         init(autoreset=True)
         logging.addLevelName(

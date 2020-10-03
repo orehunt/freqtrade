@@ -919,11 +919,17 @@ class HyperoptBacktesting(Backtesting):
         # NOTE: make sure to sort numerically
 
         minimal_roi = self.strategy.amounts["minimal_roi"]
-        sorted_minimal_roi = {k: minimal_roi[k] for k in sorted(minimal_roi, key=int)}
+        sorted_minimal_roi = {k: minimal_roi[k] for k in sorted(minimal_roi, key=float)}
         roi_timeouts = self._round_roi_timeouts(list(sorted_minimal_roi.keys()))
-        roi_values = [
-            v for k, v in sorted_minimal_roi.items() if int(k) in roi_timeouts.values()
-        ]
+        roi_values = []
+        appended_roi_values = set()
+        for k,v in sorted_minimal_roi.items():
+            itk = int(k)
+            # when we round, keys can overlap, so we only add the first in the loop
+            if itk in roi_timeouts.values() and itk not in appended_roi_values:
+                roi_values.append(v)
+                appended_roi_values.add(itk)
+        # assert len(roi_timeouts) == len(roi_values)
         return roi_timeouts, roi_values
 
     def _round_roi_timeouts(self, timeouts: List[float]) -> Dict[int, int]:
