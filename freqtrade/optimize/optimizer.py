@@ -4,7 +4,7 @@ import logging
 from abc import abstractmethod
 from enum import IntEnum
 from types import SimpleNamespace
-from typing import Any, Dict, Iterable, List, Tuple, Union
+from typing import Any, Dict, Iterable, List, Tuple, Union, Iterable, Sequence
 
 import numpy as np
 from sklearn.utils import check_random_state
@@ -102,8 +102,8 @@ def _factorial(n):
     return (
         n * np.log(n)
         - n
-        + np.log(n * (1. + 4. * n * (1. + 2. * n))) / 6.
-        + np.log(np.pi) / 2.
+        + np.log(n * (1.0 + 4.0 * n * (1.0 + 2.0 * n))) / 6.0
+        + np.log(np.pi) / 2.0
     )
 
 
@@ -126,6 +126,23 @@ def guess_search_space(parameters: List[Parameter]):
     return search_space_size
 
 
+class Points:
+    """ If Xi,yi points can't be directly indexed an list like class should be used
+    (that only requires these methods, a full mutable sequence is not required ) """
+
+    @abstractmethod
+    def __getitem__(self):
+        raise NotImplementedError()
+
+    @abstractmethod
+    def __delitem__(self):
+        raise NotImplementedError()
+
+    @abstractmethod
+    def __len__(self):
+        raise NotImplementedError()
+
+
 class IOptimizer:
     """ Optimizer interface used to swap out optimizers implementing different optimization algorithms """
 
@@ -134,7 +151,7 @@ class IOptimizer:
     rng: np.random.RandomState
 
     """ flag to signal early stopping """
-    void: bool = False
+    void: Union[int, bool] = False
 
     """
     replacement for VOID_LOSS, set after trials with actual
@@ -166,6 +183,9 @@ class IOptimizer:
     _args: Tuple
     _kwargs: Dict
     _config: Dict
+    _Xi: Points
+    _yi: Points
+    _models: Points
 
     def __init__(
         self, parameters: Iterable, seed=None, config={}, *args, **kwargs
@@ -175,8 +195,8 @@ class IOptimizer:
         self.rng = check_random_state(self.rs)
         self.n_jobs = config.get("n_jobs", 1)
         self.n_rand = config.get("n_rand", 1)
-        self.n_rand = config.get("n_epochs", 10)
-        self.ask_points = config.get("ask_points", 1)
+        self.n_epochs = config.get("n_epochs", 10)
+        self.ask_points = config.get("ask_points", 1) or 1
         self.algo = config.get("algo", "rand")
 
         self.mode = config.get("mode", "single")
@@ -272,12 +292,13 @@ class IOptimizer:
         """ Modify the inner representation of the dimensions for the Optimizer """
 
     @abstractmethod
-    def ask(self, n=1, *args, **kwargs) -> List:
+    def ask(self, n=1, *args, **kwargs) -> List[Tuple[Tuple, Dict]]:
         """ Return a new combination of parameters to evaluate """
 
     @abstractmethod
-    def tell(self, Xi: Iterable, yi: Iterable, fit=False, *args, **kwargs):
-        """ Submit evaluated scores """
+    def tell(self, Xi: Iterable[Tuple[Sequence, Dict]], yi: Sequence[float], fit=False, *args, **kwargs):
+        """ Submit evaluated scores, the scheduler should return
+        a list of tuples in the form (parameters, meta) """
 
     @abstractmethod
     def exploit(self, loss_tail: List[float], current_best: float, *args, **kwargs):
@@ -299,16 +320,19 @@ class IOptimizer:
 
     @property
     @abstractmethod
-    def models(self) -> List[Any]:
+    def models(self) -> Points:
         """ Where surrogate models are stored """
+        return self._models
 
     @property
     @abstractmethod
-    def Xi(self) -> List[Any]:
+    def Xi(self) -> Points:
         """ Where evaluated parameters configurations are stored """
+        return self._Xi
 
     @property
     @abstractmethod
-    def yi(self) -> List[Any]:
+    def yi(self) -> Points:
         """ Where the loss relative to the evaluated (ordered) parameters
         configs are stored """
+        return self._yi

@@ -919,6 +919,10 @@ class HyperoptBacktesting(Backtesting):
         # NOTE: make sure to sort numerically
 
         minimal_roi = self.strategy.amounts["minimal_roi"]
+        try:
+            assert (np.fromiter(minimal_roi, dtype=float) >= 0).all()
+        except AssertionError:
+            raise OperationalException("ROI config has negative timeouts, can't sell in the past!")
         sorted_minimal_roi = {k: minimal_roi[k] for k in sorted(minimal_roi, key=float)}
         roi_timeouts = self._round_roi_timeouts(list(sorted_minimal_roi.keys()))
         roi_values = []
@@ -929,7 +933,15 @@ class HyperoptBacktesting(Backtesting):
             if itk in roi_timeouts.values() and itk not in appended_roi_values:
                 roi_values.append(v)
                 appended_roi_values.add(itk)
-        # assert len(roi_timeouts) == len(roi_values)
+        try:
+            assert len(roi_timeouts) == len(roi_values)
+        except AssertionError:
+            print("minimal roi", minimal_roi)
+            print("sorted roi", sorted_minimal_roi)
+            print("roi_timeouts", roi_timeouts)
+            print("roi values", roi_values)
+            print("length of filtered roi timeouts did not match roi values")
+            exit()
         return roi_timeouts, roi_values
 
     def _round_roi_timeouts(self, timeouts: List[float]) -> Dict[int, int]:

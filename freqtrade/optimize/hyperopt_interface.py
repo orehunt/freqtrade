@@ -7,11 +7,10 @@ import math
 from abc import ABC
 from typing import Any, Callable, Dict, List
 
-from skopt.space import Categorical, Dimension, Integer, Real
-
 from freqtrade.exceptions import OperationalException
 from freqtrade.exchange import timeframe_to_minutes
 from freqtrade.misc import round_dict
+from freqtrade.optimize.optimizer import CAT, RANGE, Parameter
 
 
 logger = logging.getLogger(__name__)
@@ -64,14 +63,14 @@ class IHyperOpt(ABC):
         )
 
     @staticmethod
-    def indicator_space() -> List[Dimension]:
+    def indicator_space() -> List[Parameter]:
         """
         Create an indicator space.
         """
         raise OperationalException(_format_exception_message("indicator_space", "buy"))
 
     @staticmethod
-    def sell_indicator_space() -> List[Dimension]:
+    def sell_indicator_space() -> List[Parameter]:
         """
         Create a sell indicator space.
         """
@@ -96,7 +95,7 @@ class IHyperOpt(ABC):
         return roi_table
 
     @staticmethod
-    def roi_space() -> List[Dimension]:
+    def roi_space() -> List[Parameter]:
         """
         Create a ROI space.
 
@@ -168,16 +167,49 @@ class IHyperOpt(ABC):
         )
 
         return [
-            Integer(roi_limits["roi_t1_min"], roi_limits["roi_t1_max"], name="roi_t1"),
-            Integer(roi_limits["roi_t2_min"], roi_limits["roi_t2_max"], name="roi_t2"),
-            Integer(roi_limits["roi_t3_min"], roi_limits["roi_t3_max"], name="roi_t3"),
-            Real(roi_limits["roi_p1_min"], roi_limits["roi_p1_max"], name="roi_p1"),
-            Real(roi_limits["roi_p2_min"], roi_limits["roi_p2_max"], name="roi_p2"),
-            Real(roi_limits["roi_p3_min"], roi_limits["roi_p3_max"], name="roi_p3"),
+            Parameter(
+                kind=RANGE,
+                low=roi_limits["roi_t1_min"],
+                high=roi_limits["roi_t1_max"],
+                name="roi_t1",
+                meta={"int": True},
+            ),
+            Parameter(
+                kind=RANGE,
+                low=roi_limits["roi_t2_min"],
+                high=roi_limits["roi_t2_max"],
+                name="roi_t2",
+                meta={"int": True},
+            ),
+            Parameter(
+                kind=RANGE,
+                low=roi_limits["roi_t3_min"],
+                high=roi_limits["roi_t3_max"],
+                name="roi_t3",
+                meta={"int": True},
+            ),
+            Parameter(
+                kind=RANGE,
+                low=roi_limits["roi_p1_min"],
+                high=roi_limits["roi_p1_max"],
+                name="roi_p1",
+            ),
+            Parameter(
+                kind=RANGE,
+                low=roi_limits["roi_p2_min"],
+                high=roi_limits["roi_p2_max"],
+                name="roi_p2",
+            ),
+            Parameter(
+                kind=RANGE,
+                low=roi_limits["roi_p3_min"],
+                high=roi_limits["roi_p3_max"],
+                name="roi_p3",
+            ),
         ]
 
     @staticmethod
-    def stoploss_space() -> List[Dimension]:
+    def stoploss_space() -> List[Parameter]:
         """
         Create a stoploss space.
 
@@ -185,7 +217,7 @@ class IHyperOpt(ABC):
         You may override it in your custom Hyperopt class.
         """
         return [
-            Real(-0.35, -0.02, name="stoploss"),
+            Parameter(kind=RANGE, low=-0.35, high=-0.02, name="stoploss"),
         ]
 
     @staticmethod
@@ -206,7 +238,7 @@ class IHyperOpt(ABC):
         }
 
     @staticmethod
-    def trailing_space() -> List[Dimension]:
+    def trailing_space() -> List[Parameter]:
         """
         Create a trailing stoploss space.
 
@@ -219,15 +251,19 @@ class IHyperOpt(ABC):
             # This parameter is included into the hyperspace dimensions rather than assigning
             # it explicitly in the code in order to have it printed in the results along with
             # other 'trailing' hyperspace parameters.
-            Categorical([True], name="trailing_stop"),
-            Real(0.01, 0.35, name="trailing_stop_positive"),
+            Parameter(kind=CAT, sub=[True], name="trailing_stop"),
+            Parameter(kind=RANGE, low=0.01, high=0.35, name="trailing_stop_positive"),
             # 'trailing_stop_positive_offset' should be greater than 'trailing_stop_positive',
             # so this intermediate parameter is used as the value of the difference between
             # them. The value of the 'trailing_stop_positive_offset' is constructed in the
             # generate_trailing_params() method.
             # This is similar to the hyperspace dimensions used for constructing the ROI tables.
-            Real(0.001, 0.1, name="trailing_stop_positive_offset_p1"),
-            Categorical([True, False], name="trailing_only_offset_is_reached"),
+            Parameter(
+                kind=RANGE, low=0.001, high=0.1, name="trailing_stop_positive_offset_p1"
+            ),
+            Parameter(
+                kind=CAT, sub=[True, False], name="trailing_only_offset_is_reached"
+            ),
         ]
 
     # This is needed for proper unpickling the class attribute ticker_interval

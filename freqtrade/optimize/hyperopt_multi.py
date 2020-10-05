@@ -1,16 +1,18 @@
 import gc
 import logging
-import numpy as np
 import os
+import atexit
 from functools import partial
 
 # use math finite check for small loops
 from math import isfinite as is_finite
-from multiprocessing.managers import SharedMemoryManager, SyncManager
+from multiprocessing.managers import SyncManager
+
 from queue import Queue
 from time import time as now
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, Iterable, List, Optional, Tuple, Union, Callable
 
+import numpy as np
 from joblib import Parallel, delayed, hash
 from numpy import (
     array,
@@ -35,9 +37,9 @@ from freqtrade.exceptions import OperationalException
 from freqtrade.optimize.hyperopt_backend import Epochs, TrialsState
 from freqtrade.optimize.hyperopt_out import HyperoptOut
 from freqtrade.optimize.optimizer import VOID_LOSS, IOptimizer
-from freqtrade.optimize.hyperopt_backend import HyperoptBase
 
-logger = logging.getLogger('freqtrade.optimize.hyperopt')
+
+logger = logging.getLogger("freqtrade.optimize.hyperopt")
 logger.name += f".{os.getpid()}"
 # from pyinstrument import Profiler
 
@@ -54,32 +56,36 @@ class HyperoptMulti(HyperoptOut):
 
     def epochs_iterator(self, jobs: int):
         """ Dispatches jobs to parallel indefinitely """
-        # at the end dispatch wrap up tasks
-        if backend.trials.exit:
-            for t in range(jobs):
+        # iterators need their own try/catch
+        try:
+            # at the end dispatch wrap up tasks
+            if backend.trials.exit:
+                for t in range(jobs):
+                    if self.use_progressbar:
+                        HyperoptOut._print_progress(t, jobs, self.trials_maxout)
+                    yield t
+
+            # termination window
+            w = self.trials_maxout * jobs
+            t = len(self.trials)
+            yield t
+            sri = self.space_reduction_interval
+            # give a next trial count indefinitely
+            for _ in iter(lambda: 0, 1):
+                t += 1
+                if t % w < 1:
+                    if backend.trials.exit or self._maybe_terminate(
+                        t, jobs, backend.trials, backend.epochs
+                    ):
+                        break
+                if sri and t % sri < 1:
+                    self.apply_space_reduction(jobs, backend.trials, backend.epochs)
                 if self.use_progressbar:
                     HyperoptOut._print_progress(t, jobs, self.trials_maxout)
+                logger.debug("yiedling %s", t)
                 yield t
-
-        # termination window
-        w = self.trials_maxout * jobs
-        t = len(self.trials)
-        yield t
-        sri = self.space_reduction_interval
-        # give a next trial count indefinitely
-        for _ in iter(lambda: 0, 1):
-            t += 1
-            if t % w < 1:
-                if backend.trials.exit or self._maybe_terminate(
-                    t, jobs, backend.trials, backend.epochs
-                ):
-                    break
-            if sri and t % sri < 1:
-                self.apply_space_reduction(jobs, backend.trials, backend.epochs)
-            if self.use_progressbar:
-                HyperoptOut._print_progress(t, jobs, self.trials_maxout)
-            logger.debug("yiedling %s", t)
-            yield t
+        except ConnectionError as e:
+            logger.error(f"Iteration ended abruptly {e}")
 
     def _setup_parallel(self):
         # start the manager
@@ -112,6 +118,8 @@ class HyperoptMulti(HyperoptOut):
         backend.epochs.convergence = 0
         backend.epochs.average = np.nan
         backend.epochs.improvement = np.nan
+        # tracks the (avg) time it took to fetch the last point from the optimizer
+        backend.epochs.avg_wait_time = 0
         # in multi mode each optimizer has its own best loss/epoch
         backend.epochs.current_best_loss = backend.manager.dict()
         backend.epochs.current_best_epoch = backend.manager.dict()
@@ -195,7 +203,7 @@ class HyperoptMulti(HyperoptOut):
         )
 
     @staticmethod
-    def opt_get_past_points(asked: dict) -> dict:
+    def opt_get_cached_points(asked: dict) -> dict:
         """ fetch shared results between optimizers """
         # make a list of hashes since on storage points are queried by it
         if backend.Xi_h:
@@ -232,7 +240,9 @@ class HyperoptMulti(HyperoptOut):
             # at space reduction fetch an optimizer from the pid map
             if pid in epochs.space_reduction:
                 opt = epochs.pinned_optimizers[pid]
-                logger.debug("retrieving optimizer %s from pinned dict with pid %s", opt.rs, pid)
+                logger.debug(
+                    "retrieving optimizer %s from pinned dict with pid %s", opt.rs, pid
+                )
                 HyperoptMulti.reset_opt_state(opt)
                 epochs.pinned_optimizers[pid] = opt
             # at worker startup  fetch an optimizer from the queue
@@ -258,8 +268,18 @@ class HyperoptMulti(HyperoptOut):
         return opt
 
     @staticmethod
-    def dict_values(dict_list: List[dict]):
-        return [list(d.values()) for d in dict_list]
+    def dict_values(dict_list: Iterable, iterable=True):
+        if iterable:
+            return (d.values() for d in dict_list)
+        else:
+            return [list(d.values()) for d in dict_list]
+
+    @staticmethod
+    def zip_points(df):
+        return zip(
+            HyperoptMulti.dict_values(df["params_dict"], iterable=False),
+            df["params_meta"]
+        ), df["loss"].values
 
     def opt_startup_points(
         self, opt: IOptimizer, trials_state: TrialsState, is_shared: bool
@@ -280,14 +300,20 @@ class HyperoptMulti(HyperoptOut):
                 locked = trials_state.lock.acquire(len(opt.Xi) < 1)
                 if locked:
                     params_df = self._from_group(
-                        fields=["loss", "Xi_h", "params_dict", "random_state"],
+                        fields=[
+                            "loss",
+                            "Xi_h",
+                            "params_dict",
+                            "params_meta",
+                            "random_state",
+                        ],
                         indexer=(slice(backend.trials_index, None)),
                     )
                     if len(params_df) and backend.Xi_h:
                         params_df.drop(
                             flatnonzero(
                                 isin(
-                                    params_df["Xi_h"].values, list(backend.Xi_h.keys())
+                                    params_df["Xi_h"].values, list(backend.Xi_h)
                                 )
                             ),
                             axis=0,
@@ -301,22 +327,18 @@ class HyperoptMulti(HyperoptOut):
                     trials_state.lock.release()
                 logger.debug("Couldn't read trials from disk %s", e)
                 raise e
-        if len(params_df) > 0:
+        if isinstance(params_df, DataFrame) and len(params_df) > 0:
             backend.trials_index += len(params_df)
             # only in shared mode, we tell all the points
             # (these lists are very small)
             if is_shared:
-                Xi = self.dict_values(params_df["params_dict"].values.tolist())
-                yi = params_df["loss"].values.tolist()
+                Xi, yi = self.zip_points(params_df)
             elif not opt.Xi:
                 # while in multi opt, still have to add startup points
                 prev_opt_params = params_df.loc[
                     params_df["random_state"].values == opt.rs
                 ]
-                Xi = self.dict_values(
-                    prev_opt_params.loc[:, "params_dict"].values.tolist()
-                )
-                yi = prev_opt_params["loss"].values.tolist()
+                Xi, yi = self.zip_points(prev_opt_params)
             else:
                 Xi, yi = [], []
             # if there are previous points, add them before telling;
@@ -328,28 +350,37 @@ class HyperoptMulti(HyperoptOut):
                 backend.yi.extend(yi)
             # add only the hashes of the query, because the hashes of the points
             # stored in the backend have been already added after the local evaluation
-            backend.Xi_h.update(
-                dict(zip(params_df["Xi_h"].values, params_df["loss"].values))
-            )
+            backend.Xi_h.update(zip(params_df["Xi_h"].values, params_df["loss"].values))
         if backend.Xi:  # or just tell prev points
             try:
                 logger.debug(
                     "adjourning the optimizer with %s new points...", len(backend.Xi)
                 )
                 opt.tell(backend.Xi, backend.yi)
-            # this can happen if space reduction has been performed and the
+            # this can (at least) happen if space reduction has been performed and the
             # points of the previous tests are outside the new search space
             except ValueError as e:
                 logger.info(e)
         else:
             # get a new point by copy if didn't tell new ones
-            logger.debug(
-                "no new points were found to tell, rolling a new optimizer.."
-            )
+            logger.debug("no new points were found to tell, rolling a new optimizer..")
             opt = opt.copy(new_seed=True)
 
         del backend.Xi[:], backend.yi[:]
         return opt
+
+    @staticmethod
+    def flush_remaining_trials(trials_state: TrialsState, is_shared: bool, rs: Union[int, None]):
+        rt =len(backend.trials_list)
+        logger.debug("flushing remaining trials %s", rt)
+        if rt:
+            # shared/single
+            if is_shared or rs is None:
+                trials_state.tail_list.extend(backend.trials_list)
+            # multi
+            else:
+                trials_state.tail_dict[rs] = backend.trials_list
+            del backend.trials_list[:]
 
     def opt_log_trials(
         self,
@@ -380,8 +411,9 @@ class HyperoptMulti(HyperoptOut):
         rs = opt.rs
         if not void:
             # set initial point flag and optimizer random state
+            n_opt_xi = len(opt.Xi)
             for n, v in enumerate(void_filtered, 1):
-                v["is_initial_point"] = len(opt.Xi) > opt.n_rand
+                v["is_initial_point"] = n_opt_xi < opt.n_rand
                 v["random_state"] = rs
                 # hash Xi to allow queries over it since it's a list
                 v["Xi_h"] = hash(self.params_Xi(v))
@@ -392,7 +424,7 @@ class HyperoptMulti(HyperoptOut):
         last_results = []
         backend.Xi, backend.yi = list(), list()
         for v in void_filtered:
-            Xi, yi = self.params_Xi(v), v["loss"]
+            Xi, yi = (self.params_Xi(v), v["params_meta"]), v["loss"]
             last_results.append((Xi, yi))
             backend.Xi_h[v["Xi_h"]] = v["loss"]
         trials_state.last_results[opt.rs] = last_results
@@ -439,19 +471,22 @@ class HyperoptMulti(HyperoptOut):
                     trials_state.num_done -= backend.just_saved
 
         else:
-            logger.debug("skpping save of %s trials because no condition was satisfied", trials_to_save)
+            logger.debug(
+                "skpping save of %s trials because no condition was satisfied",
+                trials_to_save,
+            )
             backend.just_saved = 0
 
     @staticmethod
     def parallel_opt_objective(
-            t: int, jobs: int, optimizers: Queue, epochs: Epochs, trials_state: TrialsState,
+        t: int, jobs: int, optimizers: Queue, epochs: Epochs, trials_state: TrialsState,
     ):
         """
         An objective run in multi opt mode;
         Shared: optimizers share the results as soon as they are completed;
         Multi: optimizers share results but only following the points asked by the model
         """
-        cls = backend.cls
+        cls: HyperoptMulti = backend.cls
 
         if not backend.timer:
             backend.timer = now()
@@ -460,14 +495,12 @@ class HyperoptMulti(HyperoptOut):
         gc.enable()
 
         is_shared = cls.shared
+        if not backend.flush_registered:
+            atexit.register(cls.flush_remaining_trials, trials_state, is_shared, opt.rs)
+            backend.flush_registered = True
         # check early if this is the last run
         if trials_state.exit:
-            if len(backend.trials_list):
-                if is_shared:
-                    trials_state.tail_list.extend(backend.trials_list)
-                else:
-                    trials_state.tail_dict[opt.rs] = backend.trials_list
-                del backend.trials_list[:]
+            cls.flush_remaining_trials(trials_state, is_shared, opt.rs)
             return
 
         last_results = trials_state.last_results.get(opt.rs, [])
@@ -475,7 +508,9 @@ class HyperoptMulti(HyperoptOut):
             for r in last_results:
                 backend.Xi.append(r[0])
                 backend.yi.append(r[1])
-            del last_results[:]
+            # delete from the managed list, the whole list, since copy is not a reference
+            del last_results, trials_state.last_results[opt.rs]
+            assert opt.rs not in trials_state.last_results
 
         # at startup always fetch previous points from storage,
         # in shared mode periodically check for new points computed by other workers,
@@ -516,8 +551,8 @@ class HyperoptMulti(HyperoptOut):
     def opt_fetch_points(
         self, opt: IOptimizer, epochs: Epochs, trials_state: TrialsState
     ) -> List:
-        asked: Dict[str, List] = {}
-        asked_d: Dict[str, List] = {}
+        asked: Dict[Union[None, str], List] = {}
+        asked_d: Dict[Union[None, str], List] = {}
         n_told = 0  # told while looping
         tested_Xi = []  # already tested
         tested_yi = []
@@ -526,23 +561,29 @@ class HyperoptMulti(HyperoptOut):
         # if opt.Xi > sss the optimizer has more points than the estimated search space size, stop
         logger.debug("starting loop for asking points, voidness is %s", opt.void)
         while opt.void != -1 and np.log1p(len(opt.Xi)) < self.search_space_size:
-            logger.debug("asking the oracle for points..")
-            asked = {hash(a): [a, None] for a in opt.ask(self.ask_points)}
-            # check if some points have been evaluated by other optimizers
-            logger.debug("checking if the %s points returned by the optimizer are cached...", len(asked))
-            prev_asked = HyperoptMulti.opt_get_past_points(asked)
-            for h in prev_asked:
+            logger.debug("asking the oracle for points...")
+            wait_start = now()
+            # key: hash values: (params, loss, meta)
+            asked = {hash(p[0]): [p[0], None, p[1]] for p in opt.ask(self.ask_points)}
+            # at start default avg to now
+            wait_time = now() - wait_start
+            epochs.avg_wait_time = ((epochs.avg_wait_time or wait_time) + wait_time) / 2
+            logger.debug(
+                "checking if the %s points returned by the optimizer are cached...",
+                len(asked),
+            )
+            # points not previously evald will have loss still set to None
+            c_asked = HyperoptMulti.opt_get_cached_points(asked)
+            for h in c_asked:
                 # is the loss set?
-                past_Xi = prev_asked[h][0]
-                past_yi = prev_asked[h][1]
-                if past_yi is not None:
-                    logger.debug(
-                        "A point was previously asked by another worker.."
-                    )
+                p_Xi = (c_asked[h][0], c_asked[h][2])
+                p_yi = c_asked[h][1]
+                if p_yi is not None:
+                    logger.debug("A point was previously asked by another worker..")
                     epochs.convergence += 1
-                    if past_Xi not in tested_Xi:
-                        tested_Xi.append(past_Xi)
-                        tested_yi.append(past_yi)
+                    if p_Xi not in tested_Xi:
+                        tested_Xi.append(p_Xi)
+                        tested_yi.append(p_yi)
                 else:
                     # going to test it if it is not being tested
                     # by another optimizer
@@ -550,26 +591,34 @@ class HyperoptMulti(HyperoptOut):
                         logger.debug("adding new point %s to the untested list", h)
                         trials_state.testing[h] = True
                         backend.tested_h.append(h)
-                        untested_Xi.append(past_Xi)
+                        untested_Xi.append(p_Xi)
                     else:
-                        logger.debug("the point %s is being tested by another worker", h)
+                        logger.debug(
+                            "the point %s is being tested by another worker", h
+                        )
             # not enough points to test?
-            logger.debug("remaining untested: %s , to ask: %s", len(untested_Xi), self.ask_points)
+            logger.debug(
+                "remaining untested: %s , to ask: %s", len(untested_Xi), self.ask_points
+            )
+            # in case the loop failed to retrieve enough points
+            # try to update the optimizer from new points from other workers
             if len(untested_Xi) < self.ask_points:
                 n_tested_Xi = len(tested_Xi)
                 # did other workers test some more points that we asked?
                 if n_tested_Xi > n_told:
-                    # if yes fit a new model with the new points
+                    # if yes add new points to the optimizer
                     logger.debug("updating optimizer with new tested points")
                     opt.tell(tested_Xi[n_told:], tested_yi[n_told:])
                     n_told = n_tested_Xi
                 elif (
                     asked != asked_d
                 ):  # or get new points from a different random state
-                    logger.debug("rolling a new optimizer because no new points were found")
+                    logger.debug(
+                        "rolling a new optimizer because no new points were found"
+                    )
                     opt = opt.copy(new_seed=True)
                     # getting a point by copy is the last try before
-                    # terminating because of convergence
+                    # terminating (because of possibly convergence)
                     asked_d = asked
                 else:
                     break

@@ -1157,6 +1157,10 @@ class Main:
             self.config["hyperopt_epochs"] /= cv_len
             # only allow unprofitable on the first cv; after that
             # only allow unprofitable if different pairs are getting optimized next
+            trials, _, _ = self.get_trials()
+            if len(trials) < 2:
+                print(f"stopping CV early because trials count is {len(trials)}")
+                break
             if not self.args.pa:
                 self.config["hyperopt_list_min_avg_profit"] = 0
 
@@ -1242,5 +1246,5 @@ if __name__ == "__main__":
     main = Main()
     try:
         main.start()
-    except (KeyboardInterrupt, BrokenPipeError):
+    except (KeyboardInterrupt, ConnectionError):
         pass

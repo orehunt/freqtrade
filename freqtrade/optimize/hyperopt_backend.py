@@ -1,16 +1,15 @@
+import logging
 import signal
 from abc import abstractmethod
-from datetime import datetime
-import logging
 from functools import partial
 from logging import Logger
 from multiprocessing.managers import Namespace, SharedMemoryManager, SyncManager
-from multiprocessing.shared_memory import ShareableList
 from pathlib import Path
 from queue import Queue
 from threading import Lock
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
+from arrow import Arrow
 from pandas import DataFrame
 
 from freqtrade.optimize.optimizer import IOptimizer, Parameter
@@ -18,8 +17,8 @@ from freqtrade.optimize.optimizer import IOptimizer, Parameter
 
 cls: Any = None
 data: Dict[str, DataFrame] = {}
-min_date: Union[None, datetime] = None
-max_date: Union[None, datetime] = None
+min_date: Union[None, Arrow] = None
+max_date: Union[None, Arrow] = None
 manager: SyncManager
 sm_manager: SharedMemoryManager
 pbar: dict = {}
@@ -29,7 +28,10 @@ opt: IOptimizer
 optimizers: Queue
 exploit: int = 0
 
-trials_list = []  # (worker local)
+# worker local buffer for evaluated trials
+trials_list = []
+# True if worker has registered atexit flushing
+flush_registered = False
 # each worker index position of known past trials (worker local)
 trials_index = 0
 # recently saved trials
@@ -80,6 +82,7 @@ class Epochs(Namespace):
     last_best_loss: float
     current_best_epoch: Dict[Union[None, int], int]
     last_best_epoch: int
+    avg_wait_time: float
     max_epoch: int
     space_reduction: Dict[int, bool]
 
@@ -112,12 +115,17 @@ def parallel_sig_handler(
             logger.debug("loaded hyperopt class from %s", cls_file)
     try:
         return fn(*args, **kwargs)
-    except KeyboardInterrupt:
-        logger.debug("received keyboard interrupt, flushing remaining trials..")
-        trials_state = kwargs.get("trials_state")
-        if trials_state:
-            trials_state.exit = True
-        return fn(*args, **kwargs)
+    except Exception as e:
+        if isinstance(e, KeyboardInterrupt):
+            logger.debug("received keyboard interrupt, flushing remaining trials..")
+            trials_state = kwargs.get("trials_state")
+            if trials_state:
+                trials_state.exit = True
+            return fn(*args, **kwargs)
+        else:
+            import traceback
+            traceback.print_exc()
+            print(e)
 
 
 def manager_sig_handler(signal, frame, trials_state: TrialsState):
@@ -148,9 +156,10 @@ class HyperoptBase:
     @abstractmethod
     def backtest_params(
         self,
-        raw_params: List[Any] = None,
+        raw_params: Tuple[Tuple, Dict] = None,
         iteration=None,
         params_dict: Dict[str, Any] = None,
+        rs: Union[None, int] = None,
     ):
         """
         Used Optimize function. Called once per epoch to optimize whatever is configured.

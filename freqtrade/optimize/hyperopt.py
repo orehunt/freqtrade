@@ -6,11 +6,12 @@ import numpy as np
 import json
 import logging
 import random
+import atexit
 from collections import deque
 from datetime import datetime
 from itertools import cycle
 from time import time as now
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, Union
 
 from colorama import init as colorama_init
 from joblib import (
@@ -25,6 +26,7 @@ from joblib import (
 )
 from numpy import iinfo, int32, isfinite
 from pandas import DataFrame, Timedelta, concat, json_normalize, read_hdf
+from joblib.externals.loky import get_reusable_executor
 
 # Import IHyperOpt and IHyperOptLoss to allow unpickling classes from these modules
 import freqtrade.optimize.hyperopt_backend as backend
@@ -93,7 +95,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             "hyperopt_trials_max_empty", self.trials_maxout
         )
         self.ask_points = self.config.get("hyperopt_ask_points", 1)
-        self.n_rand = self.config.get("hyperopt_initial_points", 10)
+        self.n_rand = self.config.get("hyperopt_initial_points", self.n_jobs * 3)
         self.use_progressbar = self.config.get("hyperopt_use_progressbar", True)
 
     def _setup_backtesting(self):
@@ -135,18 +137,23 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
     def get_lock_filename(config: Dict[str, Any]) -> str:
         return str(config["user_data_dir"] / "hyperopt.lock")
 
-    def _get_params_dict(self, raw_params: List[Any]) -> Dict:
+    def _get_params_dict(self, raw_params: Union[Tuple[Any, ...], List[Any]]) -> Dict:
 
-        dimensions: List[Dimension] = self.parameters
+        parameters: List[Parameter] = self.parameters
 
         # Ensure the number of dimensions match
         # the number of parameters in the list.
-        if len(raw_params) != len(dimensions):
-            raise ValueError("Mismatch in number of search-space dimensions.")
+        if len(raw_params) != len(parameters):
+            raw_params_len = len(raw_params)
+            params_len = len(parameters)
+            raise ValueError(
+                "Mismatch in number of search-space dimensions. received:"
+                f" {raw_params_len}, expected: {params_len}"
+            )
 
         # Return a dict where the keys are the names of the dimensions
         # and the values are taken from the list of parameters.
-        return {d.name: v for d, v in zip(dimensions, raw_params)}
+        return {d.name: v for d, v in zip(parameters, raw_params)}
 
     def _get_params_details(self, params: Dict) -> Dict:
         """
@@ -200,23 +207,23 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         spaces: List[Parameter] = []
 
         if space == "buy" or (space is None and self.has_space("buy")):
-            logger.debug("Hyperopt has 'buy' space")
+            logger.log(5, "Hyperopt has 'buy' space")
             spaces += self.custom_hyperopt.indicator_space()
 
         if space == "sell" or (space is None and self.has_space("sell")):
-            logger.debug("Hyperopt has 'sell' space")
+            logger.log(5, "Hyperopt has 'sell' space")
             spaces += self.custom_hyperopt.sell_indicator_space()
 
         if space == "roi" or (space is None and self.has_space("roi")):
-            logger.debug("Hyperopt has 'roi' space")
+            logger.log(5, "Hyperopt has 'roi' space")
             spaces += self.custom_hyperopt.roi_space()
 
         if space == "stoploss" or (space is None and self.has_space("stoploss")):
-            logger.debug("Hyperopt has 'stoploss' space")
+            logger.log(5, "Hyperopt has 'stoploss' space")
             spaces += self.custom_hyperopt.stoploss_space()
 
         if space == "trailing" or (space is None and self.has_space("trailing")):
-            logger.debug("Hyperopt has 'trailing' space")
+            logger.log(5, "Hyperopt has 'trailing' space")
             spaces += self.custom_hyperopt.trailing_space()
         return spaces
 
@@ -253,17 +260,21 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
 
     def backtest_params(
         self,
-        raw_params: List[Any] = None,
+        raw_params: Tuple[Tuple, Dict] = None,
         iteration=None,
         params_dict: Dict[str, Any] = None,
         rs: Union[None, int] = None,
     ) -> Dict:
         if not params_dict:
             if raw_params:
-                params_dict = self._get_params_dict(raw_params)
+                params_dict = self._get_params_dict(raw_params[0])
+                params_meta = raw_params[1]
             else:
-                logger.debug("Epoch evaluation didn't receive any parameters")
-                return {}
+                raise OperationalException(
+                    "Epoch evaluation didn't receive any parameters"
+                )
+        else:
+            params_meta = {}
 
         self._set_params(params_dict)
 
@@ -289,6 +300,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             min_date,
             max_date,
             params_dict,
+            params_meta,
             self._get_params_details(params_dict),
             processed,
             rs,
@@ -341,6 +353,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         min_date,
         max_date,
         params_dict,
+        params_meta,
         params_details,
         processed,
         rs,
@@ -372,6 +385,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         return {
             "loss": loss,
             "params_dict": params_dict,
+            "params_meta": params_meta,
             "params_details": params_details,
             "results_metrics": results_metrics,
             "results_explanation": results_explanation,
@@ -437,7 +451,12 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         this is needed because when we ask None points, the optimizer doesn't return a list
         """
         if not to_ask:
+            wait_start = now()
             to_ask.extend(opt.ask(n=self.ask_points))
+            wait_time = now() - wait_start
+            backend.epochs.avg_wait_time = (
+                (backend.epochs.avg_wait_time or wait_time) + wait_time
+            ) / 2
         return tuple(to_ask.popleft())
 
     def ask_and_tell(self, jobs: int):
@@ -468,26 +487,28 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                 if self.apply_space_reduction(jobs, backend.trials, backend.epochs):
                     read_index = 0
             opt = self.opt
-            # tell every once in a while
-            if t > self.n_rand and not t % self.trials_maxout:
+            # tell once every n_jobs, only after n_random points, or if the optimizer is starting
+            if (t > self.n_rand and not t % jobs) or not len(opt.Xi):
                 try:
                     # only lock if its fitting time
                     locked = backend.trials.lock.acquire(fit)
                     if locked:
                         params_df = self._from_group(
-                            fields=["loss", "params_dict", "Xi_h"],
+                            fields=["loss", "params_dict", "params_meta", "Xi_h"],
                             indexer=slice(read_index, None),
                         )
                         backend.trials.lock.release()
                         if len(params_df) > 0:
                             read_index = t
                             try:
-                                opt.tell(
+                                results = zip(
                                     self.dict_values(
                                         params_df["params_dict"].values.tolist()
                                     ),
-                                    params_df["loss"].values.tolist(),
-                                    fit=fit,
+                                    params_df["params_meta"].values.tolist(),
+                                )
+                                opt.tell(
+                                    results, params_df["loss"].values.tolist(), fit=fit,
                                 )
                                 logger.debug(
                                     f"Optimizer now has %s points", len(opt.Xi)
@@ -511,20 +532,24 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             ):
                 break
 
-            a = point(opt, to_ask)
+            p = point(opt, to_ask)
             # check for termination when getting duplicates
-            while a in evald:
+            # the a[0] is the parameters (hashable) a[1] is meta (a dict)
+            while p[0] in evald:
+                logger.debug(
+                    "received point was already evaluated, checking termination"
+                )
                 backend.epochs.convergence += 1
                 if backend.trials.exit or self._maybe_terminate(
                     t, jobs, backend.trials, backend.epochs
                 ):
                     break
-                a = point(opt.copy(new_seed=True), to_ask)
-            evald.add(a)
+                p = point(opt.copy(new_seed=True), to_ask)
+            evald.add(p[0])
             if self.use_progressbar:
                 HyperoptOut._print_progress(t, jobs, self.trials_maxout)
             t += 1
-            yield t, a
+            yield t, p
 
     @staticmethod
     def parallel_objective(t: int, params, epochs: Epochs, trials_state: TrialsState):
@@ -532,9 +557,11 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         # flush trials if terminating
         cls: Hyperopt = backend.cls
 
+        if not backend.flush_registered:
+            atexit.register(cls.flush_remaining_trials, trials_state, False, None)
+            backend.flush_registered = True
         if trials_state.exit:
-            trials_state.tail_list.extend(backend.trials_list)
-            del backend.trials_list[:]
+            cls.flush_remaining_trials(trials_state, False, None)
             return
         if not backend.timer:
             backend.timer = now()
@@ -551,7 +578,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         if v:
             v["is_initial_point"] = t < cls.n_rand
             v["random_state"] = cls.random_state  # this is 0 in CV
-            v["Xi_h"] = hash(HyperoptData.params_Xi(v))
+            v["Xi_h"] = hash(cls.params_Xi(v))
             backend.trials_list.append(v)
             trials_state.num_done += 1
 
@@ -597,7 +624,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                 f"Optimizer epoch evaluated: %s, yi: %s", v["current_epoch"], v["loss"]
             )
             if is_best:
-                ep.improvement = ep.last_best_loss / v["loss"] - 1
+                ep.improvement = abs(ep.last_best_loss / v["loss"] - 1)
                 ep.current_best_epoch[rs] = ep.last_best_epoch = current
                 ep.current_best_loss[rs] = ep.last_best_loss = v["loss"]
         # Save results after every batch
@@ -616,7 +643,6 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         # release lock and clear saved trials from global state
         epochs.lock.release()
         del backend.trials_list[:]
-
         return i
 
     def cleanup_store_tables(self):
@@ -635,13 +661,14 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                         del self._group[k], self._group[k].attrs["columns"]
             # save a list of all the tables in the store except backups
             # unique keys and exclude backups
-            keys = set([k.lstrip("/").rstrip("_bak") for k in keys])
-            keys.add(self.trials_instance)
+            keys = [k.lstrip("/").rstrip("_bak") for k in keys]
+            keys.append(self.trials_instance)
             logger.debug(
-                "Saving list of store keys to...%s", self.trials_instances_file
+                "Saving last 10 trials instances ids to...%s",
+                self.trials_instances_file,
             )
             with open(self.trials_instances_file, "w") as ti:
-                json.dump(list(keys), ti)
+                json.dump(list(keys[-10:]), ti)
         except KeyError:
             pass
 
@@ -659,9 +686,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             # truncate hash to 4 digits
             str(hash([d.name for d in self.parameters]))[:4],
         )
-        logger.info(
-            f"Hyperopt state will be saved to " f"key {self.trials_instance:.64}[...]"
-        )
+        logger.info(f"Hyperopt state will be saved to " f"key {self.trials_instance}")
 
         self.cleanup_store_tables()
 
@@ -693,34 +718,49 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                 # in cross validation apply progressive filtering, tuned by hyperopt_epochs
                 intensity = prev_its = 1
                 backtrack = False
+                prev_tt_len = 0
                 # use a ~0.1 histeresis for desired number of filtered epochs
                 min_tt = int(self.total_epochs * 0.9)
                 max_tt = int(self.total_epochs * 1.1)
-                if tr_len > min_tt:
+                if tr_len < min_tt or tr_len > max_tt:
                     while True:
                         logger.debug("filtering trials with intensity: %s", intensity)
-                        self.target_trials = self.filter_trials(self.trials, self.config, intensity=intensity)
+                        self.target_trials = self.filter_trials(
+                            self.trials, self.config, intensity=intensity
+                        )
                         logger.debug("filtered trials to: %s", len(self.target_trials))
                         # backtrack means we applied a previous intensity because we probably
                         # offshoot the calculation
-                        if backtrack or self.total_epochs < 1:
-                            break
                         tt_len = len(self.target_trials)
-                        # don't filter if the filtered trials are below setting
-                        if tt_len < min_tt and intensity == 1:
-                            logger.debug("cannot filter trials since %s < %s", tt_len, min_tt)
-                            self.target_trials = self.trials
+                        if backtrack or self.total_epochs < 2:
+                            logger.debug(
+                                "stopped trials filtering, backtrack: %s", backtrack
+                            )
                             break
+                        prev_tt_len = tt_len
+                        # don't filter if the filtered trials are below setting
+                        if tt_len < min_tt and tt_len != prev_tt_len:
+                            logger.debug(
+                                "decreasing intensity since %s < %s", tt_len, max_tt
+                            )
+                            prev_its = intensity
+                            intensity *= self.total_epochs / tt_len
                         elif tt_len > max_tt:
-                            logger.debug("increasing intensity since %s > %s", tt_len, max_tt)
+                            logger.debug(
+                                "increasing intensity since %s > %s", tt_len, max_tt
+                            )
                             prev_its = intensity
                             intensity *= self.total_epochs / tt_len
                         elif tt_len < min_tt:
-                            logger.debug("backtracking filtering because %s < %s", tt_len, min_tt)
+                            logger.debug(
+                                "backtracking filtering because %s < %s", tt_len, min_tt
+                            )
                             backtrack = True
                             intensity = prev_its
                         else:
                             break
+                else:
+                    self.target_trials = self.trials
 
                 if len(self.target_trials) < 1:
                     logger.warn("Filtering returned 0 trials, using original dataset.")
@@ -855,7 +895,8 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         col = "{d.name}" if not self.cv else "{d}"
         self.Xi_names = tuple(col.format(d=d) for d in self.parameters)
         logger.info(f"Parameters set for optimization: {len(self.Xi_names)}")
-        logger.info(f"Search space size: {self.search_space_size:e}")
+        if not self.cv:
+            logger.info(f"Search space size: {self.search_space_size:e}")
 
     def _maybe_terminate(
         self, t: int, jobs: int, trials_state: TrialsState, epochs: Epochs
@@ -869,10 +910,15 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                 "check the loss function and the search space."
             )
             self.void_output_backoff = True
-        # if trials_maxout is 1 there is no buffering
-        # so an empty buffer is not an indicator of emptyness
-        if not done and self.trials_maxout > 1:
+        # don't consider an empty strike until the iterator
+        # has crossed the number of defined maxout
+        if not done and t > (total + self.trials_maxout):
             trials_state.empty_strikes += 1
+        if backend.epochs.avg_wait_time >= self.opt_ask_timeout:
+            logger.debug(
+                f"Average wait time for optimizer reached, %s", self.opt_ask_timeout
+            )
+            trials_state.exit = True
         cvg_ratio = (epochs.convergence / total) if total > 0 else 0
         if cvg_ratio > self.max_convergence_ratio:
             logger.warn(
@@ -911,29 +957,45 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                     # run the jobs
                     jobs_scheduler(parallel, jobs)
 
-                # keyboard interrupts should be caught within each worker too
-                except KeyboardInterrupt:
-                    print("User interrupted..")
+                # exceptions should be caught within each worker too
+                except KeyboardInterrupt as e:
+                    logger.error(f"Main loop stopped. {e}")
                 # collect remaining unsaved epochs
                 backend.trials.exit = True
-                jobs_scheduler(parallel, 2 * jobs)
-                # since the list was passed through the manager, make a copy
-                if len(backend.trials.tail_dict):
-                    for rs in backend.trials.tail_dict.keys():
-                        if len(backend.trials.tail_dict[rs]):
-                            backend.trials_list = [
-                                t for t in backend.trials.tail_dict[rs]
-                            ]
-                            backend.just_saved = self.log_trials(
-                                backend.trials, backend.epochs, rs=rs
-                            )
-                            backend.trials.num_done -= backend.just_saved
-                elif len(backend.trials.tail_list):
-                    backend.trials_list = [t for t in backend.trials.tail_list]
-                    backend.just_saved = self.log_trials(
-                        backend.trials, backend.epochs, rs=None
+                logger.debug(
+                    "ending soon, num_done: %s num_saved: %s",
+                    backend.trials.num_done,
+                    backend.trials.num_saved,
+                )
+                if backend.trials.num_done > backend.trials.num_saved:
+                    logger.debug(
+                        "flushing remaining %s trials to storage",
+                        backend.trials.num_done,
                     )
-                    backend.trials.num_done -= backend.just_saved
+                    get_reusable_executor().shutdown(wait=True)
+                    logger.debug(
+                        "tail dict is %s and tail list is %s",
+                        backend.trials.tail_dict,
+                        backend.trials.tail_list,
+                    )
+                    # since the list was passed through the manager, make a copy
+                    if len(backend.trials.tail_dict):
+                        for rs in backend.trials.tail_dict.keys():
+                            if len(backend.trials.tail_dict[rs]):
+                                backend.trials_list = [
+                                    t for t in backend.trials.tail_dict[rs]
+                                ]
+                                backend.just_saved = self.log_trials(
+                                    backend.trials, backend.epochs, rs=rs
+                                )
+                                backend.trials.num_done -= backend.just_saved
+                    elif len(backend.trials.tail_list):
+                        backend.trials_list = [t for t in backend.trials.tail_list]
+                        backend.just_saved = self.log_trials(
+                            backend.trials, backend.epochs, rs=None
+                        )
+                        backend.trials.num_done -= backend.just_saved
+                    logger.debug("saved %s trials at the end", backend.just_saved)
 
                 if self.use_progressbar:
                     HyperoptOut._print_progress(

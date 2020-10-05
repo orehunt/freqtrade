@@ -69,11 +69,15 @@ class HyperoptData(backend.HyperoptBase):
     # when to save trials
     trials_timeout: float
     trials_maxout: int
+    trials_max_empty: int
     # where to save trials
     trials_file: Path
     trials_dir: Path
 
     opt: IOptimizer
+    # the maximum time to wait for the oracle
+    # after which optimization is stopped
+    opt_ask_timeout: float
     # list of all the optimizers random states
     rngs: List[int]
     # path where the hyperopt state loaded by workers is dumped
@@ -730,7 +734,7 @@ class HyperoptData(backend.HyperoptBase):
         last_epoch = None
         steps, step_v = HyperoptData.find_steps(step_k, step_values, trials)
         # adjust steps by the given intensity
-        steps = steps[::int(len(steps) / intensity) or len(steps)]
+        steps = steps[::int(len(steps) / intensity) or 1]
         step_v /= intensity
 
         # print("looping over {steps} steps!")

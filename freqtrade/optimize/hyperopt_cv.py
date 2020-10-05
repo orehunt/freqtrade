@@ -57,7 +57,6 @@ class HyperoptCV(HyperoptOut):
         """ evaluate a list of given parameters in parallel """
         parallel(
             delayed(backend.parallel_sig_handler)(
-                backend,
                 self.parallel_objective,
                 self.cls_file,
                 self.logger,

@@ -331,7 +331,7 @@ class HyperoptOut(HyperoptData):
             (
                 "Imp: {Style.BRIGHT}{Fore.WHITE}{backend.epochs.improvement:.3} "
                 "{Style.RESET_ALL}"
-                "Avg: {Style.BRIGHT}{Fore.BLUE}{backend.epochs.average:1.2e} "
+                "Awt: {Style.BRIGHT}{Fore.BLUE}{backend.epochs.avg_wait_time:.1f} "
                 "{Style.RESET_ALL}"
                 "Exp: {Style.BRIGHT}{Fore.CYAN}{backend.epochs.explo} "
                 "{Style.RESET_ALL}"
