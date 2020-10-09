@@ -7,7 +7,7 @@ import logging
 from pathlib import Path
 from typing import Dict
 
-from freqtrade.constants import DEFAULT_HYPEROPT_LOSS, USERPATH_HYPEROPTS
+from freqtrade.constants import USERPATH_HYPEROPTS
 from freqtrade.exceptions import OperationalException
 from freqtrade.optimize.hyperopt_interface import IHyperOpt
 from freqtrade.optimize.hyperopt_loss_interface import IHyperOptLoss
@@ -72,18 +72,22 @@ class HyperOptLossResolver(IResolver):
         :param config: configuration dictionary
         """
 
-        # Verify the hyperopt_loss is in the configuration, otherwise fallback to the
-        # default hyperopt loss
-        hyperoptloss_name = config.get("hyperopt_loss") or DEFAULT_HYPEROPT_LOSS
+        hyperoptloss_name = config.get('hyperopt_loss')
+        if not hyperoptloss_name:
+            raise OperationalException("No Hyperopt loss set. Please use `--hyperopt-loss` to "
+                                       "specify the Hyperopt-Loss class to use.")
+        hyperoptloss = HyperOptLossResolver.load_object(hyperoptloss_name,
+                                                        config, kwargs={},
+                                                        extra_dir=config.get('hyperopt_path'))
 
-        hyperoptloss = HyperOptLossResolver.load_object(
-            hyperoptloss_name, config, kwargs=kwargs, extra_dir=config.get("hyperopt_path")
-        )
 
+<<<<<<< variant A
 
         if not hasattr(hyperoptloss, "hyperopt_loss_function"):
             raise OperationalException(
                 f"Found HyperoptLoss class {hyperoptloss_name} does not "
                 "implement `hyperopt_loss_function`."
             )
+>>>>>>> variant B
+======= end
         return hyperoptloss
