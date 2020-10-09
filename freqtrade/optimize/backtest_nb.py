@@ -584,3 +584,26 @@ def add_list_items_nb(items: List, ls: nb.typed.List):
 @njit(cache=True)
 def append_list_item(item, ls):
     ls.append(item)
+
+@njit(cache=False)
+def zip_flat(ls):
+    """ like zip, but flattens inner elements """
+    out_ls = nb.typed.List([])
+    n = 0
+    max_len = len(ls[0])
+    for n in range(max_len):
+        new_tup = ()
+        for l in ls:
+            new_tup += l[n]
+        out_ls.append(new_tup)
+    return out_ls
+
+
+@njit(cache=True)
+def join_column_names(pairs, timeframes, columns):
+    new_names = nb.typed.List.empty_list(item_type=nb.types.unicode_type)
+    for p in pairs:
+        for t in timeframes:
+            for c in columns:
+                new_names.append(t + "_" + p + "_" + c)
+    return new_names

@@ -101,22 +101,17 @@ class SherpaOptimizer(IOptimizer):
             if h in self._evaluated:
                 continue
             # if the hash is not in stored trials, the parameters
-            # were evaluated from another optimizer instance, however
-            # we don't know the trial ID so we just make a new one;
-            # NOTE: this means that in shared mode it doesn't make
-            # sense to use multiple observation per trial, since
-            # trials metadata is not shared
+            # were evaluated from another optimizer instance
+            # add that to an existing trial if trial_id matches,
+            # otherwise add a new trial
             if h not in self._obs:
-                # self._study.num_trials += 1
-                # trial_id = self._study.num_trials
-                # trial = Trial(
-                #     id=trial_id,
-                #     parameters={p.name: v for p, v in zip(self._params, X)},
-                # )
                 parameters = {p.name: v for p, v in zip(self._params, X)}
                 parameters.update(meta)
                 trial = Trial(id=meta['trial_id'], parameters=parameters)
-                self._iterations[meta['trial_id']] = itr = 0
+                if meta['trial_id'] in self._iterations:
+                    itr = self._iterations[meta['trial_id']]
+                else:
+                    self._iterations[meta['trial_id']] = itr = 0
             else:
                 trial = self._obs[h]
                 itr = self._iterations[trial.id]
@@ -233,7 +228,7 @@ class SherpaOptimizer(IOptimizer):
             "model_type": "GP",
             "num_initial_data_points": self.n_rand or "infer",
             "acquisition_type": "EI",
-            "max_concurrent": self.n_jobs,
+            "max_concurrent": self.n_jobs if self.mode == "single" else self.ask_points,
             "verbosity": False,
         }
         default.update(kwargs)

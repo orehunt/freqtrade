@@ -55,7 +55,9 @@ def parse_hopt_args() -> dict:
         "-lo", help="loss function, if split the first part is for trials instance", type=str
     )
     parser.add_argument("-z", help="test condition type", type=str)
-    parser.add_argument("-np", help="dont print all", action="store_true")
+    parser.add_argument("-noprint", help="dont print all", action="store_true")
+    parser.add_argument("-nojson", help="dont print json", action="store_false")
+    parser.add_argument("-nobest", help="dont print best at end", action="store_false")
     parser.add_argument("-sgn", help="signals buy/sell both", type=str, default="")
     parser.add_argument("-mode", help="use one optimizer", default="shared")
     parser.add_argument("-kn", help="k out of n cross validation", action="store_true")

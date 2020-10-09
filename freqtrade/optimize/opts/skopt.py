@@ -58,9 +58,15 @@ class SkoptOptimizer(IOptimizer):
         # print("asking took:", now() - start, self.rs)
         if self._fit:
             self._fit = False
-        return [asked] if n is None else asked
+        if isinstance(asked, Iterable):
+            asked = [(tuple(a), {}) for a in asked]
+        else:
+            asked = [(tuple(p for p in asked), {})]
+        return asked
 
     def tell(self, Xi, yi, fit=False, *args, **kwargs):
+        if not isinstance(Xi, list):
+            Xi, yi = list(Xi), list(yi)
         told = self._opt.tell(Xi, yi, fit)
         if fit and not self._fit:
             self._fit = True

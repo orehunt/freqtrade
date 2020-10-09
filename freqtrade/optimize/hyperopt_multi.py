@@ -469,6 +469,7 @@ class HyperoptMulti(HyperoptOut):
                     backend.timer = now()
                     # decrement the count of buffered trials by the number of saved trials
                     trials_state.num_done -= backend.just_saved
+                    logger.debug("just saved %s trials", backend.just_saved)
 
         else:
             logger.debug(

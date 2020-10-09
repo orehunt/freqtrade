@@ -123,8 +123,9 @@ class Main:
     config["hyperopt_loss"] = "DecideCoreLoss" if not args.lo else args.lo
 
     # output
-    config["print_json"] = True
-    config["print_all"] = not args.np
+    config["print_json"] = args.nojson
+    config["print_best_at_end"] = args.nobest
+    config["print_all"] = not args.noprint
     config["print_colorized"] = True
     config["verbosity"] = args.dbg
     config["logfile"] = "hyperopt.log" if args.log else ""
@@ -1235,7 +1236,7 @@ class Main:
         elif self.args.pa and self.args.q:
             self.update_pairs()
         elif self.args.ua and self.args.q:
-            self.update_amounts(ua=self.args.ua)
+            self.update_amounts(ua=self.args.ua, amounts_path=self.args.path)
         elif self.args.upp and self.args.q:
             self.update_params(epoch=self.args.upp, path=self.args.path)
         else:

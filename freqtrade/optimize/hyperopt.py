@@ -95,6 +95,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             "hyperopt_trials_max_empty", self.trials_maxout
         )
         self.ask_points = self.config.get("hyperopt_ask_points", 1)
+        self.opt_ask_timeout = self.config.get("hyperopt_optimizer", {}).get("ask_timeout")
         self.n_rand = self.config.get("hyperopt_initial_points", self.n_jobs * 3)
         self.use_progressbar = self.config.get("hyperopt_use_progressbar", True)
 
@@ -482,7 +483,6 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             self.opt = self.opt_adjust_acq(
                 opt, jobs, backend.epochs, backend.trials, is_shared=True
             )
-            fit = len(to_ask) < 1  # # only fit when out of points
             if sri and sri // (t or 1) < 1:
                 if self.apply_space_reduction(jobs, backend.trials, backend.epochs):
                     read_index = 0
@@ -491,7 +491,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             if (t > self.n_rand and not t % jobs) or not len(opt.Xi):
                 try:
                     # only lock if its fitting time
-                    locked = backend.trials.lock.acquire(fit)
+                    locked = backend.trials.lock.acquire(blocking=True)
                     if locked:
                         params_df = self._from_group(
                             fields=["loss", "params_dict", "params_meta", "Xi_h"],
@@ -1093,7 +1093,8 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         self.main_loop(jobs_scheduler)
 
         # At the end, print best epoch
-        if backend.trials.num_saved:
+        print_best = self.config.get("print_best_at_end")
+        if backend.trials.num_saved and print_best:
             try:
                 best_trial = self.load_trials(
                     self.trials_file,
@@ -1117,7 +1118,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                 self.print_epoch_details(
                     best_trial[0], self.epochs_limit, self.print_json
                 )
-        else:
+        elif print_best:
             # This is printed when Ctrl+C is pressed quickly, before first epochs have
             # a chance to be evaluated.
             self.logger.info("No epochs evaluated yet, no best result.")

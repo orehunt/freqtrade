@@ -6,7 +6,7 @@ from freqtrade.data.dataprovider import DataProvider
 
 
 class GetPairDf(Protocol):
-    def __call__(timeframe: str, pair: str):
+    def __call__(pair: str, timeframe: str, last_date=None, *args, **kwargs):
         ...
 
 
