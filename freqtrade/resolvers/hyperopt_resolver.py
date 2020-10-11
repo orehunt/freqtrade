@@ -80,14 +80,9 @@ class HyperOptLossResolver(IResolver):
                                                         config, kwargs={},
                                                         extra_dir=config.get('hyperopt_path'))
 
-
-<<<<<<< variant A
-
         if not hasattr(hyperoptloss, "hyperopt_loss_function"):
             raise OperationalException(
                 f"Found HyperoptLoss class {hyperoptloss_name} does not "
                 "implement `hyperopt_loss_function`."
             )
->>>>>>> variant B
-======= end
         return hyperoptloss
