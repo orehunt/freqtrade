@@ -350,6 +350,8 @@ def _download_trades_history(
         return True
 
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         logger.error(f'Failed to download historic trades for pair: "{pair}". ' f"Error: {e}")
         return False
 

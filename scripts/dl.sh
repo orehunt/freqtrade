@@ -11,7 +11,8 @@ pairsfile=${pairsfile:-"--pairs-file ${pairs_dir}/${exchange_name}_${quote}${spr
 pairs=${pairs:-$pairsfile}
 # datahandler=parquet
 # datahandler=json
-datahandler=hdf5
+# datahandler=hdf5
+datahandler=zarr
 
 # prefer timerange over days
 if [ -n "$timerange" ]; then
@@ -29,9 +30,8 @@ for tf in $timeframe; do
 	c=$((c + 1))
 done
 unset IFS c
-
 for tf in ${timeframes[@]}; do
-	freqtrade download-data \
+	$main_exec download-data \
 		--data-format-ohlcv $datahandler \
 		--data-format-trades $datahandler \
 		-c $exchange \
@@ -42,5 +42,7 @@ for tf in ${timeframes[@]}; do
 		-t $tf \
 		$timespan \
 		--userdir $userdir \
+		$erase \
+		$debug \
 		$dltype
 done

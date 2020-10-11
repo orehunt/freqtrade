@@ -701,7 +701,6 @@ class Exchange:
         input_coroutines = [self._async_get_candle_history(
             pair, timeframe, since) for since in
             range(since_ms, arrow.utcnow().timestamp * 1000, one_call)]
-
         results = await asyncio.gather(*input_coroutines, return_exceptions=True)
 
         # Combine gathered results

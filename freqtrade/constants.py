@@ -23,16 +23,9 @@ HYPEROPT_LIST_STEP_VALUES = {
     "range": 0,
 }
 RETRY_TIMEOUT = 30  # sec
-<<<<<<< HEAD
-DEFAULT_HYPEROPT_LOSS = "DefaultHyperOptLoss"
-DEFAULT_DB_PROD_URL = "sqlite:///tradesv3.sqlite"
-DEFAULT_DB_DRYRUN_URL = "sqlite:///tradesv3.dryrun.sqlite"
-UNLIMITED_STAKE_AMOUNT = "unlimited"
-=======
 DEFAULT_DB_PROD_URL = 'sqlite:///tradesv3.sqlite'
 DEFAULT_DB_DRYRUN_URL = 'sqlite:///tradesv3.dryrun.sqlite'
 UNLIMITED_STAKE_AMOUNT = 'unlimited'
->>>>>>> 62859455f78c0e3f52444a7ade36b889ca32c863
 DEFAULT_AMOUNT_RESERVE_PERCENT = 0.05
 REQUIRED_ORDERTIF = ['buy', 'sell']
 REQUIRED_ORDERTYPES = ['buy', 'sell', 'stoploss', 'stoploss_on_exchange']
@@ -42,7 +35,7 @@ ORDERTIF_POSSIBILITIES = ['gtc', 'fok', 'ioc']
 AVAILABLE_PAIRLISTS = ['StaticPairList', 'VolumePairList',
                        'AgeFilter', 'PrecisionFilter', 'PriceFilter',
                        'ShuffleFilter', 'SpreadFilter']
-AVAILABLE_DATAHANDLERS = ['json', 'jsongz', 'hdf5', 'parquet']
+AVAILABLE_DATAHANDLERS = ['json', 'jsongz', 'hdf5', 'parquet', 'zarr']
 DRY_RUN_WALLET = 1000
 DATETIME_PRINT_FORMAT = '%Y-%m-%d %H:%M:%S'
 MATH_CLOSE_PREC = 1e-14  # Precision used for float comparisons

@@ -7,7 +7,7 @@ from os import makedirs
 from pathlib import Path
 from shutil import rmtree
 from time import sleep
-from typing import Any, Callable, Dict, Iterable, List, Tuple, Union
+from typing import Any, Dict, Iterable, List, Tuple, Union
 
 import numcodecs
 import numpy as np
@@ -16,14 +16,14 @@ from numpy import array, iinfo, int32
 from numpy import repeat as np_repeat
 
 
-za.storage.default_compressor = za.Zstd(level=2)
+za.storage.default_compressor = za.Blosc(cname='zstd', clevel=2)
 
 
 import io
 from os import path
 
 from numpy import arange, float64, isfinite, nanmean
-from pandas import DataFrame, Series, concat, isna, json_normalize
+from pandas import DataFrame, concat, isna, json_normalize
 
 # Import IHyperOpt and IHyperOptLoss to allow unpickling classes from these modules
 import freqtrade.optimize.hyperopt_backend as backend

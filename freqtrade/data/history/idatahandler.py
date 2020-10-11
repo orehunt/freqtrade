@@ -247,9 +247,14 @@ def get_datahandlerclass(datatype: str) -> Type[IDataHandler]:
         from .parquetdatahandler import ParquetDataHandler
 
         return ParquetDataHandler
-    elif datatype == 'hdf5':
+    elif datatype == "hdf5":
         from .hdf5datahandler import HDF5DataHandler
+
         return HDF5DataHandler
+    elif datatype == "zarr":
+        from .zarrdatahandler import ZarrDataHandler
+
+        return ZarrDataHandler
     else:
         raise ValueError(f"No datahandler for datatype {datatype} available.")
 
