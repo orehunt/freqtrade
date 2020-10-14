@@ -1,22 +1,16 @@
-from freqtrade.exceptions import OperationalException
-import numpy as np
 import logging
-import re
 from pathlib import Path
-from typing import Iterable, List, Optional, Sequence, Union
+from typing import List, Optional
 
 import pandas as pd
+import zarr as za
 
-from freqtrade import misc
 from freqtrade.configuration import TimeRange
-from freqtrade.constants import (
-    DEFAULT_DATAFRAME_COLUMNS,
-    DEFAULT_TRADES_COLUMNS,
-    ListPairsWithTimeframes,
-)
+from freqtrade.constants import (DEFAULT_DATAFRAME_COLUMNS, DEFAULT_TRADES_COLUMNS,
+                                 ListPairsWithTimeframes,)
+from freqtrade.data.converter import clean_ohlcv_dataframe
 
 from .idatahandler import IDataHandler, TradeList
-import zarr as za
 
 
 logger = logging.getLogger(__name__)
@@ -34,7 +28,6 @@ class ZarrDataHandler(IDataHandler):
     _group: Optional[za.Group] = None
     _compressor = za.Blosc(cname="zstd", clevel=2)
     _force_overwrite = False
-    _date_type = "datetime64[ns, UTC]"
 
     @property
     def store(self):
@@ -180,7 +173,9 @@ class ZarrDataHandler(IDataHandler):
                 )
             )
 
-    def ohlcv_store(self, pair: str, timeframe: str, data: pd.DataFrame) -> None:
+    def ohlcv_store(
+        self, pair: str, timeframe: str, data: pd.DataFrame, cleaned=False
+    ) -> None:
         """
         Store data.
         :param pair: Pair - used to generate filename
@@ -189,7 +184,7 @@ class ZarrDataHandler(IDataHandler):
         :return: None
         """
         td = pd.Timedelta(timeframe).value
-        key = self._pair_ohlcv_key(pair, timeframe)
+        key = self._pair_ohlcv_key(pair, timeframe, cleaned)
         self._save(key, data, "ohlcv", td)
 
     @classmethod
@@ -215,7 +210,7 @@ class ZarrDataHandler(IDataHandler):
     @classmethod
     def _upcast_time(cls, data: pd.DataFrame, col: str):
         if data[col].dtype in ("int32", "float32", "int64", "float64"):
-            data[col] = pd.to_datetime(data[col], utc=True)
+            data[col] = data[col].astype("datetime64[ns, UTC]")
 
     @classmethod
     def _to_records(cls, data: pd.DataFrame, kind: str):
@@ -230,13 +225,26 @@ class ZarrDataHandler(IDataHandler):
         with pd.option_context("mode.chained_assignment", None):
             # trades data is ms...and we are storing as ns
             # it is wrong but the conversion happens after...
-            # data[col] = pd.to_numeric(data[col]) #.astype(f"datetime64[ns]")
-            # data[col] = data[col].astype(f"datetime64[ns]")
             cls._downcast_time(data, col)
         return data[columns].to_records(index=False, column_dtypes=col_types)
 
+    def _del_key(self, key):
+        dlt = dlt_c = False
+        if key in self.group:
+            del self.group[key]
+            key_c = f"{key}_cleaned"
+            dlt = True
+        if key_c in self.group:
+            del self.group[key_c]
+            dlt_c = True
+        return dlt or dlt_c
+
     def _ohlcv_load(
-        self, pair: str, timeframe: str, timerange: Optional[TimeRange] = None
+        self,
+        pair: str,
+        timeframe: str,
+        timerange: Optional[TimeRange] = None,
+        cleaned=False,
     ) -> pd.DataFrame:
         """
         Internal method used to load data for one pair from disk.
@@ -253,9 +261,24 @@ class ZarrDataHandler(IDataHandler):
 
         if key not in self.group:
             return pd.DataFrame(columns=self._columns)
-        arr = self.group[key]
+        if cleaned:
+            key_c = f"{key}_cleaned"
+            if key_c not in self.group:
+                # load raw data WITHOUT timerange
+                raw = self._ohlcv_load(pair, timeframe, cleaned=False)
+                cleaned_data = clean_ohlcv_dataframe(
+                    raw, timeframe, pair=pair, fill_missing=True, drop_incomplete=False
+                )
+                self._save(key_c, cleaned_data, "ohlcv", pd.Timedelta(timeframe).value)
+                logger.debug("saved cleaned data to %s", key_c)
+            arr = self.group[key_c]
+            logger.debug("loaded cleaned data for %s", key_c)
+        else:
+            arr = self.group[key]
 
-        if timerange:
+        # only trim by timerange if data is cleaned
+        # otherwise can't guess ranges correctly
+        if timerange and cleaned:
             start, stop = arr.get_coordinate_selection(([0, -1]), fields=["date"])
             # because of struct arrays, unpack the tuples
             start, stop = start[0], stop[0]
@@ -292,10 +315,7 @@ class ZarrDataHandler(IDataHandler):
         :return: True when deleted, false if file did not exist.
         """
         key = self._pair_ohlcv_key(pair, timeframe)
-        if key in self.group:
-            del self.group[key]
-            return True
-        return False
+        return self._del_key(key)
 
     def ohlcv_append(self, pair: str, timeframe: str, data: pd.DataFrame) -> None:
         """
@@ -370,13 +390,6 @@ class ZarrDataHandler(IDataHandler):
         if list(pairdata.dtype.names) != DEFAULT_TRADES_COLUMNS:
             raise ValueError("Wrong dataframe format")
 
-        # tp = dict(pairdata.dtype.fields)
-        # tp["timestamp"] = (np.dtype(object),)
-        # new_tp = np.dtype(list((name, t[0]) for name, t in tp.items()))
-        # pairdata = pairdata.astype(new_tp)
-        # pairdata["timestamp"] = pd.to_datetime(
-        #     pairdata["timestamp"], utc=True, unit="ms"
-        # )
         self._upcast_time(pairdata, "timestamp")
         return pairdata.tolist()
 
@@ -387,15 +400,12 @@ class ZarrDataHandler(IDataHandler):
         :return: True when deleted, false if file did not exist.
         """
         key = self._pair_trades_key(pair)
-        if key in self.group:
-            del self.group[key]
-            return True
-        return False
+        return self._del_key(key)
 
     @classmethod
     def _pair_ohlcv_key(cls, pair: str, timeframe: str) -> str:
         return f"{pair}/ohlcv/tf_{timeframe}"
 
     @classmethod
-    def _pair_trades_key(cls, pair: str) -> str:
+    def _pair_trades_key(cls, pair: str, cleaned: bool) -> str:
         return f"{pair}/trades"

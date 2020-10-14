@@ -145,7 +145,7 @@ class SkoptOptimizer(IOptimizer):
                             base=base,
                             prior=prior,
                             transform=trans,
-                            **m["kwargs"]
+                            **m.get("kwargs", {})
                         )
                     )
                 else:
@@ -157,7 +157,7 @@ class SkoptOptimizer(IOptimizer):
                             base=base,
                             prior=prior,
                             transform=trans,
-                            **m["kwargs"]
+                            **m.get("kwargs", {})
                         ),
                     )
             elif par.kind == CAT:

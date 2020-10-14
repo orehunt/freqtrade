@@ -2,7 +2,7 @@ import logging
 import signal
 from abc import abstractmethod
 from functools import partial
-from logging import Logger
+from logging import Logger, getLogger
 from multiprocessing.managers import Namespace, SharedMemoryManager, SyncManager
 from pathlib import Path
 from queue import Queue
@@ -14,6 +14,7 @@ from pandas import DataFrame
 
 from freqtrade.optimize.optimizer import IOptimizer, Parameter
 
+logger = getLogger(__name__)
 
 cls: Any = None
 data: Dict[str, DataFrame] = {}
@@ -145,6 +146,26 @@ def wait_for_lock(lock: Lock, message: str, logger: Logger):
         logger.debug(msg)
         locked = lock.acquire()
 
+def release_lock(state: Union[TrialsState, Epochs]):
+    """ needs an object with a "lock" attribute """
+    try:
+        res = state.lock.release()
+    except Exception as e:
+        logger.debug("couldn't release lock %s", e)
+        res = None
+    return res
+
+def acquire_lock(state: Union[TrialsState, Epochs], blocking=False, timeout=None):
+    """ needs an object with a "lock" attribute """
+    try:
+        if blocking and timeout:
+            res = state.lock.acquire(blocking=blocking, timeout=timeout)
+        else:
+            res = state.lock.acquire(blocking=blocking)
+    except Exception as e:
+        logger.debug("couldn't acquire lock %s", e)
+        res = None
+    return res
 
 class HyperoptBase:
     dimensions: List[Any]

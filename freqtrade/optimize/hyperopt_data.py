@@ -201,7 +201,7 @@ class HyperoptData(backend.HyperoptBase):
                 # cast types
                 trials = HyperoptData.cast_trials_types(trials)
                 # save on storage, lock is blocking
-                locked = trials_state.lock.acquire()
+                locked = backend.acquire_lock(trials_state)
                 if locked:
                     try:
 
@@ -237,7 +237,7 @@ class HyperoptData(backend.HyperoptBase):
                 interval += 0.5
             finally:
                 if locked:
-                    trials_state.lock.release()
+                    backend.release_lock(trials_state)
                     locked = False
 
     def _from_group(self, fields=[], indexer=slice(None)) -> DataFrame:
@@ -336,17 +336,18 @@ class HyperoptData(backend.HyperoptBase):
         locked = False
         try:
             locked = (
-                trials_state.lock.acquire() if hasattr(trials_state, "lock") else None
+                backend.acquire_lock(trials_state) if hasattr(trials_state, "lock") else None
+
             )
             if locked is not None:
                 while not locked:
                     logger.debug("Acquiring trials state lock for reading trials")
-                    locked = trials_state.lock.acquire()
+                    locked = backend.acquire_lock(trials_state)
             trials = HyperoptData._from_storage(
                 trials_location, trials_instance, indexer, fields
             )
             if locked:
-                trials_state.lock.release()
+                backend.release_lock(trials_state)
                 locked = False
             # make a copy of the trials in case this optimization run corrupts it
             # (wrongful termination)
@@ -383,7 +384,7 @@ class HyperoptData(backend.HyperoptBase):
                     logger.warn(f"Backup not found...")
         finally:
             if locked:
-                trials_state.lock.release()
+                backend.release_lock(trials_state)
         return trials
 
     @staticmethod
@@ -821,12 +822,12 @@ class HyperoptData(backend.HyperoptBase):
         trials_file: Path, instance_name: str, trials_state=None, backup=False,
     ) -> bool:
         success = False
-        locked = trials_state.lock.acquire() if trials_state else False
+        locked = backend.acquire_lock(trials_state) if trials_state else False
         interval = 0.01
         while not ((trials_state and locked) or not trials_state):
             logger.debug("Acquiring trials state lock for clearing trials instance")
             sleep(interval)
-            locked = trials_state.lock.acquire()
+            locked = backend.acquire_lock(trials_state)
             interval += 0.5
         try:
             with za.open(str(trials_file)) as store:
@@ -838,7 +839,7 @@ class HyperoptData(backend.HyperoptBase):
             logger.debug("Failed clearing instance: %s", e)
             pass
         if locked:
-            trials_state.lock.release()
+            backend.release_lock(trials_state)
             locked = False
         return success
 
@@ -941,7 +942,7 @@ class HyperoptData(backend.HyperoptBase):
                     reduced_optimizers.append(opt.rs)
                     epochs.pinned_optimizers[oid] = opt
                 epochs.space_reduction[oid] = opt_pars is True
-            backend.epochs.lock.release()
+            backend.release_lock(backend.epochs)
         else:
             if new_pars:
                 self.opt.create_optimizer(new_pars)

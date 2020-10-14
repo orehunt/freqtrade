@@ -31,7 +31,7 @@ for tf in $timeframe; do
 done
 unset IFS c
 for tf in ${timeframes[@]}; do
-	$main_exec download-data \
+	freqtrade download-data \
 		--data-format-ohlcv $datahandler \
 		--data-format-trades $datahandler \
 		-c $exchange \

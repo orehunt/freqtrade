@@ -491,13 +491,13 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             if (t > self.n_rand and not t % jobs) or not len(opt.Xi):
                 try:
                     # only lock if its fitting time
-                    locked = backend.trials.lock.acquire(blocking=True)
+                    locked = backend.acquire_lock(backend.trials, True)
                     if locked:
                         params_df = self._from_group(
                             fields=["loss", "params_dict", "params_meta", "Xi_h"],
                             indexer=slice(read_index, None),
                         )
-                        backend.trials.lock.release()
+                        backend.release_lock(backend.trials)
                         if len(params_df) > 0:
                             read_index = t
                             try:
@@ -523,7 +523,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                             ) / 2
                 except (KeyError, FileNotFoundError, IOError, OSError) as e:
                     if locked:
-                        backend.trials.lock.release()
+                        backend.release_lock(backend.trials)
                     logger.debug("Couldn't read trials from disk, %s", e)
             if (
                 backend.trials
@@ -590,11 +590,11 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         """
         Log results if it is better than any previous evaluation
         """
-        locked = epochs.lock.acquire(False)
+        locked = backend.acquire_lock(epochs, False)
         if not locked:
             # on the last run sit in queue for saving
             if trials_state.exit:
-                epochs.lock.acquire()
+                backend.acquire_lock(epochs, False)
             else:
                 return 0
         ep = epochs
@@ -641,7 +641,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
 
         self.save_trials(trials, self.trials_file, self.trials_instance, trials_state)
         # release lock and clear saved trials from global state
-        epochs.lock.release()
+        backend.release_lock(epochs)
         del backend.trials_list[:]
         return i
 
@@ -787,7 +787,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
 
     def _setup_epochs(self) -> bool:
         """ used to resume the best epochs state from previous trials """
-        locked = backend.epochs.lock.acquire(True, timeout=60)
+        locked = backend.acquire_lock(backend.epochs, True, timeout=60)
         if not locked:
             raise OperationalException(
                 "Couldn't acquire lock at startup during epochs setup."
@@ -847,7 +847,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                     ]
                     ep.current_best_loss[None] = ep.last_best_loss = best["loss"]
         ep.max_epoch = self.epochs_limit
-        ep.lock.release()
+        backend.release_lock(ep)
         return resumed
 
     def _setup_space_reduction(self):

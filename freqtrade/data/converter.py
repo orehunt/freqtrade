@@ -93,7 +93,6 @@ def clean_ohlcv_dataframe(
     else:
         return data
 
-
 def ohlcv_fill_up_missing_data(dataframe: DataFrame, timeframe: str, pair: str) -> DataFrame:
     """
     Fills up missing data with 0 volume rows,
@@ -109,9 +108,11 @@ def ohlcv_fill_up_missing_data(dataframe: DataFrame, timeframe: str, pair: str) 
 
     # Forwardfill close for missing columns
     df["close"] = df["close"].fillna(method="ffill")
+    close = df["close"]
+    ohl = ["open", "high", "low"]
     # Use close for "open, high, low"
-    df.loc[:, ["open", "high", "low"]] = df[["open", "high", "low"]].fillna(
-        value={"open": df["close"], "high": df["close"], "low": df["close"],}
+    df.loc[:, ohl] = df[ohl].fillna(
+        value={"open": close, "high": close, "low": close,}
     )
     df.reset_index(inplace=True)
     len_before = len(dataframe)

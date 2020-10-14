@@ -1,8 +1,11 @@
 from datetime import datetime
 from functools import partial
 from typing import Protocol
+import logging
 
 from freqtrade.data.dataprovider import DataProvider
+
+logger = logging.getLogger(__name__)
 
 
 class GetPairDf(Protocol):
@@ -26,20 +29,36 @@ class PairsCache:
     ):
         sector = (pair, timeframe)
         key = last_date.timestamp()
+        c_key, c_data = self.pairs_data.get(sector, (0, None))
         if sector not in self.pairs_data:
             self.pairs_data[sector] = (
                 key,
                 fn(pair=pair, timeframe=timeframe, *args, **kwargs),
             )
-            # logger.debug(f"storing cache {key}, {sector}, {self.pairs_data[sector][0]}")
-        elif key != self.pairs_data[sector][0]:
+            logger.debug(
+                "storing cache new: %s, sec: %s", key, sector,
+            )
+            ret = self.pairs_data[sector][1]
+        elif key > c_key:
+            logger.debug(
+                "deleting cache sec:  %s, old: %s , new: %s", sector, c_key, key,
+            )
             del self.pairs_data[sector]
             self.pairs_data[sector] = (
                 key,
                 fn(pair=pair, timeframe=timeframe, *args, **kwargs),
             )
-            # logger.debug(f"deleting cache {key}, {sector}, {self.pairs_data[sector][0]}")
-        return self.pairs_data[sector][1].copy()
+            ret = self.pairs_data[sector][1]
+        elif key < c_key:
+            ret = c_data.loc[:key]
+            logger.debug(
+                "returning trimmed data from cache, queried key: %s, len: %s",
+                key,
+                len(ret),
+            )
+        else:
+            ret = c_data
+        return ret
 
     @property
     def get_pairs_data(self):

@@ -7,6 +7,7 @@ from functools import partial
 # use math finite check for small loops
 from math import isfinite as is_finite
 from multiprocessing.managers import SyncManager
+from threading import Lock
 
 from queue import Queue
 from time import time as now
@@ -44,7 +45,6 @@ logger.name += f".{os.getpid()}"
 # from pyinstrument import Profiler
 
 # profiler = Profiler()
-
 
 class HyperoptMulti(HyperoptOut):
     """ Run the optimization with multiple optimizers """
@@ -297,7 +297,8 @@ class HyperoptMulti(HyperoptOut):
             # ignoring random state
             try:
                 # Only wait if the optimizer has no points at all (startup)
-                locked = trials_state.lock.acquire(len(opt.Xi) < 1)
+                # locked = trials_state.lock.acquire(len(opt.Xi) < 1)
+                locked = backend.acquire_lock(trials_state, len(opt.Xi) < 1)
                 if locked:
                     params_df = self._from_group(
                         fields=[
@@ -319,12 +320,12 @@ class HyperoptMulti(HyperoptOut):
                             axis=0,
                             inplace=True,
                         )
-                    trials_state.lock.release()
+                    backend.release_lock(trials_state)
             except (KeyError, FileNotFoundError, IOError, OSError,) as e:
                 # only happens when df is empty and empty df is not saved
                 # on disk by pytables or is being written
                 if locked:
-                    trials_state.lock.release()
+                    backend.release_lock(trials_state)
                 logger.debug("Couldn't read trials from disk %s", e)
                 raise e
         if isinstance(params_df, DataFrame) and len(params_df) > 0:
@@ -371,16 +372,19 @@ class HyperoptMulti(HyperoptOut):
 
     @staticmethod
     def flush_remaining_trials(trials_state: TrialsState, is_shared: bool, rs: Union[int, None]):
-        rt =len(backend.trials_list)
-        logger.debug("flushing remaining trials %s", rt)
-        if rt:
-            # shared/single
-            if is_shared or rs is None:
-                trials_state.tail_list.extend(backend.trials_list)
-            # multi
-            else:
-                trials_state.tail_dict[rs] = backend.trials_list
-            del backend.trials_list[:]
+        try:
+            rt =len(backend.trials_list)
+            logger.debug("flushing remaining trials %s", rt)
+            if rt:
+                # shared/single
+                if is_shared or rs is None:
+                    trials_state.tail_list.extend(backend.trials_list)
+                # multi
+                else:
+                    trials_state.tail_dict[rs] = backend.trials_list
+                del backend.trials_list[:]
+        except Exception as e:
+            logger.debug("couldn't flush remaining trials %s", e)
 
     def opt_log_trials(
         self,

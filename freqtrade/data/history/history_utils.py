@@ -56,6 +56,7 @@ def load_pair_history(
         fill_missing=fill_up_missing,
         drop_incomplete=drop_incomplete,
         startup_candles=startup_candles,
+        cleaned=True
     )
 
 
@@ -159,6 +160,7 @@ def _load_cached_data_for_updating(
         fill_missing=False,
         drop_incomplete=True,
         warn_no_data=False,
+        cleaned=False,
     )
     if not data.empty:
         if start and start < data.iloc[0]["date"]:

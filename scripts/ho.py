@@ -414,7 +414,7 @@ class Main:
                     "python",
                     "-m",
                     *self.args.prf.split(","),
-                    "/freqtrade/.env/bin/freqtrade",
+                    "freqtrade/main.py",
                 ]
             fqargs = [
                 *main_exec,

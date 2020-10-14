@@ -279,6 +279,7 @@ def concat_informative_pairs(
     return df
 
 
+# NOTE: this function does not match against concat_pairs(numba) or concat_informative_pairs (pd.merge)
 def concat_pairs_pd(
     # (pair, tf, data)
     ref: RefPair,
@@ -373,7 +374,7 @@ def trim(
     # if the timedelta (of the NON ref_df) is bigger, trim by length
     # because on equal lengths the bigger timeframe
     # already includes the reference timerange
-    if td > ref_td:
+    if td.value > ref_td.value:
         trimmed = trim_by_len(df, count, stop)
         # longer timeframes have to be shifted, because longer candles
         # appear later in the timeline
