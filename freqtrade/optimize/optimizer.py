@@ -5,6 +5,7 @@ from abc import abstractmethod
 from enum import IntEnum
 from types import SimpleNamespace
 from typing import Any, Dict, Iterable, List, Tuple, Union, Iterable, Sequence
+from itertools import cycle
 
 import numpy as np
 from sklearn.utils import check_random_state
@@ -148,6 +149,7 @@ class IOptimizer:
 
     """ random state """
     rs: int
+
     rng: np.random.RandomState
 
     """ flag to signal early stopping """
@@ -167,17 +169,28 @@ class IOptimizer:
     """
     mode: str
 
+    """ tells the scheduler to wait for all trials of the previous ask to finish """
+    is_blocking: bool = False
+
+    """ at any epoch, how many observations are scheduled around the optimizer prediction """
+    epoch_to_obs: int = 1
+
     """ Number of parallel workers """
     n_jobs: int
 
     """ Number of initial random points """
     n_rand: int
+
     """ A suggested epochs limit """
     n_epochs: int
+
     """ Points per trial, how many observations to run between epochs """
     ask_points: int
-    """ Hint to help the optimizer decide what to use """
+
+    """ Set to the algo of an instantiated optimizer """
     algo: str
+    """ Hint to help the optimizer decide what to use """
+    _algos_pool: Iterable
 
     _params: List
     _args: Tuple
@@ -197,7 +210,13 @@ class IOptimizer:
         self.n_rand = config.get("n_rand", 1)
         self.n_epochs = config.get("n_epochs", 10)
         self.ask_points = config.get("ask_points", 1) or 1
-        self.algo = config.get("algo", "rand")
+
+        # parse the algo if it is comma separated;
+        algo = config.get("algo", "rand")
+        if isinstance(algo, str):
+            algo = algo.split(",")
+        # many algos are cycled when create_optimizer is called
+        self._algos_pool = cycle(algo)
 
         self.mode = config.get("mode", "single")
         self._config = config
@@ -296,7 +315,14 @@ class IOptimizer:
         """ Return a new combination of parameters to evaluate """
 
     @abstractmethod
-    def tell(self, Xi: Iterable[Tuple[Sequence, Dict]], yi: Sequence[float], fit=False, *args, **kwargs):
+    def tell(
+        self,
+        Xi: Iterable[Tuple[Sequence, Dict]],
+        yi: Sequence[float],
+        fit=False,
+        *args,
+        **kwargs,
+    ):
         """ Submit evaluated scores, the scheduler should return
         a list of tuples in the form (parameters, meta) """
 

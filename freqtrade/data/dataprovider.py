@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from arrow import Arrow
 from pandas import DataFrame
 
+from freqtrade.configuration import TimeRange
 from freqtrade.constants import ListPairsWithTimeframes, PairWithTimeframe
 from freqtrade.data.history import load_pair_history
 from freqtrade.exceptions import ExchangeError, OperationalException
@@ -82,7 +83,7 @@ class DataProvider:
         else:
             return DataFrame()
 
-    def historic_ohlcv(self, pair: str, timeframe: str = None) -> DataFrame:
+    def historic_ohlcv(self, pair: str, timeframe: str = None, timerange: Optional[TimeRange] = None) -> DataFrame:
         """
         Get stored historical candle (OHLCV) data
         :param pair: pair to get the data for
@@ -90,10 +91,11 @@ class DataProvider:
         """
         return load_pair_history(pair=pair,
                                  timeframe=timeframe or self._config['timeframe'],
+                                 timerange=timerange or TimeRange.parse_timerange(self._config['timerange']),
                                  datadir=self._config['datadir'], data_handler=self._data_handler
                                  )
 
-    def get_pair_dataframe(self, pair: str, timeframe: str = None) -> DataFrame:
+    def get_pair_dataframe(self, pair: str, timeframe: str = None, timerange: Optional[TimeRange] = None) -> DataFrame:
         """
         Return pair candle (OHLCV) data, either live or cached historical -- depending
         on the runmode.
@@ -106,7 +108,7 @@ class DataProvider:
             data = self.ohlcv(pair=pair, timeframe=timeframe)
         else:
             # Get historical OHLCV data (cached on disk).
-            data = self.historic_ohlcv(pair=pair, timeframe=timeframe)
+            data = self.historic_ohlcv(pair=pair, timeframe=timeframe, timerange=timerange)
         if len(data) == 0:
             logger.warning(f"No data found for ({pair}, {timeframe}).")
         return data

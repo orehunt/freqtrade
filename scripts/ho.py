@@ -118,6 +118,7 @@ class Main:
                     "meta_tag_conflict": args.mtc
                     }
     config["hyperopt_ask_points"] = args.pts
+    config["hyperopt_max_convergence_ratio"] = args.cvg
     config["hyperopt_initial_points"] = args.rpt or (32 // args.j)
     config["hyperopt_random_state"] = args.rand if args.rand else None
     config["hyperopt_loss"] = "DecideCoreLoss" if not args.lo else args.lo
@@ -1060,11 +1061,14 @@ class Main:
         path = path[0]
         trial = results.loc[results["current_epoch"] == epoch].iloc[:1].to_dict('records')[0]
         params = trial["params_dict"]
-        data = self.read_json_file(path)
-        if idx is not None:
-            data[idx].update(params)
+        if os.path.exists(path):
+            data = self.read_json_file(path)
+            if idx is not None:
+                data[idx].update(params)
+            else:
+                data.update(params)
         else:
-            data.update(params)
+            data = params
         self.write_json_file(data, path, update=False)
         self.ho.print_epoch_details(trial, len(results), True)
         # print(

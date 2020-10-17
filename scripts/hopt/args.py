@@ -47,6 +47,7 @@ def parse_hopt_args() -> dict:
     parser.add_argument("-d", help="number of days", type=int, default=0)
     parser.add_argument("-g", help="timerange", type=str, default="")
     parser.add_argument("-i", help="timeframe", type=str, default="1h")
+    parser.add_argument("-cvg", help="max convergence ratio", type=float, default=0.5)
     parser.add_argument("-rand", help="random state", type=int)
     parser.add_argument("-alg", help="optimizer algo", type=str, default="rand")
     parser.add_argument("-psco", help="print scores", action="store_true")

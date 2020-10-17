@@ -35,12 +35,15 @@ class HyperoptCV(HyperoptOut):
         # use the right names for dimensions
         if not backend.trials.exit:
             # dump the parameters values to FS
-            params = self.target_trials["params_dict"].values.tolist()
-            epochs = len(params)
-            # n_dims = len(self.dimensions)
-            dump(params, self.Xi_file)
-            # not needed anymore
-            del params
+            epochs = len(self.target_trials)
+            self._to_storage(
+                self.target_trials,
+                self.Xi_path,
+                key="X",
+                fields=["params_dict"],
+                chunks=(1, 1),
+                append=False,
+            )
 
             # params_Xi = np.memmap(Xi_file, dtype='float64', mode='r', shape=(epochs,n_dims))
             for t in range(offset, epochs):

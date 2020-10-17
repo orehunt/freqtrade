@@ -1,9 +1,13 @@
 import logging
+from itertools import cycle
+from functools import partial
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 import numpy as np
+import pandas as pd
 import sherpa as she
 import sherpa.core as sc
+from joblib import hash
 from sherpa.core import Trial
 
 from freqtrade.exceptions import OperationalException
@@ -11,32 +15,57 @@ from freqtrade.exceptions import OperationalException
 from ..optimizer import CAT, RANGE, IOptimizer, Points
 
 
+hash = partial(hash, hash_name="sha1")
+logger = logging.getLogger(__name__)
+
+
 class Xi(Points):
     _study: she.Study
     _params_names: List[str]
+    _empty_df = pd.DataFrame()
 
     def __init__(self, study: she.Study):
         self._study = study
         self._params_names = [p.name for p in study.parameters]
 
+    def _status(self):
+        if "Status" in self._study.results:
+            return self._study.results["Status"].values == "COMPLETED"
+        else:
+            return None
+
+    @property
+    def __obs(self):
+        if len(self._study.results):
+            return self._study.results[self._status()]
+        else:
+            return self._empty_df
+
     def __getitem__(self, item) -> Any:
-        return self._study.results[self._params_names].iloc[item].values.tolist()
+        return self.__obs[self._params_names].iloc[item].values.tolist()
 
     def __delitem__(self, item: int):
         idx = self._study.results.index
         self._study.results.drop(idx[item], inplace=True)
 
     def __len__(self):
-        return len(self._study.results)
+        return len(self.__obs)
 
 
 class yi(Xi):
+    @property
+    def __obs(self):
+        if len(self._study.results):
+            return self._study.results[self._status()]
+        else:
+            return self._empty_df
+
     def __getitem__(self, item):
         try:
-            ret = self._study.results["Objective"].iloc[item]
+            ret = self.__obs["Objective"].iloc[item]
             return ret.values.tolist() if isinstance(ret, np.ndarray) else ret
         except KeyError:
-            return []
+            return self._empty_df
 
 
 class SherpaOptimizer(IOptimizer):
@@ -61,6 +90,11 @@ class SherpaOptimizer(IOptimizer):
     _params_names: List[str]
     _meta_keys: Set[str] = set()
 
+    # model specifics
+    _bo_acq_pool: Optional[Iterable] = None
+    _bo_models_pool: Optional[Iterable] = None
+    __bo_model: str
+
     logging.getLogger("GP").setLevel(logging.ERROR)
     logging.getLogger("rbf").setLevel(logging.ERROR)
     logging.getLogger("variance").setLevel(logging.ERROR)
@@ -68,6 +102,9 @@ class SherpaOptimizer(IOptimizer):
 
     def ask(self, n=None, *args, **kwargs) -> List[Tuple[Tuple, Dict]]:
         asked = []
+        # if self.algo in ("PBT", "ASHA"):
+        #     if len(self._iterations) and not len(self.Xi):
+        #         raise OperationalException(f"Can't ask for new points before telling old ones")
         for n in range(1 if n is None else n):
             trial = self._study.get_suggestion()
             # check if optimizer is DONE
@@ -82,8 +119,13 @@ class SherpaOptimizer(IOptimizer):
             if not self._meta_keys:
                 spn = set(self._params_names)
                 self._meta_keys = set(k for k in tp if k not in spn)
+                # cols = self._study.results.columns.values.tolist()
+                # for mk in self._meta_keys:
+                #     if mk not in self._study.results.columns:
+                #         cols.append(mk)
+                # self._study.results.columns = cols
             meta = {k: trial.parameters[k] for k in self._meta_keys}
-            meta['trial_id'] = trial.id
+            meta["trial_id"] = trial.id
             h = hash(tp_tup)
             self._obs[h] = trial
             asked.append((tp_tup, meta))
@@ -93,12 +135,18 @@ class SherpaOptimizer(IOptimizer):
         return asked
 
     def tell(
-        self, Xi: Iterable[Tuple[Sequence, Dict]], yi: Sequence[float], fit=False, *args, **kwargs
+        self,
+        Xi: Iterable[Tuple[Sequence, Dict]],
+        yi: Sequence[float],
+        fit=False,
+        *args,
+        **kwargs,
     ) -> Any:
         for n, obs in enumerate(Xi):
             X, meta = obs[0], obs[1]
             h = hash(tuple(p for p in X))
-            if h in self._evaluated:
+            # IN PBT gotta tell the same points
+            if self.algo != "PBT" and h in self._evaluated:
                 continue
             # if the hash is not in stored trials, the parameters
             # were evaluated from another optimizer instance
@@ -107,17 +155,17 @@ class SherpaOptimizer(IOptimizer):
             if h not in self._obs:
                 parameters = {p.name: v for p, v in zip(self._params, X)}
                 parameters.update(meta)
-                trial = Trial(id=meta['trial_id'], parameters=parameters)
-                if meta['trial_id'] in self._iterations:
-                    itr = self._iterations[meta['trial_id']]
+                trial = Trial(id=meta["trial_id"], parameters=parameters)
+                if meta["trial_id"] in self._iterations:
+                    itr = self._iterations[meta["trial_id"]]
                 else:
-                    self._iterations[meta['trial_id']] = itr = 0
+                    self._iterations[meta["trial_id"]] = itr = 1
             else:
                 trial = self._obs[h]
                 itr = self._iterations[trial.id]
                 del self._obs[h]
             self._study.add_observation(trial, objective=yi[n], iteration=itr)
-            if (itr or 1) >= self.ask_points:
+            if (itr or 1) >= self.epoch_to_obs or self.algo == "PBT":
                 self._study.finalize(trial)
             self._iterations[trial.id] += 1
             self._evaluated.add(h)
@@ -204,6 +252,7 @@ class SherpaOptimizer(IOptimizer):
 
     def _setup_mode(self):
         # and force single mode as there is no model
+        self.algo = next(self._algos_pool)
         if self.algo == "rand":
             self._algo = she.algorithms.RandomSearch(max_num_trials=self.n_epochs)
         else:
@@ -222,39 +271,76 @@ class SherpaOptimizer(IOptimizer):
                 cls = getattr(she.algorithms, self.algo)
                 self._algo = cls(**kwargs)
 
+    @property
+    def _bo_acq(self):
+        if not self._bo_acq_pool:
+            self._bo_acq_pool = cycle(["EI", "EI_MCMC", "MPI", "MPI_MCMC", "LCB", "LCB_MCMC"])
+        acq = next(self._bo_acq_pool)
+        # only use _MCMC with _MCMC model
+        if self.__bo_model.replace('_MCMC', '') != self.__bo_model:
+            while acq.replace('_MCMC', '') == acq:
+                acq = next(self._bo_acq_pool)
+        else:
+            while acq.replace('_MCMC', '') != acq:
+                acq = next(self._bo_acq_pool)
+        return acq
+
+    @property
+    def _bo_model(self):
+        if not self._bo_models_pool:
+            # NOTE: other models have unresolved problems in gpyopt
+            self._bo_models_pool = cycle(["GP", "GP_MCMC"])
+        self.__bo_model = next(self._bo_models_pool)
+        return self.__bo_model
+
     def BO(self, **kwargs):
         """ Bayesian Optimization """
         default = {
-            "model_type": "GP",
-            "num_initial_data_points": self.n_rand or "infer",
-            "acquisition_type": "EI",
+            "model_type": self._bo_model,
+            "num_initial_data_points": self.n_rand,
+            "acquisition_type": self._bo_acq,
             "max_concurrent": self.n_jobs if self.mode == "single" else self.ask_points,
             "verbosity": False,
         }
         default.update(kwargs)
         self._algo = she.algorithms.GPyOpt(**default)
+        self.is_blocking = self.ask_points == self.n_jobs
 
     def PBT(self, **kwargs):
         """ Population based training """
         default = {
-            "population_size": self.n_rand,
-            "num_generations": self.n_epochs or 10,
+            "population_size": self.ask_points,
+            "num_generations": self.n_epochs / self.n_jobs,
             "perturbation_factors": (0.8, 1.2),
             "parameter_range": {},
         }
         default.update(kwargs)
+        if self.mode == "single" and self.ask_points != self.n_jobs:
+            raise OperationalException(
+                f"PBT requires equal number of jobs ({self.n_jobs}) "
+                f"and ask points ({self.ask_points}) in sync mode."
+            )
         self._algo = she.algorithms.PopulationBasedTraining(**default)
+        self.is_blocking = True
 
     def ASHA(self, **kwargs):
         """ Asynchronous successive halving """
+        # NOTE: recommended:
         default = {
-            "r": self.ask_points,
-            "R": self.n_jobs * self.n_rand,
-            "eta": self.n_rand // self.n_jobs,
+            # minimum resource each config will run for
+            "r": 1,
+            # maximum resource
+            "R": self.n_epochs // self.n_jobs,
+            # ratio to decide how to split each round
+            "eta": self.ask_points,
+            # minimum early stopping rate
             "s": 0,
             "max_finished_configs": 1,
         }
         default.update(kwargs)
+        logger.info(
+            "ASHA: r: %s, R: %s, eta: %s", default["r"], default["R"], default["eta"]
+        )
         self._algo = she.algorithms.SuccessiveHalving(**default)
 
     def exploit(self, loss_tail: List[float], current_best: float, *args, **kwargs):

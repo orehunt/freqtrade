@@ -1,17 +1,15 @@
+import atexit
 import gc
 import logging
 import os
-import atexit
 from functools import partial
 
 # use math finite check for small loops
 from math import isfinite as is_finite
 from multiprocessing.managers import SyncManager
-from threading import Lock
-
 from queue import Queue
 from time import time as now
-from typing import Dict, Iterable, List, Optional, Tuple, Union, Callable
+from typing import Dict, Iterable, List, Optional, Tuple, Union
 
 import numpy as np
 from joblib import Parallel, delayed, hash
@@ -46,6 +44,7 @@ logger.name += f".{os.getpid()}"
 
 # profiler = Profiler()
 
+
 class HyperoptMulti(HyperoptOut):
     """ Run the optimization with multiple optimizers """
 
@@ -53,6 +52,8 @@ class HyperoptMulti(HyperoptOut):
     void_output_backoff = False
     Xi_names: Tuple = ()
     use_progressbar = True
+    # in single mode, true if the previous iteration checked for points
+    points_checked = False
 
     def epochs_iterator(self, jobs: int):
         """ Dispatches jobs to parallel indefinitely """
@@ -116,13 +117,17 @@ class HyperoptMulti(HyperoptOut):
         backend.epochs.explo = 0
         # tracks number of duplicate points received by asking
         backend.epochs.convergence = 0
+        # the average loss
         backend.epochs.average = np.nan
+        # the ratio of improvement of the current best loss over the previous best
         backend.epochs.improvement = np.nan
         # tracks the (avg) time it took to fetch the last point from the optimizer
         backend.epochs.avg_wait_time = 0
         # in multi mode each optimizer has its own best loss/epoch
         backend.epochs.current_best_loss = backend.manager.dict()
         backend.epochs.current_best_epoch = backend.manager.dict()
+        # counts how many actual jobs were received by the workers
+        backend.epochs.dispatched = 0
         backend.trials = backend.manager.Namespace()
         # prevent reading to the store while saving
         backend.trials.lock = backend.manager.Lock()
@@ -134,7 +139,7 @@ class HyperoptMulti(HyperoptOut):
         backend.trials.empty_strikes = 0
         # in shared mode the void_loss value is the same across workers
         backend.trials.void_loss = VOID_LOSS
-        # at the end collect the remaining trials to save here
+        # at the end (or in single mode) collect the remaining trials to save here
         backend.trials.tail_dict = backend.manager.dict()
         backend.trials.tail_list = backend.manager.list()
         # stores the hashes of points currently getting tested
@@ -143,6 +148,10 @@ class HyperoptMulti(HyperoptOut):
         backend.trials.exit = False
         # store the most recent results for each optimizer/worker
         backend.trials.last_results = backend.manager.dict()
+        # store results to tell the optimizer in single mode
+        backend.trials.results = backend.manager.dict()
+        # counts the number of failed/empty tests
+        backend.trials.n_void = 0
 
         return backend
 
@@ -276,10 +285,13 @@ class HyperoptMulti(HyperoptOut):
 
     @staticmethod
     def zip_points(df):
-        return zip(
-            HyperoptMulti.dict_values(df["params_dict"], iterable=False),
-            df["params_meta"]
-        ), df["loss"].values
+        return (
+            zip(
+                HyperoptMulti.dict_values(df["params_dict"].values, iterable=False),
+                df["params_meta"],
+            ),
+            df["loss"].values.tolist(),
+        )
 
     def opt_startup_points(
         self, opt: IOptimizer, trials_state: TrialsState, is_shared: bool
@@ -313,9 +325,7 @@ class HyperoptMulti(HyperoptOut):
                     if len(params_df) and backend.Xi_h:
                         params_df.drop(
                             flatnonzero(
-                                isin(
-                                    params_df["Xi_h"].values, list(backend.Xi_h)
-                                )
+                                isin(params_df["Xi_h"].values, list(backend.Xi_h))
                             ),
                             axis=0,
                             inplace=True,
@@ -361,7 +371,7 @@ class HyperoptMulti(HyperoptOut):
             # this can (at least) happen if space reduction has been performed and the
             # points of the previous tests are outside the new search space
             except ValueError as e:
-                logger.info(e)
+                logger.info("telling points to the optimizer at startup got: %s", e)
         else:
             # get a new point by copy if didn't tell new ones
             logger.debug("no new points were found to tell, rolling a new optimizer..")
@@ -371,9 +381,11 @@ class HyperoptMulti(HyperoptOut):
         return opt
 
     @staticmethod
-    def flush_remaining_trials(trials_state: TrialsState, is_shared: bool, rs: Union[int, None]):
+    def flush_remaining_trials(
+        trials_state: TrialsState, is_shared: bool, rs: Union[int, None]
+    ):
         try:
-            rt =len(backend.trials_list)
+            rt = len(backend.trials_list)
             logger.debug("flushing remaining trials %s", rt)
             if rt:
                 # shared/single
@@ -403,10 +415,11 @@ class HyperoptMulti(HyperoptOut):
         in the global state (along with the optimizer instance) to be told in the next run;
         """
         # add points of the current dispatch if any
+        logger.debug("filtered results with length: %s", len(void_filtered))
         if len(void_filtered) > 0:
             void = False
         # the last run for save doesn't run other trials
-        elif opt.void_loss != VOID_LOSS and not trials_state.exit:
+        elif opt.void_loss != VOID_LOSS and not backend.is_exit(trials_state):
             void = False
         else:
             void = True
@@ -464,8 +477,8 @@ class HyperoptMulti(HyperoptOut):
             if (
                 now() - backend.timer >= self.trials_timeout
                 or trials_to_save >= self.trials_maxout
-                or trials_state.exit
-                or (backend.just_reduced and trials_to_save)
+                or backend.is_exit(trials_state)
+                or backend.just_reduced
             ):
                 backend.just_saved = self.log_trials(trials_state, epochs, rs=rs)
                 if backend.just_saved:
@@ -504,7 +517,7 @@ class HyperoptMulti(HyperoptOut):
             atexit.register(cls.flush_remaining_trials, trials_state, is_shared, opt.rs)
             backend.flush_registered = True
         # check early if this is the last run
-        if trials_state.exit:
+        if backend.is_exit(trials_state):
             cls.flush_remaining_trials(trials_state, is_shared, opt.rs)
             return
 

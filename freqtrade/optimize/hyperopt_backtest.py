@@ -371,15 +371,15 @@ class HyperoptBacktesting(Backtesting):
     def advise_pair_df(self, df: DataFrame, pair: str, n_pair: float) -> DataFrame:
         """ Execute strategy signals and return df for given pair """
         meta = {"pair": pair}
+        assign = False
         try:
             df["buy"].values[:] = 0
             df["sell"].values[:] = 0
-            df["pair"].values[:] = pair
         # ignore if cols are not present
         except KeyError:
             df["buy"] = 0
             df["sell"] = 0
-            df["pair"] = n_pair
+            assign = True
 
         df = self.strategy.advise_buy(df, meta)
         df = self.strategy.advise_sell(df, meta)
@@ -387,6 +387,10 @@ class HyperoptBacktesting(Backtesting):
         # df.fillna({"buy": 0, "sell": 0}, inplace=True)
         # cast date as int to prevent time conversion when accessing values
         df["date"] = df["date"].values.astype(float)
+        if assign:
+            df["pair"] = n_pair
+        else:
+            df["pair"].values[:] = n_pair
         # only return required cols
         return df[MERGE_COLS]
 

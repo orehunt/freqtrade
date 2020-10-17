@@ -242,6 +242,14 @@ def rolling_norm(arr, window, ofs=None, null_v=np.nan, static=0):
     return rnorm
 
 
+# NOTE: jitted functions that take callables as args have caching problems
+@njit(cache=False, nogil=True)
+def rolling_norm_fn(fn, fn_args, window, ofs=None, null_v=np.nan, static=0):
+    return rolling_norm(
+        fn(*fn_args), window=window, ofs=ofs, null_v=null_v, static=static
+    )
+
+
 # LIX formula
 # values between ~5..~10 higher is more liquid
 @njit(cache=True, nogil=True)
@@ -279,10 +287,7 @@ def stoploss_triggered_col(data, low, rate):
 
 @njit(cache=True, nogil=True)
 def calc_roi_close_rate(
-    open_rate: ndarray,
-    min_rate: ndarray,
-    roi: ndarray,
-    fee: float,
+    open_rate: ndarray, min_rate: ndarray, roi: ndarray, fee: float,
 ):
     roi_rate = -(open_rate * roi + open_rate * (1 + fee)) / (fee - 1)
     return np.fmax(roi_rate, min_rate)
@@ -577,13 +582,16 @@ def iter_triggers(
         fl_cols["col_last_trigger"][last_trigger:n_bought] = tf
     return
 
+
 def add_list_items_nb(items: List, ls: nb.typed.List):
     for i in items:
         append_list_item(i, ls)
 
+
 @njit(cache=True)
 def append_list_item(item, ls):
     ls.append(item)
+
 
 @njit(cache=False)
 def zip_flat(ls):

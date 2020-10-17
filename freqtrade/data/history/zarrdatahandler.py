@@ -6,8 +6,11 @@ import pandas as pd
 import zarr as za
 
 from freqtrade.configuration import TimeRange
-from freqtrade.constants import (DEFAULT_DATAFRAME_COLUMNS, DEFAULT_TRADES_COLUMNS,
-                                 ListPairsWithTimeframes,)
+from freqtrade.constants import (
+    DEFAULT_DATAFRAME_COLUMNS,
+    DEFAULT_TRADES_COLUMNS,
+    ListPairsWithTimeframes,
+)
 from freqtrade.data.converter import clean_ohlcv_dataframe
 
 from .idatahandler import IDataHandler, TradeList
@@ -16,8 +19,8 @@ from .idatahandler import IDataHandler, TradeList
 logger = logging.getLogger(__name__)
 
 
-def ts(val):
-    return pd.Timestamp(val, tz="UTC")
+def ts(val, adj=False):
+    return pd.Timestamp(val * 1e9, tz="UTC") if adj else pd.Timestamp(val, tz="UTC")
 
 
 class ZarrDataHandler(IDataHandler):
@@ -272,7 +275,12 @@ class ZarrDataHandler(IDataHandler):
                 self._save(key_c, cleaned_data, "ohlcv", pd.Timedelta(timeframe).value)
                 logger.debug("saved cleaned data to %s", key_c)
             arr = self.group[key_c]
-            logger.debug("loaded cleaned data for %s", key_c)
+            logger.debug(
+                "loaded cleaned data for %s, start: %s, end: %s",
+                key_c,
+                ts(arr[0, "date"]),
+                ts(arr[-1, "date"]),
+            )
         else:
             arr = self.group[key]
 
@@ -286,17 +294,25 @@ class ZarrDataHandler(IDataHandler):
             if timerange.starttype == "date":
                 date_offset = max(0, timerange.startts * 1e9 - start)
                 arr_start = int(date_offset // td.value)
+                logger.debug("timerange query start: %s", ts(timerange.startts, True))
             else:
                 arr_start = 0
             if timerange.stoptype == "date":
                 arr_period = arr_start + int(
-                    (timerange.stopts - timerange.startts) // td.value
+                    (timerange.stopts - timerange.startts) * 1e9 // td.value
                 )
+                logger.debug("timerange query stop: %s", ts(timerange.stopts, True))
             else:
                 arr_period = None
         else:
             arr_start = arr_period = None
         # pairdata = arr.get_orthogonal_selection((slice(arr_start, arr_period)))
+        logger.debug(
+            "loading pairdata with range: %s-%s , cleaned: %s",
+            arr_start,
+            arr_period,
+            cleaned,
+        )
         pairdata = arr[arr_start:arr_period]
 
         if list(pairdata.dtype.names) != self._columns:

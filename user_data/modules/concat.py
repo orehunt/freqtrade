@@ -336,7 +336,7 @@ def insert_cc_dict(
             # and weren't included in the concat dict
             if key in ins_dict:
                 new_cc_dict[key] = ins_dict[key]
-                assert ins_dict[key]["date"].freq == td
+                # assert ins_dict[key]["date"].freq == td
     return new_cc_dict
 
 
@@ -374,6 +374,8 @@ def trim(
     # if the timedelta (of the NON ref_df) is bigger, trim by length
     # because on equal lengths the bigger timeframe
     # already includes the reference timerange
+    if not len(df):
+        return None
     if td.value > ref_td.value:
         trimmed = trim_by_len(df, count, stop)
         # longer timeframes have to be shifted, because longer candles

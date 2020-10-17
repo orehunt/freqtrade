@@ -14,6 +14,7 @@ import numpy as np
 import zarr as za
 from numpy import array, iinfo, int32
 from numpy import repeat as np_repeat
+from operator import itemgetter
 
 
 za.storage.default_compressor = za.Blosc(cname='zstd', clevel=2)
@@ -78,12 +79,14 @@ class HyperoptData(backend.HyperoptBase):
     # the maximum time to wait for the oracle
     # after which optimization is stopped
     opt_ask_timeout: float
+    # in single mode, tell results every n points
+    opt_tell_frequency: int
     # list of all the optimizers random states
     rngs: List[int]
     # path where the hyperopt state loaded by workers is dumped
     cls_file: Path
     # path used by CV to store parameters values loaded by workers
-    Xi_file: Path
+    Xi_path: Path
     # tune exploration/exploitation based on heuristics
     adjust_acquisition = True
     parameters: List[Parameter]
@@ -116,7 +119,7 @@ class HyperoptData(backend.HyperoptBase):
         self.data_pickle_file = (
             self.config["user_data_dir"] / self.hyperopt_dir / "processed_data.pkl"
         )
-        self.Xi_file = self.config["user_data_dir"] / self.hyperopt_dir / "Xi.pkl"
+        self.Xi_path = self.config["user_data_dir"] / self.hyperopt_dir / "Xi"
         self.cls_file = self.config["user_data_dir"] / self.hyperopt_dir / "cls.pkl"
         self.trials_file = self.get_trials_file(self.config, self.trials_dir)
         self._store = za.storage.DirectoryStore(self.trials_file)
@@ -245,14 +248,8 @@ class HyperoptData(backend.HyperoptBase):
         if z is None:
             return DataFrame()
         columns = z.attrs.get("columns")
-        cols = []
         if fields:
-            sf = set(fields)
-            idx = []
-            for n, f in enumerate(columns):
-                if f in sf:
-                    idx.append(n)
-                    cols.append(f)
+            idx = [columns[f] for f in fields]
             indexer = (indexer, idx)
         z = self._group.get(self.trials_instance)
         if z:
@@ -262,8 +259,7 @@ class HyperoptData(backend.HyperoptBase):
         # consider 1d arrays as 1 row
         if len(data.shape) == 1:
             data.shape = (1, data.shape[0])
-        df = DataFrame(data=data, columns=cols or columns,)
-        return df
+        return DataFrame(data=data, columns=fields or columns)
 
     @staticmethod
     def _to_storage(
@@ -272,21 +268,26 @@ class HyperoptData(backend.HyperoptBase):
         key: str,
         indexer=(),
         fields=[],
+            chunks=None,
         append: bool = True,
     ):
         if isinstance(trials_location, Path):
             trials_location = za.storage.DirectoryStore(trials_location)
         g = za.open_group(store=trials_location)
         z = g.get(key)
-        if z is not None:
+        if z is not None and (append or indexer) and len(z):
             if append:
-                z.append(trials.values)
+                z.append(trials[fields or slice(None)].values)
             else:
                 if fields:
-                    columns = g[key].attrs["columns"]
+                    columns = z.attrs["columns"]
                     indexer = (indexer, [columns[f] for f in fields])
-                z.set_coordinate_selection(indexer, value=trials.values)
+                if indexer:
+                    z.set_coordinate_selection(indexer, value=trials.values)
         else:
+            if key in g:
+                del g[key]
+            trials = trials[fields or slice(None)]
             g.create_dataset(
                 name=key,
                 data=trials.values,
@@ -294,7 +295,7 @@ class HyperoptData(backend.HyperoptBase):
                 object_codec=numcodecs.Pickle(),
                 shape=trials.shape,
             )
-            g[key].attrs["columns"] = trials.columns.values.tolist()
+            g[key].attrs["columns"] = {col: n for n, col in enumerate(trials.columns)}
 
     @staticmethod
     def _from_storage(
@@ -307,13 +308,16 @@ class HyperoptData(backend.HyperoptBase):
             trials_location = za.storage.DirectoryStore(trials_location)
         g = za.group(store=trials_location)
         trials = g.get(key)
-        columns = g[key].attrs["columns"]
         if trials:
+            columns = trials.attrs.get("columns", {})
             if fields:
-                sf = set(fields)
-                fields = [n for n, f in enumerate(columns) if f in sf]
-                indexer = (indexer, fields)
+                indexer = (indexer, [columns[f] for f in fields])
+            else:
+                if isinstance(columns, dict):
+                    columns = dict(sorted(columns.items(), key=itemgetter(1)))
             trials = trials.get_orthogonal_selection(indexer)
+        else:
+            columns = []
         return DataFrame(trials, columns=fields or columns)
 
     @staticmethod
@@ -344,7 +348,7 @@ class HyperoptData(backend.HyperoptBase):
                     logger.debug("Acquiring trials state lock for reading trials")
                     locked = backend.acquire_lock(trials_state)
             trials = HyperoptData._from_storage(
-                trials_location, trials_instance, indexer, fields
+                trials_location, key=trials_instance, indexer=indexer, fields=fields
             )
             if locked:
                 backend.release_lock(trials_state)
@@ -364,7 +368,7 @@ class HyperoptData(backend.HyperoptBase):
                     f"Instance table {trials_instance} appears empty, using backup..."
                 )
                 trials = HyperoptData._from_storage(
-                    trials_location, "{trials_instance}_bak", indexer
+                    trials_location, f"{trials_instance}_bak", indexer
                 )
         except (
             KeyError,
@@ -373,7 +377,7 @@ class HyperoptData(backend.HyperoptBase):
             # if corrupted
             if backup or not indexer:
                 try:
-                    logger.warn(
+                    logger.warning(
                         f"Instance table {trials_instance} either "
                         "empty or corrupted, trying backup..."
                     )
@@ -381,7 +385,9 @@ class HyperoptData(backend.HyperoptBase):
                         trials_location, f"{trials_instance}_bak", indexer
                     )
                 except KeyError:
-                    logger.warn(f"Backup not found...")
+                    logger.warning(f"Backup not found...")
+            else:
+                logger.warning("trials not found at... %s", e)
         finally:
             if locked:
                 backend.release_lock(trials_state)
@@ -555,6 +561,7 @@ class HyperoptData(backend.HyperoptBase):
         trials: DataFrame, trail_enabled: Any, col: str, bound: str, val: Any
     ) -> DataFrame:
         """ range calculations require adjustments to the bounds of the trials metrics """
+        logger.debug("trimming bounds for col %s", col)
         if bound not in ("min", "max"):
             raise OperationalException("Wrong min max choice")
         if len(trials) < 1:
@@ -766,11 +773,10 @@ class HyperoptData(backend.HyperoptBase):
         trials_file: Path,
         trials_instance: str,
         trials_state: TrialsState = backend.trials,
-        where="",
+        indexer=slice(None),
         backup=False,
         use_backup=True,
         clear=False,
-        clear_where=None,
     ) -> DataFrame:
         """
         Load data for epochs from the file if we have one
@@ -784,9 +790,9 @@ class HyperoptData(backend.HyperoptBase):
             trials = HyperoptData._read_trials(
                 trials_file,
                 trials_instance,
-                backup,
-                trials_state,
-                where,
+                backup=backup,
+                trials_state=trials_state,
+                indexer=indexer,
                 use_backup=use_backup,
             )
             # clear the table by replacing it with an empty df
@@ -794,8 +800,7 @@ class HyperoptData(backend.HyperoptBase):
                 HyperoptData.clear_instance(
                     trials_file,
                     trials_instance,
-                    clear_where,
-                    trials_state if has_lock else None,
+                    trials_state=trials_state if has_lock else None,
                 )
         return trials
 

@@ -65,8 +65,10 @@ class SkoptOptimizer(IOptimizer):
         return asked
 
     def tell(self, Xi, yi, fit=False, *args, **kwargs):
-        if not isinstance(Xi, list):
-            Xi, yi = list(Xi), list(yi)
+        if not isinstance(Xi, Iterable):
+            Xi, yi = (Xi,), (yi,)
+        # remove meta dict from params
+        Xi = [pars for pars, _ in Xi]
         told = self._opt.tell(Xi, yi, fit)
         if fit and not self._fit:
             self._fit = True
@@ -186,6 +188,7 @@ class SkoptOptimizer(IOptimizer):
         self._space = new_space
 
     def _setup_mode(self):
+        self.algo = next(self._algos_pool)
         # if 0 n_points are given, don't use any base estimator (akin to random search)
         # and force single mode as there is no model
         if self.algo == "rand":

@@ -2,6 +2,7 @@ import logging
 import signal
 from abc import abstractmethod
 from functools import partial
+from hashlib import sha1
 from logging import Logger, getLogger
 from multiprocessing.managers import Namespace, SharedMemoryManager, SyncManager
 from pathlib import Path
@@ -13,6 +14,7 @@ from arrow import Arrow
 from pandas import DataFrame
 
 from freqtrade.optimize.optimizer import IOptimizer, Parameter
+
 
 logger = getLogger(__name__)
 
@@ -50,8 +52,8 @@ yi: List = []
 # keep track of the points in the worker optimizer
 Xi_h: Dict = {}
 tested_h: List = []
-# used by CV
-params_Xi = []
+# currently unused...used by CV, if one wants to cache multiple parameters
+params_Xi = {}
 
 # manage trials state
 class TrialsState(Namespace):
@@ -66,6 +68,8 @@ class TrialsState(Namespace):
     void_loss: float
     table_header: int
     last_results: Dict[int, List]
+    results: Dict[int, Tuple]
+    n_void: int
 
 
 trials = TrialsState()
@@ -86,6 +90,7 @@ class Epochs(Namespace):
     avg_wait_time: float
     max_epoch: int
     space_reduction: Dict[int, bool]
+    dispatched: int
 
 
 epochs: Epochs
@@ -126,7 +131,7 @@ def parallel_sig_handler(
         else:
             import traceback
             traceback.print_exc()
-            print(e)
+            logger.error("worker exited with...%s", e)
 
 
 def manager_sig_handler(signal, frame, trials_state: TrialsState):
@@ -151,6 +156,8 @@ def release_lock(state: Union[TrialsState, Epochs]):
     try:
         res = state.lock.release()
     except Exception as e:
+        import traceback
+        traceback.print_exc(limit=100)
         logger.debug("couldn't release lock %s", e)
         res = None
     return res
@@ -166,6 +173,13 @@ def acquire_lock(state: Union[TrialsState, Epochs], blocking=False, timeout=None
         logger.debug("couldn't acquire lock %s", e)
         res = None
     return res
+
+def is_exit(state: TrialsState) -> Union[bool, None]:
+    try:
+        return state.exit
+    except ConnectionError as e:
+        logger.debug("couldn't check exit flag ", e)
+    return None
 
 class HyperoptBase:
     dimensions: List[Any]
