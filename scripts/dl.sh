@@ -30,19 +30,17 @@ for tf in $timeframe; do
 	c=$((c + 1))
 done
 unset IFS c
-for tf in ${timeframes[@]}; do
-	freqtrade download-data \
-		--data-format-ohlcv $datahandler \
-		--data-format-trades $datahandler \
-		-c $exchange \
-		-c $amounts \
-		--exchange $exchange_name \
-		$pairs \
-		--userdir $userdir \
-		-t $tf \
-		$timespan \
-		--userdir $userdir \
-		$erase \
-		$debug \
-		$dltype
-done
+freqtrade download-data \
+	--data-format-ohlcv $datahandler \
+	--data-format-trades $datahandler \
+	-c $exchange \
+	-c $amounts \
+	--exchange $exchange_name \
+	$pairs \
+	--userdir $userdir \
+	--timeframes ${timeframes[@]} \
+	$timespan \
+	--userdir $userdir \
+	$erase \
+	$debug \
+	$dltype

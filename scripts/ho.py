@@ -36,6 +36,14 @@ from scripts.hopt.args import parse_hopt_args
 from scripts.hopt.env import set_environment
 from user_data.modules import sequencer as ts
 
+try:
+    from user_data.modules.time import CV_TR, OPT_TR
+except:
+    raise OperationalException(
+        "a list of timeranges CV_TR and a main timerange OPT_TR are required, "
+        "defined in from user_data.modules.time"
+    )
+
 
 logger = logging.getLogger(__name__)
 
@@ -185,13 +193,6 @@ class Main:
         self.config["days"] = self.days
 
     def setup_timerange(self):
-        try:
-            from scripts.hopt.time import CV_TR, OPT_TR
-        except:
-            raise OperationalException(
-                "a list of timeranges CV_TR and a main timerange OPT_TR are required, "
-                "defined in from user_data.modules.time"
-            )
         if self.args.kn:
             self.timerange = OPT_TR
         elif self.args.d:

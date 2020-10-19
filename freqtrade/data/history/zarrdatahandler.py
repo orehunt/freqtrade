@@ -187,7 +187,7 @@ class ZarrDataHandler(IDataHandler):
         :return: None
         """
         td = pd.Timedelta(timeframe).value
-        key = self._pair_ohlcv_key(pair, timeframe, cleaned)
+        key = self._pair_ohlcv_key(pair, timeframe)
         self._save(key, data, "ohlcv", td)
 
     @classmethod
