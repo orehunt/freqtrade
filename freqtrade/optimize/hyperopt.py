@@ -281,9 +281,9 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
 
         backtesting_results = self.backtesting.backtest(
             processed=processed,
-            start_date=min_date,
-            end_date=max_date,
-            stake_amount=self.config["stake_amount"],
+            stake_amount=self.config['stake_amount'],
+            start_date=min_date.datetime,
+            end_date=max_date.datetime,
             max_open_trades=self.max_open_trades,
             position_stacking=self.position_stacking,
         )
