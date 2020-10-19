@@ -36,7 +36,7 @@ ACQ_FUNCS_N = len(ACQ_FUNCS)
 CYCLE_ACQ_FUNCS = cycle(ACQ_FUNCS)
 
 
-class SkoptOptimizer(IOptimizer):
+class Skopt(IOptimizer):
 
     _space: List[Dimension]
     """ if the space is only made of float ranges """
@@ -168,7 +168,7 @@ class SkoptOptimizer(IOptimizer):
                 enc = m.get("enc", "bool")
                 if enc == "bool":
                     trans = "onehot"
-                elif enc == "int":
+                elif enc == "ord":
                     trans = "label"
                 elif enc == "idem":
                     trans = "identity"

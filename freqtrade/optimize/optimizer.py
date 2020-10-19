@@ -224,7 +224,6 @@ class IOptimizer:
         self._args = args
         self._kwargs = kwargs
         self._setup_missing_tags_handler()
-        self.create_optimizer(parameters, config, *args, **kwargs)
 
     def copy(self, rand: int = None, new_seed: bool = False) -> IOptimizer:
         """
@@ -301,6 +300,17 @@ class IOptimizer:
         """ Delete models and points from an optimizer instance """
         del opt.models[:], opt.Xi[:], opt.yi[:]
         return opt
+
+    @staticmethod
+    def sub_to_list(sub: Any):
+        """ expands an iterable into a list"""
+        return (
+            sub
+            if isinstance(sub, list)
+            else sub.tolist()
+            if isinstance(sub, np.ndarray)
+            else list(sub)
+        )
 
     @abstractmethod
     def create_optimizer(self, parameters: Iterable, config={}):

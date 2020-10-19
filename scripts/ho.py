@@ -6,36 +6,36 @@ ho.py -i 1h     -j 14 -b      -lo OmegaLoss -mode multi -g 20180101-  -e 800 -mt
 
 """
 
+from freqtrade.exceptions import OperationalException
 import glob
 import json
+import logging
+import os
 import pickle
 import re
-import os
 import subprocess
-import logging
-from colorama import Fore, Style
-from pathlib import Path
-from math import inf
-from shutil import copy
-from time import sleep, mktime
 from datetime import datetime
-from pandas import Timedelta, DataFrame
-from statistics import mean
 from hashlib import sha1
-from multiprocessing import Lock
-from joblib.externals.loky import get_reusable_executor
-from typing import Any, Dict, Tuple
+from math import inf
+from pathlib import Path
+from shutil import copy
+from statistics import mean
+from time import mktime, sleep
+from typing import Any, Dict, MutableMapping, MutableSequence, Tuple
 
-from user_data.modules import sequencer as ts
+from colorama import Fore, Style
+from joblib.externals.loky import get_reusable_executor
+from numpy import float64, int64
+from pandas import DataFrame, Timedelta
 
 from freqtrade.configuration.configuration import Configuration, RunMode
-from freqtrade.optimize.hyperopt import Hyperopt
-from freqtrade.loggers import setup_logging_pre, setup_logging
 from freqtrade.data.btanalysis import load_trades
-
+from freqtrade.loggers import setup_logging, setup_logging_pre
+from freqtrade.optimize.hyperopt import Hyperopt
 from scripts.hopt.args import parse_hopt_args
 from scripts.hopt.env import set_environment
-from scripts.hopt.time import OPT_TR, CV_TR
+from user_data.modules import sequencer as ts
+
 
 logger = logging.getLogger(__name__)
 
@@ -113,10 +113,11 @@ class Main:
     # optimizer
     config["hyperopt_epochs"] = args.e
     config["hyperopt_mode"] = args.mode
-    opt_config = {"lie_strat" : args.lie,
-                    "algo": args.alg,
-                    "meta_tag_conflict": args.mtc
-                    }
+    opt_config = {
+        "lie_strat": args.lie,
+        "algo": args.alg,
+        "meta_tag_conflict": args.mtc,
+    }
     config["hyperopt_ask_points"] = args.pts
     config["hyperopt_max_convergence_ratio"] = args.cvg
     config["hyperopt_initial_points"] = args.rpt or (32 // args.j)
@@ -184,6 +185,13 @@ class Main:
         self.config["days"] = self.days
 
     def setup_timerange(self):
+        try:
+            from scripts.hopt.time import CV_TR, OPT_TR
+        except:
+            raise OperationalException(
+                "a list of timeranges CV_TR and a main timerange OPT_TR are required, "
+                "defined in from user_data.modules.time"
+            )
         if self.args.kn:
             self.timerange = OPT_TR
         elif self.args.d:
@@ -488,9 +496,9 @@ class Main:
             else:
                 return [], {}, {}
         # the last epoch is needed to check correct paramters in case of continuing epochs
-        last = trials.iloc[-1:].to_dict('records')[0]
+        last = trials.iloc[-1:].to_dict("records")[0]
         # sort is ascending, and loss min is better so iloc[:1] to get the best value
-        best = trials.sort_values("loss").iloc[:1].to_dict('records')[0]
+        best = trials.sort_values("loss").iloc[:1].to_dict("records")[0]
         return trials, best, last
 
     prev_cond, cond_best, run_best = {}, inf, inf
@@ -588,7 +596,24 @@ class Main:
         with open(file_path, "bw") as fp:
             pickle.dump(data, fp)
 
+    def recursive_cast(self, data: Any):
+        if isinstance(data, float64):
+            return float(data)
+        elif isinstance(data, int64):
+            return int(data)
+        elif isinstance(data, MutableMapping):
+            for k, v in data.items():
+                data[k] = self.recursive_cast(v)
+            return data
+        elif isinstance(data, MutableSequence):
+            for n, v in enumerate(data):
+                data[n] = self.recursive_cast(v)
+            return data
+        else:
+            return data
+
     def write_json_file(self, data={}, file_path="params.json", update=True):
+        data = self.recursive_cast(data)
         if not os.path.exists(file_path):
             with open(file_path, "w") as fp:
                 json.dump({}, fp)
@@ -691,7 +716,7 @@ class Main:
             instance = self.ho.get_last_instance(self.ho.trials_instances_file)
         trials, _, _ = self.get_trials(instance=instance, cv=(mode == "cv"))
         idx = int(num) - 1  # human
-        trial = trials.iloc[idx : idx + 1, :].iloc[:1].to_dict('records')[0]
+        trial = trials.iloc[idx : idx + 1, :].iloc[:1].to_dict("records")[0]
         self.ho.print_epoch_details(trial, len(trials), True)
         # print(json.dumps(trial["params_details"]))
 
@@ -1020,7 +1045,7 @@ class Main:
             logger.info("Skipping update amounts as no best trial was found")
             return
         if isinstance(best, DataFrame):
-            best = best.iloc[:1].to_dict('records')[0]
+            best = best.iloc[:1].to_dict("records")[0]
         prev_best = self.read_json_file(paths["best"], "run_best")
         if len(best) < 1:
             print("update_amounts: empty results,", best)
@@ -1048,35 +1073,61 @@ class Main:
             exit(0)
         return
 
-    def update_params(self, epoch=args.upp, path=args.path, instance=args.inst):
-        results, _, _ = self.get_trials(instance=(instance or "last"))
-        epoch = epoch.split(":")
-        cv = epoch[0] == "cv"
-        if cv:
-            epoch = int(epoch[1])
+    def handle_data(self, params, n_path, idx, data={}):
+        if not data:
+            if os.path.exists(n_path):
+                data = self.read_json_file(n_path)
+                if idx is not None:
+                    if idx in data:
+                        data[str(idx)].update(params)
+                    else:
+                        data[str(idx)] = params
+                else:
+                    data.update(params)
+            else:
+                data = params
+        elif idx is not None:
+            if idx in data:
+                data[str(idx)].update(params)
+            else:
+                data[str(idx)] = params
         else:
-            epoch = int(epoch[0])
+            data.update(params)
+        return data
+
+    def update_params(
+        self, epoch_arg=args.upp, path=args.path, instance=args.inst, merge=args.merge
+    ):
+        results, _, _ = self.get_trials(instance=(instance or "last"))
+        epoch_arg = epoch_arg.split(":")
+        cv = epoch_arg[0] == "cv"
+        epoch = epoch_arg[1] if cv else epoch_arg[0]
+        epoch_list = list(map(lambda x: int(x) - 1, epoch.split(",")))
         path = path.split(":")
         idx = int(path[1]) if len(path) > 1 else None
-        path = path[0]
-        trial = results.loc[results["current_epoch"] == epoch].iloc[:1].to_dict('records')[0]
-        params = trial["params_dict"]
-        if os.path.exists(path):
-            data = self.read_json_file(path)
-            if idx is not None:
-                data[idx].update(params)
-            else:
-                data.update(params)
+        path = Path(path[0])
+        print("Fetching the INTEGER location of the given list (-1) ", epoch_list)
+        trials = results.iloc[epoch_list].to_dict("records")
+        save_map = {}
+        if merge:
+            data = {}
+            for nt, t in enumerate(trials):
+                params = t["params_dict"]
+                data = self.handle_data(params, path, nt, data)
+                save_map[(t["current_epoch"], t["profit"])] = str(path.resolve())
+            self.write_json_file(data, path, update=False)
         else:
-            data = params
-        self.write_json_file(data, path, update=False)
-        self.ho.print_epoch_details(trial, len(results), True)
-        # print(
-        #     f"Updated file {path} with params:\n",
-        #     trial["params_dict"],
-        #     "\n\n",
-        #     trial["results_explanation"],
-        # )
+            for nt, t in enumerate(trials):
+                params = t["params_dict"]
+                n_path = Path(
+                    str(path.parent) + "/" + path.stem + f"-{nt}" + path.suffix
+                )
+                data = self.handle_data(params, n_path, idx)
+                self.write_json_file(data, n_path, update=False)
+                save_map[(t["current_epoch"], t["profit"])] = str(n_path.resolve())
+        from pprint import PrettyPrinter as pp
+
+        pp(indent=1).pprint(("saved trials (epoch, profits):", save_map))
 
     def concat_pairs_amounts(self, am: str):
         base_cfg, pairs_dir = am.split(":")
@@ -1181,7 +1232,9 @@ class Main:
         # reset options
         self.timerange = OPT_TR
         # change mode if we started from cv (resume)
-        self.config["hyperopt_mode"] = self.args.mode if self.args.mode != "cv" else "shared"
+        self.config["hyperopt_mode"] = (
+            self.args.mode if self.args.mode != "cv" else "shared"
+        )
         self.config["hyperopt_clear"] = self.args.clr
         self.config["hyperopt_reset"] = self.args.res
         self.config["hyperopt_trials_instance"] = False
@@ -1242,7 +1295,7 @@ class Main:
         elif self.args.ua and self.args.q:
             self.update_amounts(ua=self.args.ua, amounts_path=self.args.path)
         elif self.args.upp and self.args.q:
-            self.update_params(epoch=self.args.upp, path=self.args.path)
+            self.update_params(epoch_arg=self.args.upp, path=self.args.path)
         else:
             self.run_hyperopt()
 

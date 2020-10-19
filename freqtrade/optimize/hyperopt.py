@@ -12,20 +12,12 @@ from functools import partial
 from itertools import cycle
 from time import sleep
 from time import time as now
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 from colorama import init as colorama_init
-from joblib import (
-    Parallel,
-    cpu_count,
-    delayed,
-    dump,
-    hash,
-    load,
-    parallel_backend,
-    wrap_non_picklable_objects,
-)
+from joblib import (Parallel, cpu_count, delayed, dump, hash, load, parallel_backend,
+                    wrap_non_picklable_objects,)
 from joblib.externals.loky import get_reusable_executor
 from numpy import iinfo, int32, isfinite
 from pandas import DataFrame, Timedelta, concat, json_normalize
@@ -42,12 +34,7 @@ from freqtrade.optimize.hyperopt_cv import HyperoptCV
 from freqtrade.optimize.hyperopt_loss_interface import IHyperOptLoss  # noqa: F401
 from freqtrade.optimize.hyperopt_multi import HyperoptMulti
 from freqtrade.optimize.hyperopt_out import HyperoptOut
-from freqtrade.optimize.optimizer import (
-    VOID_LOSS,
-    IOptimizer,
-    Parameter,
-    guess_search_space,
-)
+from freqtrade.optimize.optimizer import VOID_LOSS, IOptimizer, Parameter, guess_search_space
 from freqtrade.resolvers.hyperopt_resolver import HyperOptLossResolver, HyperOptResolver
 from freqtrade.strategy.interface import IStrategy
 
@@ -424,14 +411,18 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         config["n_epochs"] = self.config.get("hyperopt_epochs", 10)
         opt_type = config.get("type", "SkoptOptimizer")
         kwargs = {"seed": random_state}
-        if opt_type == "SkoptOptimizer":
-            from freqtrade.optimize.opts.skopt import SkoptOptimizer
+        if opt_type == "Skopt":
+            from freqtrade.optimize.opts.skopt import Skopt
 
-            opt = SkoptOptimizer(parameters, config=config, **kwargs)
-        elif opt_type == "SherpaOptimizer":
-            from freqtrade.optimize.opts.sherpa import SherpaOptimizer
+            opt = Skopt(parameters, config=config, **kwargs)
+        elif opt_type == "Sherpa":
+            from freqtrade.optimize.opts.sherpa import Sherpa
 
-            opt = SherpaOptimizer(parameters, config=config, **kwargs)
+            opt = Sherpa(parameters, config=config, **kwargs)
+        elif opt_type == "Emukit":
+            from freqtrade.optimize.opts.emukit import EmuKit
+
+            opt = EmuKit(parameters, config=config, **kwargs)
         else:
             raise OperationalException(f"Error loading optimizer type {opt_type}")
         return opt.create_optimizer(parameters, config)
@@ -607,7 +598,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
 
         # set flag and params for indexing
         if v:
-            v["is_initial_point"] = t < cls.n_rand
+            v["is_initial_point"] = t < cls.n_rand if cls.cv else False
             v["random_state"] = cls.random_state  # this is 0 in CV
             v["Xi_h"] = hash(cls.params_Xi(v))
             backend.trials_list.append(v)
@@ -783,7 +774,6 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                                 "stopped trials filtering, backtrack: %s", backtrack
                             )
                             break
-                        prev_tt_len = tt_len
                         # don't filter if the filtered trials are below setting
                         if tt_len < min_tt and tt_len != prev_tt_len:
                             logger.debug(
@@ -792,13 +782,13 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                             prev_its = intensity
                             intensity *= self.total_epochs / tt_len
                             max_iterations -= 1
-                        elif tt_len > max_tt and max_iterations > 0:
+                        elif tt_len > max_tt:
                             logger.debug(
                                 "increasing intensity since %s > %s", tt_len, max_tt
                             )
                             prev_its = intensity
                             intensity *= self.total_epochs / tt_len
-                        elif tt_len < min_tt:
+                        elif tt_len < min_tt and intensity < prev_its:
                             logger.debug(
                                 "backtracking filtering because %s < %s", tt_len, min_tt
                             )
@@ -806,6 +796,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                             intensity = prev_its
                         else:
                             break
+                        prev_tt_len = tt_len
                 else:
                     self.target_trials = self.trials
 

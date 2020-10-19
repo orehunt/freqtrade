@@ -10,3 +10,5 @@ numbagg
 parameter-sherpa
 # gpyopt needs latest because 1.6.4 not compatible with scipy 1.5
 -e git+https://github.com/SheffieldML/GPyOpt#egg=gpyopt
+pyDOE
+emukit

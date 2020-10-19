@@ -68,7 +68,7 @@ class yi(Xi):
             return self._empty_df
 
 
-class SherpaOptimizer(IOptimizer):
+class Sherpa(IOptimizer):
 
     _space: List[she.Parameter]
     """ if the space is only made of float ranges """
@@ -230,7 +230,7 @@ class SherpaOptimizer(IOptimizer):
                 enc = m.get("enc", "bool")
                 if enc == "bool":
                     cls = sc.Choice
-                elif enc == "int":
+                elif enc == "ord":
                     # integer encoding is equivalent to ordered categories
                     cls = sc.Ordinal
                 else:
@@ -241,11 +241,7 @@ class SherpaOptimizer(IOptimizer):
                 new_space.append(
                     cls(
                         name=par.name,
-                        range=par.sub
-                        if isinstance(par.sub, list)
-                        else par.sub.tolist()
-                        if isinstance(par.sub, np.ndarray)
-                        else list(par.sub),
+                        range=self.sub_to_list(par.sub)
                     )
                 )
         self._space = new_space
@@ -274,14 +270,16 @@ class SherpaOptimizer(IOptimizer):
     @property
     def _bo_acq(self):
         if not self._bo_acq_pool:
-            self._bo_acq_pool = cycle(["EI", "EI_MCMC", "MPI", "MPI_MCMC", "LCB", "LCB_MCMC"])
+            self._bo_acq_pool = cycle(
+                ["EI", "EI_MCMC", "MPI", "MPI_MCMC", "LCB", "LCB_MCMC"]
+            )
         acq = next(self._bo_acq_pool)
         # only use _MCMC with _MCMC model
-        if self.__bo_model.replace('_MCMC', '') != self.__bo_model:
-            while acq.replace('_MCMC', '') == acq:
+        if self.__bo_model.replace("_MCMC", "") != self.__bo_model:
+            while acq.replace("_MCMC", "") == acq:
                 acq = next(self._bo_acq_pool)
         else:
-            while acq.replace('_MCMC', '') != acq:
+            while acq.replace("_MCMC", "") != acq:
                 acq = next(self._bo_acq_pool)
         return acq
 
@@ -291,6 +289,11 @@ class SherpaOptimizer(IOptimizer):
             # NOTE: other models have unresolved problems in gpyopt
             self._bo_models_pool = cycle(["GP", "GP_MCMC"])
         self.__bo_model = next(self._bo_models_pool)
+        # don't use MCMC model when jobs > 1
+        while (
+            self.n_jobs > 1 and self.__bo_model.replace("_MCMC", "") != self.__bo_model
+        ):
+            self.__bo_model = next(self._bo_models_pool)
         return self.__bo_model
 
     def BO(self, **kwargs):
