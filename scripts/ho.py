@@ -1101,7 +1101,7 @@ class Main:
     ):
         results, _, _ = self.get_trials(instance=(instance or "last"))
         epoch_arg = epoch_arg.split(":")
-        cv = epoch_arg[0] == "cv"
+        cv = epoch_arg[0] == "cv"  #
         epoch = epoch_arg[1] if cv else epoch_arg[0]
         epoch_list = list(map(lambda x: int(x) - 1, epoch.split(",")))
         path = path.split(":")

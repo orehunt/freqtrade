@@ -17,7 +17,7 @@ from numpy import repeat as np_repeat
 from operator import itemgetter
 
 
-za.storage.default_compressor = za.Blosc(cname='zstd', clevel=2)
+za.storage.default_compressor = za.Blosc(cname="zstd", clevel=2)
 
 
 import io
@@ -268,7 +268,7 @@ class HyperoptData(backend.HyperoptBase):
         key: str,
         indexer=(),
         fields=[],
-            chunks=None,
+        chunks=None,
         append: bool = True,
     ):
         if isinstance(trials_location, Path):
@@ -340,8 +340,9 @@ class HyperoptData(backend.HyperoptBase):
         locked = False
         try:
             locked = (
-                backend.acquire_lock(trials_state) if hasattr(trials_state, "lock") else None
-
+                backend.acquire_lock(trials_state)
+                if hasattr(trials_state, "lock")
+                else None
             )
             if locked is not None:
                 while not locked:
@@ -513,7 +514,9 @@ class HyperoptData(backend.HyperoptBase):
         return list(v["params_dict"].values())
 
     @staticmethod
-    def filter_trials(trials: Any, config: Dict[str, Any], return_list=False, intensity=1) -> Any:
+    def filter_trials(
+        trials: Any, config: Dict[str, Any], return_list=False, intensity=1
+    ) -> Any:
         """
         Filter our items from the list of hyperopt trials
         """
@@ -551,7 +554,8 @@ class HyperoptData(backend.HyperoptBase):
             flt_trials.append(hd.sample_trials(trials, filters, intensity))
             return hd.list_or_df(
                 # filtering can overlap, drop dups
-                concat(flt_trials).drop_duplicates(subset="current_epoch"), return_list
+                concat(flt_trials).drop_duplicates(subset="current_epoch"),
+                return_list,
             )
         else:
             return hd.list_or_df(concat([no_trades, trials]), return_list)
@@ -733,7 +737,7 @@ class HyperoptData(backend.HyperoptBase):
 
     @staticmethod
     def step_over_trials(
-            step_k: str, step_values: Dict, sort_k: str, trials: DataFrame, intensity=1
+        step_k: str, step_values: Dict, sort_k: str, trials: DataFrame, intensity=1
     ) -> List:
         """ Apply the sampling of a metric_key:sort_key combination over the trials """
         # for duration and loss we sort by the minimum
@@ -742,7 +746,7 @@ class HyperoptData(backend.HyperoptBase):
         last_epoch = None
         steps, step_v = HyperoptData.find_steps(step_k, step_values, trials)
         # adjust steps by the given intensity
-        steps = steps[::int(len(steps) / intensity) or 1]
+        steps = steps[:: int(len(steps) / intensity) or 1]
         step_v /= intensity
 
         # print("looping over {steps} steps!")
@@ -943,14 +947,13 @@ class HyperoptData(backend.HyperoptBase):
                 )
                 # don't update space if this optimizer didn't have filtered trials
                 if opt_pars:
-                    opt.create_optimizer(opt_pars)
                     reduced_optimizers.append(opt.rs)
-                    epochs.pinned_optimizers[oid] = opt
+                    epochs.pinned_optimizers[oid] = opt.create_optimizer(opt_pars)
                 epochs.space_reduction[oid] = opt_pars is True
             backend.release_lock(backend.epochs)
         else:
             if new_pars:
-                self.opt.create_optimizer(new_pars)
+                self.opt = self.opt.create_optimizer(new_pars)
                 reduced_optimizers.append(self.opt.rs)
 
         # needed for clearing trials outside of new space from storage

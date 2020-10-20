@@ -372,7 +372,7 @@ class HyperoptMulti(HyperoptOut):
             # points of the previous tests are outside the new search space
             except ValueError as e:
                 logger.info("telling points to the optimizer at startup got: %s", e)
-        else:
+        elif len(opt.Xi):
             # get a new point by copy if didn't tell new ones
             logger.debug("no new points were found to tell, rolling a new optimizer..")
             opt = opt.copy(new_seed=True)

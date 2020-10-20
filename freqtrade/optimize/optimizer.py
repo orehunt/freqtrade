@@ -239,6 +239,8 @@ class IOptimizer:
         )
         opt.void_loss = self.void_loss
         opt.void = self.void
+        opt._Xi = self._Xi
+        opt._yi = self._yi
         # change the random state but keep the initial rs as ID
         if rand:
             opt.rs = self.rs
@@ -313,7 +315,7 @@ class IOptimizer:
         )
 
     @abstractmethod
-    def create_optimizer(self, parameters: Iterable, config={}):
+    def create_optimizer(self, parameters: Iterable, config={}) -> IOptimizer:
         """ Create a new optimizer from given configuration """
 
     @abstractmethod

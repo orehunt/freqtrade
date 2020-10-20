@@ -1,8 +1,9 @@
 import json
+from pathlib import Path
 import os
 from functools import partial
 from multiprocessing import Manager, Pool, Queue
-from typing import Callable, Dict
+from typing import Callable, Dict, Union
 
 import pandas as pd
 from joblib import cpu_count, wrap_non_picklable_objects
@@ -54,7 +55,7 @@ def get_all_signals(
         return {pair: target(*args) for pair, args in pairs_args.items()}
 
 
-def read_json_file(file_path: str, key=""):
+def read_json_file(file_path: Union[Path, str], key=""):
     if not os.path.exists(file_path):
         raise OperationalException(f"path: {file_path} does not exist")
     with open(file_path, "r") as fp:

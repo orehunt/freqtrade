@@ -44,6 +44,9 @@ def start_hyperopt_list(args: Dict[str, Any]) -> None:
     )
     total_epochs = len(trials)
     logger.info(f"Loaded {total_epochs} trials...")
+    if config.get("hyperopt_list_recount", False):
+        logger.info("Rearranging trials with an ordered count")
+        trials["current_epoch"] = range(1, len(trials) + 1)
     trials = ho.filter_trials(trials, config).copy()
     n_trials = len(trials)
     logger.info(f"Filtered trials down to {n_trials}...")

@@ -191,8 +191,13 @@ class Sherpa(IOptimizer):
         )
         self._Xi = Xi(self._study)
         self._yi = yi(self._study)
-
         return self
+
+    def copy(self, *args, **kwargs):
+        opt = super().copy(*args, **kwargs)
+        opt._study = self._study
+        opt._params_names = self._params_names
+        return opt
 
     @property
     def supported_tags(self):
@@ -238,12 +243,7 @@ class Sherpa(IOptimizer):
                     cls = sc.Choice
                 if "dist" in m:
                     self.handle_missing_tag(("dist", m["dist"]))
-                new_space.append(
-                    cls(
-                        name=par.name,
-                        range=self.sub_to_list(par.sub)
-                    )
-                )
+                new_space.append(cls(name=par.name, range=self.sub_to_list(par.sub)))
         self._space = new_space
 
     def _setup_mode(self):

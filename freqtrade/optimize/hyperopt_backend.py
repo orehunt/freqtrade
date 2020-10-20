@@ -1,4 +1,5 @@
 import logging
+from freqtrade.exceptions import OperationalException
 import signal
 from abc import abstractmethod
 from functools import partial
@@ -130,8 +131,9 @@ def parallel_sig_handler(
             return fn(*args, **kwargs)
         else:
             import traceback
+
             traceback.print_exc()
-            logger.error("worker exited with...%s", e)
+            raise OperationalException(f"worker exited with...{e}")
 
 
 def manager_sig_handler(signal, frame, trials_state: TrialsState):
@@ -151,16 +153,19 @@ def wait_for_lock(lock: Lock, message: str, logger: Logger):
         logger.debug(msg)
         locked = lock.acquire()
 
+
 def release_lock(state: Union[TrialsState, Epochs]):
     """ needs an object with a "lock" attribute """
     try:
         res = state.lock.release()
     except Exception as e:
         import traceback
+
         traceback.print_exc(limit=100)
         logger.debug("couldn't release lock %s", e)
         res = None
     return res
+
 
 def acquire_lock(state: Union[TrialsState, Epochs], blocking=False, timeout=None):
     """ needs an object with a "lock" attribute """
@@ -174,12 +179,14 @@ def acquire_lock(state: Union[TrialsState, Epochs], blocking=False, timeout=None
         res = None
     return res
 
+
 def is_exit(state: TrialsState) -> Union[bool, None]:
     try:
         return state.exit
     except ConnectionError as e:
         logger.debug("couldn't check exit flag ", e)
     return None
+
 
 class HyperoptBase:
     dimensions: List[Any]
@@ -224,6 +231,7 @@ class HyperoptBase:
         self, random_state: Optional[int] = None, parameters: List[Parameter] = []
     ) -> IOptimizer:
         """ Create an optimizer with instance config """
+
 
 def _silence_noisy_modules():
     logging.getLogger("matplotlib").setLevel(logging.WARNING)

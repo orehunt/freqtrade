@@ -16,8 +16,16 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 from colorama import init as colorama_init
-from joblib import (Parallel, cpu_count, delayed, dump, hash, load, parallel_backend,
-                    wrap_non_picklable_objects,)
+from joblib import (
+    Parallel,
+    cpu_count,
+    delayed,
+    dump,
+    hash,
+    load,
+    parallel_backend,
+    wrap_non_picklable_objects,
+)
 from joblib.externals.loky import get_reusable_executor
 from numpy import iinfo, int32, isfinite
 from pandas import DataFrame, Timedelta, concat, json_normalize
@@ -34,7 +42,12 @@ from freqtrade.optimize.hyperopt_cv import HyperoptCV
 from freqtrade.optimize.hyperopt_loss_interface import IHyperOptLoss  # noqa: F401
 from freqtrade.optimize.hyperopt_multi import HyperoptMulti
 from freqtrade.optimize.hyperopt_out import HyperoptOut
-from freqtrade.optimize.optimizer import VOID_LOSS, IOptimizer, Parameter, guess_search_space
+from freqtrade.optimize.optimizer import (
+    VOID_LOSS,
+    IOptimizer,
+    Parameter,
+    guess_search_space,
+)
 from freqtrade.resolvers.hyperopt_resolver import HyperOptLossResolver, HyperOptResolver
 from freqtrade.strategy.interface import IStrategy
 
@@ -281,7 +294,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
 
         backtesting_results = self.backtesting.backtest(
             processed=processed,
-            stake_amount=self.config['stake_amount'],
+            stake_amount=self.config["stake_amount"],
             start_date=min_date.datetime,
             end_date=max_date.datetime,
             max_open_trades=self.max_open_trades,
