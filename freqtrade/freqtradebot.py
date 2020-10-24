@@ -953,8 +953,8 @@ class FreqtradeBot:
             self.update_trade_state(trade, trade.stoploss_order_id, stoploss_order,
                                     stoploss_order=True)
             # Lock pair for one candle to prevent immediate rebuys
-            self.strategy.lock_pair(trade.pair,
-                                    timeframe_to_next_date(self.config['timeframe']))
+            self.strategy.lock_pair(trade.pair, timeframe_to_next_date(self.config['timeframe']),
+                                    reason='Auto lock')
             self._notify_sell(trade, "stoploss")
             return True
 
@@ -1293,7 +1293,8 @@ class FreqtradeBot:
         Trade.session.flush()
 
         # Lock pair for one candle to prevent immediate rebuys
-        self.strategy.lock_pair(trade.pair, timeframe_to_next_date(self.config['timeframe']))
+        self.strategy.lock_pair(trade.pair, timeframe_to_next_date(self.config['timeframe']),
+                                reason='Auto lock')
 
         self._notify_sell(trade, order_type)
 
