@@ -4,6 +4,7 @@
 This module load custom objects
 """
 import importlib.util
+from importlib.util import module_for_loader
 import inspect
 import logging
 from pathlib import Path
@@ -37,7 +38,6 @@ class IResolver:
         abs_paths: List[Path] = []
         if cls.initial_search_path:
             abs_paths.append(cls.initial_search_path)
-
         if user_subdir:
             abs_paths.insert(0, config["user_data_dir"].joinpath(user_subdir))
 
@@ -97,9 +97,13 @@ class IResolver:
             if not str(entry).endswith(".py"):
                 logger.debug("Ignoring %s", entry)
                 continue
+
             module_path = entry.resolve()
 
-            obj = next(cls._get_valid_object(module_path, object_name), None)
+            try:
+                obj = next(cls._get_valid_object(module_path, object_name), None)
+            except Exception as e:
+                raise OperationalException(e)
 
             if obj:
                 obj[0].__file__ = str(entry)
@@ -144,7 +148,6 @@ class IResolver:
         """
 
         abs_paths = cls.build_search_paths(config, user_subdir=cls.user_subdir, extra_dir=extra_dir)
-
         found_object = cls._load_object(paths=abs_paths, object_name=object_name,
                                         kwargs=kwargs)
         if found_object:
@@ -166,6 +169,7 @@ class IResolver:
         logger.debug(f"Searching for {cls.object_type.__name__} '{directory}'")
         objects = []
         for entry in directory.iterdir():
+            print("OK")
             # Only consider python files
             if not str(entry).endswith(".py"):
                 logger.debug("Ignoring %s", entry)

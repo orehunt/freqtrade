@@ -138,7 +138,7 @@ def _np_calc_triggers(
             cur_profits = calc_profits(
                 data[:, col.bought_open],
                 data[:, col.high],
-                float64(self.config["stake_amount"]),
+                float64(self.strategy.amounts['stake']),
                 float64(self.fee),
             )
 

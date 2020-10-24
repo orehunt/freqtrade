@@ -131,6 +131,7 @@ class HyperoptBacktesting(Backtesting):
             if f
         ]
         self.account_for_spread = backtesting_amounts.get("account_for_spread", True)
+        self.static_stake = bool(backtesting_amounts.get("static_stake", True))
 
         # parent init after config overrides
         super().__init__(config)
@@ -260,6 +261,14 @@ class HyperoptBacktesting(Backtesting):
         open_rate = buy_vals[:, buy_cols["open"]]
         close_rate = sell_vals[:, sell_cols["close_rate"]]
 
+        # use stake amount decided by the signal
+        if self.static_stake:
+            self.strategy.amounts["stake"] = np.full(
+                len(buy_vals), self.config["stake_amount"]
+            )
+        else:
+            self.strategy.amounts["stake"] = buy_vals[:, buy_cols["stake_amount"]]
+
         # if spread is included in the profits calculation
         # increase open_rate and decrease close_rate
         if self.account_for_spread:
@@ -291,7 +300,7 @@ class HyperoptBacktesting(Backtesting):
                 "close_date": to_datetime(sell_vals[:, sell_cols["date"]], utc=True),
                 "close_rate": close_rate,
                 "close_fee": self.fee,
-                "amount": self.config["stake_amount"],
+                "amount": self.strategy.amounts["stake"],
                 "trade_duration": trade_duration.dt.total_seconds() / 60,
                 "open_at_end": False,
                 "sell_reason": sell_reason,
@@ -302,8 +311,6 @@ class HyperoptBacktesting(Backtesting):
         )
         results.sort_values(by="open_date", inplace=True)
 
-        # from user_data.hyperopts.RatioLosses import ProfitIntervalLoss
-        # loss = ProfitIntervalLoss()
         # loss.timeframe = self.timeframe
         # loss.hyperopt_loss_function(results, len(results), min_date=self.min_date, max_date=self.max_date)
         # exit()
@@ -316,11 +323,11 @@ class HyperoptBacktesting(Backtesting):
         if dec:
             from decimal import Decimal
 
-            sa, fee = Decimal(self.config["stake_amount"]), Decimal(self.fee)
+            sa, fee = Decimal(self.strategy.amounts["stake"]), Decimal(self.fee)
             open_rate = array([Decimal(n) for n in open_rate], dtype=Decimal)
             close_rate = array([Decimal(n) for n in close_rate], dtype=Decimal)
         else:
-            sa, fee = self.config["stake_amount"], self.fee
+            sa, fee = self.strategy.amounts["stake"], self.fee
         profits_abs, profits_prc = self._calc_profits_np(
             sa, fee, open_rate, close_rate, calc_abs
         )
@@ -340,6 +347,9 @@ class HyperoptBacktesting(Backtesting):
         close_price = close_amount - close_amount * fee
         profits_prc = (close_price / open_price - 1).round(8)
         profits_abs = (close_price - open_price).round(8) if calc_abs else None
+        # if the stake_amount is too low, open_price and stake_price
+        # can be 0, and 0/0 is nan
+        # assert np.isfinite(profits_prc).all()
         return profits_abs, profits_prc
 
     def shifted_offsets(self, ofs: ndarray, period: int):
@@ -402,7 +412,7 @@ class HyperoptBacktesting(Backtesting):
         ofs = self.pairs_offset
         wnd = self.timeframe_wnd
 
-        df_vals = add_columns(df_vals, loc, ["high_low", "spread",])
+        df_vals = add_columns(df_vals, loc, ["high_low", "spread"])
         # df_vals = df_vals.astype(float)
 
         high, low, close, open, volume = get_cols(
@@ -417,6 +427,25 @@ class HyperoptBacktesting(Backtesting):
             # there can be NaNs in the spread calculation
             df_vals[:, loc["spread"]] = np.nan_to_num(
                 calc_skewed_spread(high, low, close, volume, wnd, ofs)
+            )
+        # override stake amount with stake amount from
+        if not self.static_stake:
+            if "stake_amount" not in loc:
+                raise OperationalException(
+                    "static stake enabled, but no stake amount columns",
+                    "was given in the strategy",
+                )
+            # since the stake_amount is decided by the signal, and we work on forward shifted signals
+            # shift the stake_amount accordingly
+            self.strategy.amounts["stake"] = self._shift_paw(
+                df_vals[:, loc["stake_amount"]],
+                period=1,
+                diff_arr=df_vals[:, loc["pair"]],
+            )
+            df_vals[:, loc["stake_amount"]] = self.strategy.amounts["stake"]
+        else:
+            self.strategy.amounts["stake"] = np.full(
+                len(df_vals), self.config["stake_amount"]
             )
         return df_vals
 
@@ -758,7 +787,15 @@ class HyperoptBacktesting(Backtesting):
         # columns of the trigger array which stores all the calculations
 
         fl_dict = {
-            k: v[k] for k in ("ohlc_low", "ohlc_high", "bopen", "roi_vals", "high_low")
+            k: v[k]
+            for k in (
+                "ohlc_low",
+                "ohlc_high",
+                "bopen",
+                "roi_vals",
+                "high_low",
+                "stake_amount",
+            )
         }
         fl_dict.update(
             {f"col_{k}": v["triggers"][:, n] for k, n in v["col"].__dict__.items()}
@@ -771,10 +808,7 @@ class HyperoptBacktesting(Backtesting):
         }
         update_tpdict(it_dict.keys(), it_dict.values(), Int64Cols)
 
-        fl = {
-            k: v[k]
-            for k in ("fee", "stake_amount", "stoploss", "sl_positive", "sl_offset",)
-        }
+        fl = {k: v[k] for k in ("fee", "stoploss", "sl_positive", "sl_offset",)}
         update_tpdict(fl.keys(), fl.values(), Float64Vals)
 
         it = {
@@ -926,12 +960,14 @@ class HyperoptBacktesting(Backtesting):
         try:
             assert (np.fromiter(minimal_roi, dtype=float) >= 0).all()
         except AssertionError:
-            raise OperationalException("ROI config has negative timeouts, can't sell in the past!")
+            raise OperationalException(
+                "ROI config has negative timeouts, can't sell in the past!"
+            )
         sorted_minimal_roi = {k: minimal_roi[k] for k in sorted(minimal_roi, key=float)}
         roi_timeouts = self._round_roi_timeouts(list(sorted_minimal_roi.keys()))
         roi_values = []
         appended_roi_values = set()
-        for k,v in sorted_minimal_roi.items():
+        for k, v in sorted_minimal_roi.items():
             itk = int(k)
             # when we round, keys can overlap, so we only add the first in the loop
             if itk in roi_timeouts.values() and itk not in appended_roi_values:
@@ -995,6 +1031,7 @@ class HyperoptBacktesting(Backtesting):
                     )
                 )
             ]
+            assert (events_buy[:, bts_loc["stake_amount"]] != 0).all()
             events_sell = bts_vals[
                 (
                     (bts_vals[:, bts_loc["bought_or_sold"]] == Candle.SOLD)
@@ -1027,7 +1064,6 @@ class HyperoptBacktesting(Backtesting):
             events_sell = bts_vals[
                 bts_vals[:, bts_loc["bought_or_sold"]] == Candle.SOLD
             ]
-
         self.bts_loc = bts_loc
         return events_buy, events_sell
 

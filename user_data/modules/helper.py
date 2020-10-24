@@ -1,12 +1,14 @@
 import json
-from pathlib import Path
+from datetime import datetime
 import os
 from functools import partial
 from multiprocessing import Manager, Pool, Queue
+from pathlib import Path
 from typing import Callable, Dict, Union
 
 import pandas as pd
 from joblib import cpu_count, wrap_non_picklable_objects
+from pandas import date_range
 
 from freqtrade.exceptions import OperationalException
 
@@ -53,6 +55,24 @@ def get_all_signals(
         return {pair: results[pair] for pair in pairs_args}
     except KeyError:
         return {pair: target(*args) for pair, args in pairs_args.items()}
+
+
+def resample_sum(
+    series: pd.DataFrame,
+    min_date: datetime,
+    max_date: datetime,
+    freq: str,
+    value_col="profit_percent",
+    date_col="close_date",
+    fill_value=0,
+):
+    t_index = date_range(start=min_date, end=max_date, freq=freq, normalize=True)
+    return (
+        series.resample(freq, on=date_col)
+        .agg({value_col: sum})
+        .reindex(t_index)
+        .fillna(fill_value)
+    )
 
 
 def read_json_file(file_path: Union[Path, str], key=""):

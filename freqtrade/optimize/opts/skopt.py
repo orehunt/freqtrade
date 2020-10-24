@@ -281,7 +281,7 @@ class Skopt(IOptimizer):
     @staticmethod
     def calc_n_points(n_dimensions: int, n_jobs: int, ask_points) -> int:
         """ Calculate the number of points the optimizer samples, based on available host memory """
-        available_mem = SkoptOptimizer.available_bytes()
+        available_mem = Skopt.available_bytes()
         # get size of one parameter
         return int(available_mem / (4 * n_dimensions * abs(n_jobs) * ask_points))
 

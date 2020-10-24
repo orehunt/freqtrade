@@ -1,16 +1,18 @@
 import logging
 from itertools import cycle
 from functools import partial
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 import numpy as np
 import pandas as pd
+from pandas import read_json
 import sherpa as she
 import sherpa.core as sc
 from joblib import hash
 from sherpa.core import Trial
 
 from freqtrade.exceptions import OperationalException
+from user_data.modules.helper import read_json_file
 
 from ..optimizer import CAT, RANGE, IOptimizer, Points
 
@@ -108,8 +110,9 @@ class Sherpa(IOptimizer):
         for n in range(1 if n is None else n):
             trial = self._study.get_suggestion()
             # check if optimizer is DONE
-            if isinstance(trial, str):
-                return [((), {})]
+            if trial is str or trial is None:
+                self.void = True
+                return asked
             tp = trial.parameters
             # the parameters dict has keys other than just parameters
             # with some algos, (like PBT)
@@ -256,16 +259,14 @@ class Sherpa(IOptimizer):
                 raise OperationalException(
                     "PBT and ASHA not compatible with shared mode"
                 )
-            kwargs = self._config.get("opt_kwargs", {})
-            if not self.algo or self.algo in ("auto", "BO"):
-                self.BO(**kwargs)
-            elif self.algo == "PBT":
-                self.PBT(**kwargs)
-            elif self.algo == "ASHA":
-                self.ASHA(**kwargs)
-            else:
-                cls = getattr(she.algorithms, self.algo)
-                self._algo = cls(**kwargs)
+            # kwargs = self._config.get("opt_kwargs", {})
+            kwargs = self.algo_args()
+            if self.algo in dir(self):
+                oj = getattr(self, self.algo)
+                if isinstance(oj, Callable):
+                    oj(**kwargs)
+                else:
+                    raise OperationalException(f"algo {self.algo} not understood")
 
     @property
     def _bo_acq(self):
@@ -345,6 +346,27 @@ class Sherpa(IOptimizer):
             "ASHA: r: %s, R: %s, eta: %s", default["r"], default["R"], default["eta"]
         )
         self._algo = she.algorithms.SuccessiveHalving(**default)
+
+    def LOC(self, **kwargs):
+        seed_key = "seed_configuration"
+        default = {"perturbation_factors": (0.8, 1.2), "repeat_trials": 1}
+        seed = kwargs.get(seed_key, {})
+        if isinstance(seed, dict) and seed:
+            pass
+        elif isinstance(seed, str) and seed:
+            kwargs[seed_key] = read_json_file(seed)
+        else:
+            raise OperationalException(
+                f"Local search requires '{seed_key}', "
+                "(dict, or as path to json file)"
+            )
+        default.update(kwargs)
+        logger.info(
+            "LOC: pertb: %s, repeating: %s",
+            default["perturbation_factors"],
+            default["repeat_trials"],
+        )
+        self._algo = she.algorithms.LocalSearch(**default)
 
     def exploit(self, loss_tail: List[float], current_best: float, *args, **kwargs):
         pass

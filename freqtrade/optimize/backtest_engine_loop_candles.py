@@ -1,7 +1,7 @@
 from numpy import ndarray
 from pandas import DataFrame
 
-from freqtrade.optimize.backtest_nb import define_callbacks, Features, iter_triggers
+from freqtrade.optimize.backtest_nb import Features, define_callbacks, iter_triggers
 
 
 def _loop_candles_select_triggers(

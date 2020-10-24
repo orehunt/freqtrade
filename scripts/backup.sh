@@ -9,11 +9,6 @@ bfile="${dir}/${name}"
 mkdir -p $dir
 rm "${bfile}"
 
-cp "freqtrade/freqtradebot.py" \
-   "freqtrade/optimize/hyperopt.py" \
-   "freqtrade/strategy/interface.py" \
-   "${datadir}/stash/"
-
 zip "${bfile}" -r \
     "cfg" \
     "$datadir" \

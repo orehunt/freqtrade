@@ -422,7 +422,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         config["ask_points"] = self.ask_points
         config["n_jobs"] = self.config.get("hyperopt_jobs", -1)
         config["n_epochs"] = self.config.get("hyperopt_epochs", 10)
-        opt_type = config.get("type", "SkoptOptimizer")
+        opt_type = config.get("type", "Skopt")
         kwargs = {"seed": random_state}
         if opt_type == "Skopt":
             from freqtrade.optimize.opts.skopt import Skopt
@@ -466,7 +466,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             backend.epochs.avg_wait_time = (
                 (backend.epochs.avg_wait_time or wait_time) + wait_time
             ) / 2
-        return tuple(to_ask.popleft())
+        return tuple(to_ask.popleft()) if to_ask else None
 
     @staticmethod
     def _unfinished():
@@ -579,6 +579,8 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
 
             if self.use_progressbar:
                 HyperoptOut._print_progress(t, jobs, self.trials_maxout)
+            if not p:
+                break
             t += 1
             yield t, p
 

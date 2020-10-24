@@ -16,7 +16,6 @@ JIT_ENABLED = os.environ.get("NUMBA_DISABLE_JIT", 0)
 logger = logging.getLogger(__name__)
 
 
-
 class PairKey(NamedTuple):
     pair: str
     tf: str
@@ -34,6 +33,7 @@ PairsKeys = Union[TfList, Tuple[PairKey, ...], None]
 
 cache: Dict[Tuple, PairsDict] = {}
 
+
 @njit(cache=True)
 def reorder_list(ls: List, order: Union[np.ndarray, List[int]]):
     return nb.typed.List([ls[n] for n in order])
@@ -49,7 +49,7 @@ def parse_pairs_timeframes(
 ) -> Optional[np.ndarray]:
     if pairs is None:
         return
-    pairlist = pairs if timeframes is () else tuple(product(pairs, timeframes))
+    pairlist = pairs if timeframes == () else tuple(product(pairs, timeframes))
     if ref:
         ref_pair, ref_tf, _ = ref
         ref_key = (ref_pair, ref_tf)
@@ -110,8 +110,6 @@ def concat_pairs(
     return cc_df
 
 
-
-
 def _concat_pairs_nb(ref: RefPair, df_dict: PairsDict):
     """ NOTE: dict is supposed to be sorted (lowest tf to highest tf)
     and the reference is the first (the lowest) """
@@ -143,10 +141,7 @@ def _concat_pairs_nb(ref: RefPair, df_dict: PairsDict):
 
     # the index of the reference pair has
     df = pd.DataFrame(
-        out,
-        columns=columns,
-        index=pd.to_datetime(idx, utc=True),
-        copy=False,
+        out, columns=columns, index=pd.to_datetime(idx, utc=True), copy=False,
     )
     # restore the reference df column names as they were
     ref_keys = ((ref_pair, ref_tf, c) for c in ref_columns)
@@ -256,7 +251,7 @@ def concat_informative_pairs(
     timeframes: TfList = (),
     get_data: Optional[Callable] = None,
     *args,
-    **kwargs
+    **kwargs,
 ):
     if not isinstance(ref, RefPair):
         ref = RefPair(*ref)
@@ -299,7 +294,7 @@ def concat_pairs_pd(
     cc_df.columns = cc_df.columns.to_flat_index()
 
     ref_pair, ref_tf, ref_df = ref
-    ref_columns = ref_df.columns.difference(['date'])
+    ref_columns = ref_df.columns.difference(["date"])
     # restore the reference df column names as they were
     ref_keys = ((ref_pair, ref_tf, c) for c in ref_columns)
     # this works like a rename (tuple col names are removed)

@@ -14,6 +14,7 @@ MERGE_COLS = [
     "buy",
     "sell",
     "pair",
+    "stake_amount",
 ]
 
 SOLD_COLS = [

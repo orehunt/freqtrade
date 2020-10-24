@@ -6,6 +6,8 @@ ho.py -i 1h     -j 14 -b      -lo OmegaLoss -mode multi -g 20180101-  -e 800 -mt
 
 """
 
+import numpy as np
+from numba.core.types.scalars import Boolean
 from freqtrade.exceptions import OperationalException
 import glob
 import json
@@ -25,7 +27,7 @@ from typing import Any, Dict, MutableMapping, MutableSequence, Tuple
 
 from colorama import Fore, Style
 from joblib.externals.loky import get_reusable_executor
-from numpy import float64, int64
+from numpy import float64, int64, bool_
 from pandas import DataFrame, Timedelta
 
 from freqtrade.configuration.configuration import Configuration, RunMode
@@ -610,6 +612,8 @@ class Main:
             for n, v in enumerate(data):
                 data[n] = self.recursive_cast(v)
             return data
+        elif isinstance(data, bool_):
+            return bool(data)
         else:
             return data
 

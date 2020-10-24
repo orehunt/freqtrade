@@ -2,7 +2,9 @@ from types import SimpleNamespace
 
 from numpy import maximum, ndarray, where
 from pandas import DataFrame
+
 from freqtrade.optimize.backtest_nb import next_bought
+
 
 np_cummax = maximum.accumulate
 

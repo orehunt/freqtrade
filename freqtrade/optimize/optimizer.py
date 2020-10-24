@@ -4,7 +4,7 @@ import logging
 from abc import abstractmethod
 from enum import IntEnum
 from types import SimpleNamespace
-from typing import Any, Dict, Iterable, List, Tuple, Union, Iterable, Sequence
+from typing import Any, Dict, Iterable, List, Sequence, Tuple, Union
 from itertools import cycle
 
 import numpy as np
@@ -276,6 +276,14 @@ class IOptimizer:
             "execution couldn't continue because option %s for tag %s is not supported!".format(
                 tag[0], tag[1]
             )
+        )
+
+    def algo_args(self) -> Dict[Any, Any]:
+        """ Return the algo options provided in the optimizer configuration """
+        return (
+            self._config.get(self.__class__.__name__, {}).get(self.algo, {})
+            if isinstance(self._config, dict)
+            else {}
         )
 
     @abstractmethod

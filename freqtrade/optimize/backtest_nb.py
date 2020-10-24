@@ -1,12 +1,10 @@
-from freqtrade.optimize.backtest_constants import Float64Cols
-from types import SimpleNamespace
+from typing import Optional
+
 import numba as nb
-from numba import njit, int64, float64
-from pandas import DataFrame
 import numpy as np
+from numba import int64, njit
 from numpy import ndarray
-from typing import NamedTuple, Any
-from collections import namedtuple
+
 from freqtrade.optimize.backtest_constants import *
 from freqtrade.optimize.backtest_utils import *
 
@@ -117,10 +115,9 @@ def pct_change(arr, period, window=None):
         return wnd / window
     return pct
 
-
 # https://stackoverflow.com/a/62841583/2229761
 @njit(cache=True, nogil=True)
-def shift_nb(arr, num, fill_value=np.nan, ofs=Union[None, ndarray]):
+def shift_nb(arr, num=1, fill_value=np.nan, ofs=Optional[ndarray]):
     if num >= 0:
         if arr.ndim > 1:
             shifted_shape = (num, arr.shape[1])
@@ -558,8 +555,11 @@ def iter_triggers(
                     break
 
             # otherwise check against new high
+            # print(b, fl_cols["stake_amount"][b])
+            # if fl_cols["stake_amount"][b] == 0:
+            #     print(fl_cols["stake_amount"][bofs])
             high_profit = calc_high_profit(
-                buy_rate, fl_cols["ohlc_high"][tf], fl["stake_amount"], fl["fee"]
+                buy_rate, fl_cols["ohlc_high"][tf], fl_cols["stake_amount"][b], fl["fee"]
             )
             stoploss_rate = calc_trailing_rate(
                 stoploss_rate, tf, bl, high_profit, fl_cols, fl
