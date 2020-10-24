@@ -189,6 +189,8 @@ class ZarrDataHandler(IDataHandler):
         td = pd.Timedelta(timeframe).value
         key = self._pair_ohlcv_key(pair, timeframe)
         self._save(key, data, "ohlcv", td)
+        # clear cache
+        self._del_key_cleaned(key)
 
     @classmethod
     def _arr_to_df(cls, arr: za.Array, kind: str):
@@ -232,15 +234,17 @@ class ZarrDataHandler(IDataHandler):
         return data[columns].to_records(index=False, column_dtypes=col_types)
 
     def _del_key(self, key):
-        dlt = dlt_c = False
+        dlt = False
         if key in self.group:
             del self.group[key]
-            key_c = f"{key}_cleaned"
             dlt = True
+        self._del_key_cleaned(key)
+        return dlt
+
+    def _del_key_cleaned(self, key):
+        key_c = f"{key}_cleaned"
         if key_c in self.group:
             del self.group[key_c]
-            dlt_c = True
-        return dlt or dlt_c
 
     def _ohlcv_load(
         self,
@@ -267,6 +271,7 @@ class ZarrDataHandler(IDataHandler):
         if cleaned:
             key_c = f"{key}_cleaned"
             if key_c not in self.group:
+                logger.debug("cleaning data as requested for pair %s", pair)
                 # load raw data WITHOUT timerange
                 raw = self._ohlcv_load(pair, timeframe, cleaned=False)
                 cleaned_data = clean_ohlcv_dataframe(

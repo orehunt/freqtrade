@@ -169,7 +169,7 @@ class IDataHandler(ABC):
         if startup_candles > 0 and timerange_startup:
             timerange_startup.subtract_start(timeframe_to_seconds(timeframe) * startup_candles)
 
-        pairdf = self._ohlcv_load(pair, timeframe, timerange=timerange_startup, cleaned=True)
+        pairdf = self._ohlcv_load(pair, timeframe, timerange=timerange_startup, cleaned=cleaned)
         if self._check_empty_df(pairdf, pair, timeframe, warn_no_data):
             return pairdf
         else:

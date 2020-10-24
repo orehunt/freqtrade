@@ -31,6 +31,7 @@ def load_pair_history(
     startup_candles: int = 0,
     data_format: str = None,
     data_handler: IDataHandler = None,
+        cleaned=True,
 ) -> DataFrame:
     """
     Load cached ohlcv history for the given pair.
@@ -56,7 +57,7 @@ def load_pair_history(
         fill_missing=fill_up_missing,
         drop_incomplete=drop_incomplete,
         startup_candles=startup_candles,
-        cleaned=True
+        cleaned=cleaned
     )
 
 
