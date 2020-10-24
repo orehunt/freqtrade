@@ -555,9 +555,6 @@ def iter_triggers(
                     break
 
             # otherwise check against new high
-            # print(b, fl_cols["stake_amount"][b])
-            # if fl_cols["stake_amount"][b] == 0:
-            #     print(fl_cols["stake_amount"][bofs])
             high_profit = calc_high_profit(
                 buy_rate, fl_cols["ohlc_high"][tf], fl_cols["stake_amount"][b], fl["fee"]
             )

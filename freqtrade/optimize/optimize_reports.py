@@ -286,7 +286,6 @@ def generate_backtest_stats(btdata: Dict[str, DataFrame],
             'trades_per_day': round(len(results) / backtest_days, 2) if backtest_days > 0 else 0,
             'market_change': market_change,
             'pairlist': list(btdata.keys()),
-            'stake_amount': config['stake_amount'],
             'stake_currency': config['stake_currency'],
             'max_open_trades': (config['max_open_trades']
                                 if config['max_open_trades'] != float('inf') else -1),

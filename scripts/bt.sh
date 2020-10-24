@@ -11,9 +11,6 @@ days=${days:-21}
 source=file # db
 export=trades
 db=
-if [ -n "$debug" ]; then
-	debug="-$debug"
-fi
 
 export NUMEXPR_MAX_THREADS=16
 export FREQTRADE_NOSS=

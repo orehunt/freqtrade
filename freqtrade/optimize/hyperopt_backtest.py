@@ -314,7 +314,6 @@ class HyperoptBacktesting(Backtesting):
         # loss.timeframe = self.timeframe
         # loss.hyperopt_loss_function(results, len(results), min_date=self.min_date, max_date=self.max_date)
         # exit()
-
         return results
 
     def _calc_profits(
@@ -1136,6 +1135,7 @@ class HyperoptBacktesting(Backtesting):
         self.min_date = kwargs["start_date"]
         self.max_date = kwargs["end_date"]
 
+        logger.debug("merging pairs signals")
         if self.no_signals_optimization:
             if self.merged_df is not None:
                 df = self.merged_df.copy()
@@ -1145,6 +1145,7 @@ class HyperoptBacktesting(Backtesting):
         else:
             df = self.merge_pairs_df(processed)
 
+        logger.debug("setting bought and sold candles")
         df_vals, empty = self.bought_or_sold(df)
 
         # date = df_vals[:, self.df_loc["date"]]
@@ -1154,21 +1155,26 @@ class HyperoptBacktesting(Backtesting):
         # open = df_vals[:, self.df_loc["open"]]
         # volume = df_vals[:, self.df_loc["volume"]]
         # print(volume[:100])
-
         if empty:  # if no bought signals
+            logger.debug("returning empty results, no bought signals")
             return self.empty_results
 
+        logger.debug("applying post processing")
         df_vals = self.post_process(df_vals, self.pairs_offset)
 
+        logger.debug("setting sold candles")
         bts_vals = self.set_sold(df_vals)
 
         if not len(bts_vals):
+            logger.debug("returning empty results before triggers")
             return self.empty_results
 
         if self.any_trigger:
+            logger.debug("setting triggers")
             bts_vals = self.set_triggers(df_vals, bts_vals)
 
         if len(bts_vals) < 1:
+            logger.debug("returning empty results after triggers")
             return self.empty_results
 
         if dbg:
@@ -1176,12 +1182,14 @@ class HyperoptBacktesting(Backtesting):
                 bts_vals, self.bts_loc, bts_vals[:, self.bts_loc["ohlc_ofs"]]
             )
 
+        logger.debug("splitting events")
         events_buy, events_sell = (
             self.split_events(bts_vals)
             if not self.position_stacking
             else self.split_events_stack(bts_vals, df_vals)
         )
 
+        logger.debug("getting results")
         if dbg:
             dbg.bts_loc = self.bts_loc
             dbg._validate_events(events_buy, events_sell)

@@ -195,3 +195,5 @@ class EmuKit(IOptimizer):
             self._opt = ExperimentalDesignLoop(
                 space=self._space, model=GPyModelWrapper(model)
             )
+    def BO(self):
+        """"""

@@ -7,7 +7,7 @@ import logging
 from collections import defaultdict
 from copy import deepcopy
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, NamedTuple, Optional, Tuple
+from typing import Any, Callable, Dict, List, NamedTuple, Optional, Sequence, Tuple, Union
 
 from pandas import DataFrame
 
@@ -217,7 +217,7 @@ class Backtesting:
             # Set close_rate to stoploss
             return trade.stop_loss
         elif sell.sell_type == (SellType.ROI):
-            roi_entry, roi = self.strategy.min_roi_reached_entry(trade_dur)
+            roi_entry, roi = self.strategy.min_roi_reached_entry(trade_dur, trade)
             if roi is not None and roi_entry is not None:
                 if roi == -1 and roi_entry % self.timeframe_min == 0:
                     # When forceselling with ROI=-1, the roi time will always be equal to trade_dur.
@@ -302,7 +302,7 @@ class Backtesting:
                     trades.append(trade_entry)
         return trades
 
-    def backtest(self, processed: Dict, stake_amount: float,
+    def backtest(self, processed: Dict,
                  start_date: datetime, end_date: datetime,
                  max_open_trades: int = 0, position_stacking: bool = False) -> DataFrame:
         """
@@ -313,7 +313,6 @@ class Backtesting:
         Avoid extensive logging in this method and functions it calls.
 
         :param processed: a processed dictionary with format {pair, data}
-        :param stake_amount: amount to use for each trade
         :param start_date: backtesting timerange start datetime
         :param end_date: backtesting timerange end datetime
         :param max_open_trades: maximum number of concurrent trades, <= 0 means unlimited
@@ -330,6 +329,7 @@ class Backtesting:
         # Use dict of lists with data for performance
         # (looping lists is a lot faster than pandas DataFrames)
         data: Dict = self._get_ohlcv_as_lists(processed)
+        get_stake_amount = self.strategy.get_stake_amount
 
         # Indexes per pair, so some pairs are allowed to have a missing start.
         indexes: Dict = {}
@@ -366,6 +366,7 @@ class Backtesting:
                         and tmp != end_date
                         and row[BUY_IDX] == 1 and row[SELL_IDX] != 1):
                     # Enter trade
+                    stake_amount = get_stake_amount(pair, row[DATE_IDX])
                     trade = Trade(
                         pair=pair,
                         open_rate=row[OPEN_IDX],
@@ -410,7 +411,6 @@ class Backtesting:
         data: Dict[str, Any] = {}
 
         logger.info("Using stake_currency: %s ...", self.config["stake_currency"])
-        logger.info("Using stake_amount: %s ...", self.config["stake_amount"])
 
         position_stacking = self.config.get("position_stacking", False)
 
@@ -455,7 +455,6 @@ class Backtesting:
             # Execute backtest and print results
             results = self.backtest(
                 processed=preprocessed,
-                stake_amount=self.config['stake_amount'],
                 start_date=min_date.datetime,
                 end_date=max_date.datetime,
                 max_open_trades=max_open_trades,

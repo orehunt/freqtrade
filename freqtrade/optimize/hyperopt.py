@@ -387,6 +387,12 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                 max_date=max_date.datetime,
                 processed=processed,
             )
+            if not np.isfinite(loss):
+                logger.warning(
+                    "loss result by %s is not finite, using VOID_LOSS value",
+                    self.calculate_loss_dict.__name__,
+                )
+                loss = VOID_LOSS
         return {
             "loss": loss,
             "params_dict": params_dict,
