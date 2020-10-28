@@ -83,7 +83,7 @@ def analyze_parameters(parameters: Iterable[Parameter], precision=16):
             if "int" in par.meta:
                 n_pars += max(1, par.high - par.low)
             else:
-                left, right = f"{par.low/(par.high or 1.):.{precision}}".split(".")
+                left, right = f"{par.low/(par.high or 1.):.{precision}f}".split(".")
                 base = len(left)
                 exp = int(right)
                 n_pars += (exp * 10 + (base * precision * 10)) or 10
