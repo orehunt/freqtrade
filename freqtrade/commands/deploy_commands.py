@@ -139,9 +139,8 @@ def start_new_hyperopt(args: Dict[str, Any]) -> None:
         new_path = config['user_data_dir'] / USERPATH_HYPEROPTS / (args['hyperopt'] + '.py')
 
         if new_path.exists():
-            raise OperationalException(
-                f"`{new_path}` already exists. " "Please choose another Strategy Name."
-            )
-        deploy_new_hyperopt(args["hyperopt"], new_path, args["template"])
+            raise OperationalException(f"`{new_path}` already exists. "
+                                       "Please choose another Hyperopt Name.")
+        deploy_new_hyperopt(args['hyperopt'], new_path, args['template'])
     else:
         raise OperationalException("`new-hyperopt` requires --hyperopt to be set.")
