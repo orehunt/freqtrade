@@ -192,11 +192,11 @@ class IDataHandler(ABC):
                     return pairdf
 
             # incomplete candles should only be dropped if we didn't trim the end beforehand.
+            # but a request for cleaned data should never have incomplete candles
             end_candle = pairdf.iloc[-1]
-            if drop_incomplete and enddate == end_candle["date"]:
+            if drop_incomplete and enddate == end_candle["date"] and not cleaned:
                 pairdf.drop(end_candle.name, inplace=True)
                 logger.debug("dropped last candle")
-
             return pairdf
 
     def _check_empty_df(self, pairdf: DataFrame, pair: str, timeframe: str, warn_no_data: bool):

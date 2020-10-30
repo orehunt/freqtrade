@@ -91,7 +91,7 @@ class DataProvider:
         """
         return load_pair_history(pair=pair,
                                  timeframe=timeframe or self._config['timeframe'],
-                                 timerange=timerange or TimeRange.parse_timerange(self._config['timerange']),
+                                 timerange=timerange or TimeRange.parse_timerange(self._config.get('timerange')),
                                  datadir=self._config['datadir'], data_handler=self._data_handler
                                  )
 

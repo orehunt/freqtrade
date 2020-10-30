@@ -49,7 +49,6 @@ def load_pair_history(
     :return: DataFrame with ohlcv data, or empty DataFrame
     """
     data_handler = get_datahandler(datadir, data_format, data_handler)
-
     return data_handler.ohlcv_load(
         pair=pair,
         timeframe=timeframe,

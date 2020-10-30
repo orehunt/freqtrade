@@ -1,6 +1,6 @@
 import logging
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Union
 
 import pandas as pd
 import zarr as za
@@ -88,7 +88,7 @@ class ZarrDataHandler(IDataHandler):
         elif kind == "trades":
             col = "timestamp"
             columns = DEFAULT_TRADES_COLUMNS
-        if key in self.group and self.group[key].shape[0] > 0:
+        if self._is_key_in_group(key, self.group) and self.group[key].shape[0] > 0:
             arr = self.group[key]
             assert isinstance(arr, za.Array)
             saved_first_date = arr[0, col]
@@ -140,8 +140,7 @@ class ZarrDataHandler(IDataHandler):
             else:
                 logger.debug("no new data was found for %s", key)
         else:
-            if key in self.group:
-                del self.group[key]
+            self._del_key(key)
             offset = 0
             # Zarr (0.2.4) supports records, allowing to query by fields
             # (although fields aren't required at creation since they are inferred
@@ -150,6 +149,17 @@ class ZarrDataHandler(IDataHandler):
             self.group.create_dataset(
                 key, data=self._to_records(data, kind), compressor=self._compressor,
             )
+
+    @staticmethod
+    def _is_key_in_group(key: str, group: Union[za.Array, za.Group]):
+        # FIXME: not sure if this is better than just a try/catch for keyerror
+        for part in key.split('/'):
+            if part in group:
+                group = group[part]
+                continue
+            else:
+                return False
+        return True
 
     @staticmethod
     def _check_contiguity(
@@ -235,16 +245,21 @@ class ZarrDataHandler(IDataHandler):
 
     def _del_key(self, key):
         dlt = False
-        if key in self.group:
+        try:
             del self.group[key]
             dlt = True
+        except KeyError:
+            pass
         self._del_key_cleaned(key)
         return dlt
 
     def _del_key_cleaned(self, key):
         key_c = f"{key}_cleaned"
-        if key_c in self.group:
+        try:
             del self.group[key_c]
+        except KeyError:
+            pass
+
 
     def _ohlcv_load(
         self,
@@ -303,7 +318,7 @@ class ZarrDataHandler(IDataHandler):
             else:
                 arr_start = 0
             if timerange.stoptype == "date":
-                arr_period = arr_start + int(
+                arr_period = 1 + arr_start + int(
                     (timerange.stopts - timerange.startts) * 1e9 // td.value
                 )
                 logger.debug("timerange query stop: %s", ts(timerange.stopts, True))
