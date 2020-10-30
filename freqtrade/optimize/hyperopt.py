@@ -100,13 +100,17 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         self.opt_ask_timeout = self.config.get("hyperopt_optimizer", {}).get(
             "ask_timeout"
         )
-        self.n_rand = self.config.get("hyperopt_initial_points", self.n_jobs * 3)
+        self.n_rand = self.config.get(
+            "hyperopt_initial_points", max(1, self.n_jobs) * 3
+        )
         self.use_progressbar = self.config.get("hyperopt_use_progressbar", True)
+        self.multi_loss = self.config.get("hyperopt_multi_loss_enabled", False)
 
     def _setup_backtesting(self):
         self.backtesting = HyperoptBacktesting(self.config)
 
         self.custom_hyperopt = HyperOptResolver.load_hyperopt(self.config)
+        self.custom_hyperopt.strategy = self.backtesting.strategy
 
         # Populate functions here (hasattr is slow so should not be run during "regular" operations)
         if hasattr(self.custom_hyperopt, "populate_indicators"):
@@ -198,9 +202,9 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         """
         # The 'trailing' space is not included in the 'default' set of spaces
         if space == "trailing":
-            return any(s in self.config["spaces"] for s in [space, "all"])
+            return any(s in self.config["spaces"] for s in (space, "all"))
         else:
-            return any(s in self.config["spaces"] for s in [space, "all", "default"])
+            return any(s in self.config["spaces"] for s in (space, "all", "default"))
 
     def hyperopt_space(self, space: Optional[str] = None) -> List[Parameter]:
         """
@@ -294,7 +298,6 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
 
         backtesting_results = self.backtesting.backtest(
             processed=processed,
-            stake_amount=self.config["stake_amount"],
             start_date=min_date.datetime,
             end_date=max_date.datetime,
             max_open_trades=self.max_open_trades,
@@ -331,7 +334,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         """ Map a (cycled) list of loss functions to the optimizers random states """
         self.adjust_acquisition = self.config.get("hyperopt_adjust_acquisition", True)
         config = self.config.copy()
-        if self.multi:
+        if self.multi and self.multi_loss:
             self.calculate_loss_dict = {}
             loss_func_list = cycle(self.config.get("hyperopt_loss_multi", []))
             logger.debug("Cycling over loss functions: %s", loss_func_list)
@@ -378,7 +381,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         loss: float = VOID_LOSS
         if trade_count >= self.config["hyperopt_min_trades"]:
             loss_func = (
-                self.calculate_loss_dict[rs] if rs is not None else self.calculate_loss
+                self.calculate_loss_dict[rs] if rs is not None and self.multi_loss else self.calculate_loss
             )
             loss = loss_func(
                 results=backtesting_results,
@@ -390,9 +393,9 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             if not np.isfinite(loss):
                 logger.warning(
                     "loss result by %s is not finite, using VOID_LOSS value",
-                    self.calculate_loss_dict.__name__,
+                    loss_func.__name__,
                 )
-                loss = VOID_LOSS
+                loss = VOID_LOSS if np.isnan(loss) else np.sign(loss) * VOID_LOSS
         return {
             "loss": loss,
             "params_dict": params_dict,
@@ -404,9 +407,9 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         }
 
     def _calculate_results_metrics(self, backtesting_results: DataFrame) -> Dict:
-        wins = len(backtesting_results[backtesting_results.profit_percent > 0])
-        draws = len(backtesting_results[backtesting_results.profit_percent == 0])
-        losses = len(backtesting_results[backtesting_results.profit_percent < 0])
+        # wins = len(backtesting_results[backtesting_results.profit_percent > 0])
+        # draws = len(backtesting_results[backtesting_results.profit_percent == 0])
+        # losses = len(backtesting_results[backtesting_results.profit_percent < 0])
         return {
             "trade_count": len(backtesting_results.index),
             # "wins": wins,
