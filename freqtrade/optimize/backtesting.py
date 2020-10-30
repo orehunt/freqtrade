@@ -320,7 +320,6 @@ class Backtesting:
         :return: DataFrame with trades (results of backtesting)
         """
         logger.debug(
-            f"Run backtest, stake_amount: {stake_amount}, "
             f"start_date: {start_date}, end_date: {end_date}, "
             f"max_open_trades: {max_open_trades}, position_stacking: {position_stacking}"
         )
@@ -366,7 +365,8 @@ class Backtesting:
                         and tmp != end_date
                         and row[BUY_IDX] == 1 and row[SELL_IDX] != 1):
                     # Enter trade
-                    stake_amount = get_stake_amount(pair, row[DATE_IDX])
+                    prev_date = data[pair][indexes[pair] - 1][DATE_IDX]
+                    stake_amount = get_stake_amount(pair, prev_date)
                     trade = Trade(
                         pair=pair,
                         open_rate=row[OPEN_IDX],

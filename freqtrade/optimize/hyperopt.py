@@ -12,7 +12,7 @@ from functools import partial
 from itertools import cycle
 from time import sleep
 from time import time as now
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 from colorama import init as colorama_init
