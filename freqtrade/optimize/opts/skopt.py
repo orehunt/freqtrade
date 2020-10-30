@@ -188,6 +188,12 @@ class Skopt(IOptimizer):
         self._space = new_space
 
     def _setup_mode(self):
+        if self.n_rand * 2 < self.ask_points:
+            raise OperationalException(
+                "Make sure the number of initial_points (%s) is >= ask_points (%s)",
+                self.n_rand,
+                self.ask_points,
+            )
         self.algo = next(self._algos_pool)
         # if 0 n_points are given, don't use any base estimator (akin to random search)
         # and force single mode as there is no model
@@ -249,6 +255,10 @@ class Skopt(IOptimizer):
     @property
     def can_tune(self) -> bool:
         return True
+
+    @property
+    def accepts_nans(self) -> bool:
+        return False
 
     def _setup_lie_strat(self):
         # lie strategy

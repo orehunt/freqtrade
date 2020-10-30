@@ -251,6 +251,9 @@ class HyperoptData(backend.HyperoptBase):
         if fields:
             idx = [columns[f] for f in fields]
             indexer = (indexer, idx)
+        else:
+            if isinstance(columns, dict):
+                columns = dict(sorted(columns.items(), key=itemgetter(1)))
         z = self._group.get(self.trials_instance)
         if z:
             data = z.get_orthogonal_selection(indexer)
@@ -512,6 +515,60 @@ class HyperoptData(backend.HyperoptBase):
     @staticmethod
     def params_Xi(v: dict):
         return list(v["params_dict"].values())
+
+    @staticmethod
+    def progressive_filtering(
+        trials: DataFrame,
+        target_count: int,
+        filter_config: Dict,
+        max_iter=100,
+        min_tolerance=0.9,
+        max_tolerance=1.1,
+    ) -> DataFrame:
+        """ Retry filtering until the number of trials is around the desired count """
+        intensity = prev_its = 1
+        backtrack = False
+        prev_tt_len = 0
+        # apply the specified histeresis for desired number of filtered epochs
+        min_tt = int(target_count * min_tolerance)
+        max_tt = int(target_count * max_tolerance)
+        tr_len = len(trials)
+        if tr_len < min_tt or tr_len > max_tt:
+            while max_iter > 0:
+                max_iter -= 1
+                logger.debug("filtering trials with intensity: %s", intensity)
+                target_trials = HyperoptData.filter_trials(
+                    trials, filter_config, intensity=intensity
+                )
+                logger.debug("filtered trials to: %s", len(target_trials))
+                # backtrack means we applied a previous intensity because we probably
+                # offshoot the calculation
+                tt_len = len(target_trials)
+                if backtrack or target_count < 2:
+                    logger.debug("stopped trials filtering, backtrack: %s", backtrack)
+                    break
+                # don't filter if the filtered trials are below setting
+                if tt_len < min_tt and tt_len != prev_tt_len:
+                    logger.debug("decreasing intensity since %s < %s", tt_len, max_tt)
+                    prev_its = intensity
+                    intensity *= target_count / tt_len
+                    max_iter -= 1
+                elif tt_len > max_tt:
+                    logger.debug("increasing intensity since %s > %s", tt_len, max_tt)
+                    prev_its = intensity
+                    intensity *= target_count / tt_len
+                elif tt_len < min_tt and intensity < prev_its:
+                    logger.debug(
+                        "backtracking filtering because %s < %s", tt_len, min_tt
+                    )
+                    backtrack = True
+                    intensity = prev_its
+                else:
+                    break
+                prev_tt_len = tt_len
+        else:
+            target_trials = trials
+        return target_trials
 
     @staticmethod
     def filter_trials(

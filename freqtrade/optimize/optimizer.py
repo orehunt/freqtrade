@@ -358,6 +358,10 @@ class IOptimizer:
     def can_tune(self) -> bool:
         """ Optimizer should return True if it provides eploit/explore methods """
         return False
+    @property
+    def accepts_nans(self) -> bool:
+        """ Optimzer can receive NaN observation results """
+        return True
 
     @property
     @abstractmethod

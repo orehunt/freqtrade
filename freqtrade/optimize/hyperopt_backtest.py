@@ -1,7 +1,7 @@
 import logging
 from enum import IntEnum
 from types import SimpleNamespace
-from typing import Dict, List, Tuple, Union
+from typing import Dict, Iterable, List, Tuple, Union
 
 import pandas as pd
 from freqtrade.exceptions import OperationalException
@@ -132,6 +132,9 @@ class HyperoptBacktesting(Backtesting):
         ]
         self.account_for_spread = backtesting_amounts.get("account_for_spread", True)
         self.static_stake = bool(backtesting_amounts.get("static_stake", True))
+        self.ignore_zero_volume = bool(
+            backtesting_amounts.get("ignore_zero_volume", True)
+        )
 
         # parent init after config overrides
         super().__init__(config)
@@ -261,13 +264,14 @@ class HyperoptBacktesting(Backtesting):
         open_rate = buy_vals[:, buy_cols["open"]]
         close_rate = sell_vals[:, sell_cols["close_rate"]]
 
-        # use stake amount decided by the signal
+        # use stake amount decided by the strategy
         if self.static_stake:
             self.strategy.amounts["stake"] = np.full(
                 len(buy_vals), self.config["stake_amount"]
             )
         else:
             self.strategy.amounts["stake"] = buy_vals[:, buy_cols["stake_amount"]]
+        # assert (self.strategy.amounts["stake"] > 0.01).all()
 
         # if spread is included in the profits calculation
         # increase open_rate and decrease close_rate
@@ -276,7 +280,9 @@ class HyperoptBacktesting(Backtesting):
             close_rate -= close_rate * sell_vals[:, sell_cols["spread"]]
 
         profits_abs, profits_prc = self._calc_profits(
-            open_rate, close_rate, calc_abs=True
+            open_rate,
+            close_rate,
+            calc_abs=True,
         )
 
         trade_duration = to_timedelta(
@@ -317,36 +323,53 @@ class HyperoptBacktesting(Backtesting):
         return results
 
     def _calc_profits(
-        self, open_rate: ndarray, close_rate: ndarray, dec=False, calc_abs=False
+        self, open_rate: ndarray, close_rate: ndarray, dec=False, calc_abs=False,
     ) -> ndarray:
+
+        sa = self.strategy.amounts["stake"]
+        fee = self.fee
+        minus = 1
+
         if dec:
             from decimal import Decimal
 
-            sa, fee = Decimal(self.strategy.amounts["stake"]), Decimal(self.fee)
-            open_rate = array([Decimal(n) for n in open_rate], dtype=Decimal)
-            close_rate = array([Decimal(n) for n in close_rate], dtype=Decimal)
-        else:
-            sa, fee = self.strategy.amounts["stake"], self.fee
+            fee = Decimal(self.fee)
+            if isinstance(sa, Iterable):
+                sa = array([Decimal(a) for a in sa], dtype="object")
+            else:
+                sa = Decimal(sa)
+            open_rate = array([Decimal(n) for n in open_rate], dtype="object")
+            close_rate = array([Decimal(n) for n in close_rate], dtype="object")
+            minus = Decimal(minus)
+
         profits_abs, profits_prc = self._calc_profits_np(
-            sa, fee, open_rate, close_rate, calc_abs
+            sa, fee, open_rate, close_rate, calc_abs, minus=minus
         )
+
         if dec:
-            profits_abs = profits_abs.astype(float) if profits_abs else None
+            profits_abs = profits_abs.astype(float) if profits_abs is not None else None
             profits_prc = profits_prc.astype(float)
         if calc_abs:
             return profits_abs.round(8), profits_prc.round(8)
         else:
             return profits_prc.round(8)
 
-    def _calc_profits_np(self, sa, fee, open_rate, close_rate, calc_abs) -> Tuple:
+    @staticmethod
+    def _calc_profits_np(
+        sa, fee, open_rate, close_rate, calc_abs, minus=1
+    ) -> Tuple:
         am = sa / open_rate
         open_amount = am * open_rate
         close_amount = am * close_rate
         open_price = open_amount + open_amount * fee
         close_price = close_amount - close_amount * fee
-        profits_prc = (close_price / open_price - 1).round(8)
-        profits_abs = (close_price - open_price).round(8) if calc_abs else None
-        # if the stake_amount is too low, open_price and stake_price
+        if open_price.dtype != "object":
+            profits_prc = (close_price / open_price - minus).round(8)
+            profits_abs = (close_price - open_price).round(8) if calc_abs else None
+        else:
+            profits_prc = close_price / open_price - minus
+            profits_abs = (close_price - open_price) if calc_abs else None
+
         # can be 0, and 0/0 is nan
         # assert np.isfinite(profits_prc).all()
         return profits_abs, profits_prc
@@ -495,6 +518,10 @@ class HyperoptBacktesting(Backtesting):
         # df[isnan(df["high"].values), "high"] = df["open"]
         # df[isnan(df["close"].values), "close"] = df["open"]
         df.set_index("ohlc_ofs", inplace=True, drop=False)
+        if self.ignore_zero_volume:
+            zvol_mask = df["volume"].values > 0
+            df["buy"].values[:] = df["buy"].values & zvol_mask
+            df["sell"].values[:] = df["sell"].values & zvol_mask
         return df
 
     def bought_or_sold(self, df: DataFrame) -> Tuple[DataFrame, bool]:

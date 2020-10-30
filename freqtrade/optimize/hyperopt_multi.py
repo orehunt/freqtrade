@@ -83,7 +83,7 @@ class HyperoptMulti(HyperoptOut):
                     self.apply_space_reduction(jobs, backend.trials, backend.epochs)
                 if self.use_progressbar:
                     HyperoptOut._print_progress(t, jobs, self.trials_maxout)
-                logger.debug("yiedling %s", t)
+                logger.debug("yielding %s", t)
                 yield t
         except ConnectionError as e:
             logger.error(f"Iteration ended abruptly {e}")
@@ -330,6 +330,7 @@ class HyperoptMulti(HyperoptOut):
                             axis=0,
                             inplace=True,
                         )
+                    params_df.drop_duplicates(subset='Xi_h', inplace=True)
                     backend.release_lock(trials_state)
             except (KeyError, FileNotFoundError, IOError, OSError,) as e:
                 # only happens when df is empty and empty df is not saved
@@ -557,9 +558,12 @@ class HyperoptMulti(HyperoptOut):
             for X in untested_Xi
         ]
         # filter losses
-        void_filtered = HyperoptMulti.filter_void_losses(
-            trials, opt, trials_state, is_shared
-        )
+        if opt.accepts_nans:
+            void_filtered = trials
+        else:
+            void_filtered = HyperoptMulti.filter_void_losses(
+                trials, opt, trials_state, is_shared
+            )
 
         cls.opt_log_trials(opt, void_filtered, t, jobs, is_shared, trials_state, epochs)
         # disable gc at the end to prevent disposal of global vars

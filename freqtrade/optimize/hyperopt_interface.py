@@ -4,13 +4,14 @@ This module defines the interface to apply for hyperopt
 """
 import logging
 import math
-from abc import ABC
+from abc import ABC, abstractmethod
 from typing import Any, Callable, Dict, List
 
 from freqtrade.exceptions import OperationalException
 from freqtrade.exchange import timeframe_to_minutes
 from freqtrade.misc import round_dict
 from freqtrade.optimize.optimizer import CAT, RANGE, Parameter
+from freqtrade.strategy.interface import IStrategy
 
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,7 @@ class IHyperOpt(ABC):
 
     ticker_interval: str  # DEPRECATED
     timeframe: str
+    strategy: IStrategy
 
     def __init__(self, config: dict) -> None:
         self.config = config
@@ -265,6 +267,15 @@ class IHyperOpt(ABC):
                 kind=CAT, sub=[True, False], name="trailing_only_offset_is_reached"
             ),
         ]
+
+    @staticmethod
+    @abstractmethod
+    def constraints() -> Dict[str, Any]:
+        """
+        Bridge method to pass constraints configuration to the optimizer instance.
+        Config syntax is dependent on the used optimizer
+        """
+        return {}
 
     # This is needed for proper unpickling the class attribute ticker_interval
     # which is set to the actual value by the resolver.

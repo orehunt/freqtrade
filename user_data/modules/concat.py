@@ -74,6 +74,7 @@ def concat_pairs(
     cc_pairs: PairsKeys = (),
     cc_tf: TfList = (),
     get_data: Callable = None,
+    trim_to_ref=True,
 ):
     """
     Concatenate combinations of pairs and timeframes, using dates as index.
@@ -100,7 +101,9 @@ def concat_pairs(
         # the pairslist EXCLUDES the ref
         pairs_tf = parse_pairs_timeframes(cc_pairs, cc_tf, sort=True)
         # construct the dict according to the ref, but WITHOUT it
-        cc_dict = construct_cc_dict(pairs_tf, ref, get_data=get_data, date_index=False,)
+        cc_dict = construct_cc_dict(
+            pairs_tf, ref, get_data=get_data, date_index=False, trim=trim_to_ref
+        )
         cache[key] = cc_dict
         # after having saved the dict insert the reference;
         # (this two times constructions allows to cache the dict)
@@ -339,11 +342,11 @@ def trim_by_date(
     df: pd.DataFrame, start: pd.Timestamp, stop: pd.Timestamp
 ) -> Optional[pd.DataFrame]:
     date = df["date"]
-    sstart = date.searchsorted(start)
+    sstart = date.searchsorted(start) or None
     # not enough data
     if date.iloc[sstart] > stop:
         return None
-    sstop = date.searchsorted(stop) or len(df)
+    sstop = date.searchsorted(stop, side="right") or None
     return df.iloc[sstart:sstop]
 
 
@@ -359,8 +362,8 @@ def trim_by_len(
 
 def trim(
     df: pd.DataFrame,
-    start: int,
-    stop: pd.Timestamp,
+    start: Union[int, None],
+    stop: Union[pd.Timestamp, None],
     count: int,
     td: pd.Timedelta,
     ref_td: pd.Timedelta,
@@ -381,8 +384,10 @@ def trim(
         return trimmed
     # if the timedelta is smaller trim by date, to ensure that
     # the smaller frequency includes all the required (and available) dates
-    else:
+    elif start is not None:
         return trim_by_date(df, start, stop)
+    else:
+        return df
 
 
 def construct_cc_dict(
@@ -391,6 +396,7 @@ def construct_cc_dict(
     get_data: Optional[Callable] = None,
     date_index=True,
     verify_bounds=False,
+    trim=True,
 ) -> PairsDict:
     """
     Construct a dictionary of dataframes from a list of (pair, timeframe)
@@ -401,8 +407,11 @@ def construct_cc_dict(
     # NOTE: the reference timeframe should be ALREADY included
     # in the `pairs_tf` array
     pair, tf, ref_df = ref
-    first_date = ref_df["date"].iloc[0]
-    last_date = ref_df["date"].iloc[-1]
+    if trim:
+        first_date = ref_df["date"].iloc[0]
+        last_date = ref_df["date"].iloc[-1]
+    else:
+        first_date = last_date = None
     if verify_bounds:
         assert first_date == ref_df["date"].min()
         assert last_date == ref_df["date"].max()
@@ -411,14 +420,17 @@ def construct_cc_dict(
 
     cc_dict = {}
     for pair, tf, td in pairs_tf:
-        pair_df = trim(
-            get_data(pair=pair, timeframe=tf, last_date=last_date),
-            first_date,
-            last_date,
-            count,
-            td,
-            ref_td,
-        )
+        if trim:
+            pair_df = trim(
+                get_data(pair=pair, timeframe=tf, last_date=last_date),
+                first_date,
+                last_date,
+                count,
+                td,
+                ref_td,
+            )
+        else:
+            pair_df = get_data(pair=pair, timeframe=tf, last_date=last_date)
         if pair_df is None:
             continue
         # date index should be used when concatenating with pandas

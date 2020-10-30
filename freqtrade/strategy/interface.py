@@ -273,7 +273,7 @@ class IStrategy(ABC):
         """
         return []
 
-    def get_stake_amount(self, pair: str, date: datetime) -> float:
+    def get_stake_amount(self, pair: str, date: Optional[datetime] = None) -> float:
         """ Called when placing a buy order
         :param pair: Pair that's about to be bought.
         :param date: date of the trade (should be the latest candle for live run mode).

@@ -35,7 +35,7 @@ def parse_hopt_args() -> dict:
     parser.add_argument(
         "-sc", help="skip addcond when testing conditions evaluation", action="store_true"
     )
-    parser.add_argument("-mp", help="max positions", action="store_true")
+    parser.add_argument("-mp", help="max positions (max open trades)", action="store_true")
     parser.add_argument("-mt", help="min trades")
     parser.add_argument("-mavp", help="minimum average profit", default=0)
     parser.add_argument(

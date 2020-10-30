@@ -213,13 +213,13 @@ class Sherpa(IOptimizer):
             m = par.meta
             self.validate_tags(m)
             if par.kind == RANGE:
-                if dist := m.get("dist", "uni"):
-                    if dist == "uni":
-                        scale = "linear"
-                    elif dist == "log":
-                        scale = "log"
-                    else:
-                        self.handle_missing_tag(("dist", dist))
+                dist = m.get("dist", "uni")
+                if dist == "uni":
+                    scale = "linear"
+                elif dist == "log":
+                    scale = "log"
+                else:
+                    self.handle_missing_tag(("dist", dist))
                 kwargs = {
                     "name": par.name,
                     "range": [par.low, par.high],

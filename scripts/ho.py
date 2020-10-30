@@ -130,7 +130,7 @@ class Main:
     }
     config["hyperopt_ask_points"] = args.pts
     config["hyperopt_max_convergence_ratio"] = args.cvg
-    config["hyperopt_initial_points"] = args.rpt or (32 // args.j)
+    config["hyperopt_initial_points"] = args.rpt or (32 // max(1, args.j))
     config["hyperopt_random_state"] = args.rand if args.rand else None
     config["hyperopt_loss"] = "DecideCoreLoss" if not args.lo else args.lo
 
@@ -1063,7 +1063,7 @@ class Main:
         amounts = best["params_details"]
         if "roi" in best:
             roi = json.loads(best["roi"])
-            params.update({"minimal_roi": {str(k): v for k, v in roi.items()}})
+            params.update({"minimal_roi": {str(int(float(k))): v for k, v in roi.items()}})
         if "stoploss" in amounts:
             params.update(amounts["stoploss"])
         if "trailing" in amounts:

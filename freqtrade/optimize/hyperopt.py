@@ -800,55 +800,10 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                 tr_len = len(self.trials)
                 if tr_len < 1:
                     raise OperationalException("CV requires a starting dataset.")
-                # in cross validation apply progressive filtering, tuned by hyperopt_epochs
-                intensity = prev_its = 1
-                backtrack = False
-                prev_tt_len = 0
-                max_iterations = 100
-                # use a ~0.1 histeresis for desired number of filtered epochs
-                min_tt = int(self.total_epochs * 0.9)
-                max_tt = int(self.total_epochs * 1.1)
-                if tr_len < min_tt or tr_len > max_tt:
-                    while max_iterations > 0:
-                        max_iterations -= 1
-                        logger.debug("filtering trials with intensity: %s", intensity)
-                        self.target_trials = self.filter_trials(
-                            self.trials, self.config, intensity=intensity
-                        )
-                        logger.debug("filtered trials to: %s", len(self.target_trials))
-                        # backtrack means we applied a previous intensity because we probably
-                        # offshoot the calculation
-                        tt_len = len(self.target_trials)
-                        if backtrack or self.total_epochs < 2:
-                            logger.debug(
-                                "stopped trials filtering, backtrack: %s", backtrack
-                            )
-                            break
-                        # don't filter if the filtered trials are below setting
-                        if tt_len < min_tt and tt_len != prev_tt_len:
-                            logger.debug(
-                                "decreasing intensity since %s < %s", tt_len, max_tt
-                            )
-                            prev_its = intensity
-                            intensity *= self.total_epochs / tt_len
-                            max_iterations -= 1
-                        elif tt_len > max_tt:
-                            logger.debug(
-                                "increasing intensity since %s > %s", tt_len, max_tt
-                            )
-                            prev_its = intensity
-                            intensity *= self.total_epochs / tt_len
-                        elif tt_len < min_tt and intensity < prev_its:
-                            logger.debug(
-                                "backtracking filtering because %s < %s", tt_len, min_tt
-                            )
-                            backtrack = True
-                            intensity = prev_its
-                        else:
-                            break
-                        prev_tt_len = tt_len
-                else:
-                    self.target_trials = self.trials
+
+                self.target_trials = self.progressive_filtering(
+                    self.trials, self.total_epochs, self.config
+                )
 
                 if len(self.target_trials) < 1:
                     logger.warn("Filtering returned 0 trials, using original dataset.")
@@ -1061,7 +1016,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                     jobs_scheduler(parallel, jobs)
 
                 # exceptions should be caught within each worker too
-                except KeyboardInterrupt as e:
+                except (KeyboardInterrupt, ConnectionError) as e:
                     logger.error(f"Main loop stopped. {e}")
                 # collect remaining unsaved epochs
                 backend.trials.exit = True
@@ -1179,7 +1134,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         self._setup_epochs()
 
         if not self.cv:
-            # After setup, trials are only needed by CV so can delete
+            # Only cv needs trials after setup
             self.trials.drop(self.trials.index, inplace=True)
 
         if self.cv:
