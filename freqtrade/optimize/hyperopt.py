@@ -431,20 +431,29 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         config["ask_points"] = self.ask_points
         config["n_jobs"] = self.config.get("hyperopt_jobs", -1)
         config["n_epochs"] = self.config.get("hyperopt_epochs", 10)
+        config["constraints"] = self.custom_hyperopt.constraints()
         opt_type = config.get("type", "Skopt")
         kwargs = {"seed": random_state}
+
+        def get_opt(cls):
+            return cls(parameters, config=config, **kwargs)
+
         if opt_type == "Skopt":
             from freqtrade.optimize.opts.skopt import Skopt
 
-            opt = Skopt(parameters, config=config, **kwargs)
+            opt = get_opt(Skopt)
         elif opt_type == "Sherpa":
             from freqtrade.optimize.opts.sherpa import Sherpa
 
-            opt = Sherpa(parameters, config=config, **kwargs)
+            opt = get_opt(Sherpa)
         elif opt_type == "Emukit":
             from freqtrade.optimize.opts.emukit import EmuKit
 
-            opt = EmuKit(parameters, config=config, **kwargs)
+            opt = get_opt(EmuKit)
+        elif opt_type == "Ax":
+            from freqtrade.optimize.opts.ax import Ax
+
+            opt = get_opt(Ax)
         else:
             raise OperationalException(f"Error loading optimizer type {opt_type}")
         return opt.create_optimizer(parameters, config)
@@ -490,6 +499,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
 
     def _check_points(self, t, to_ask, opt):
         # tell points if trials dispatched are above told and ask queue if empty
+        logger.debug("checking if should tell points")
         if (not opt.is_blocking) or (len(to_ask) < 1 and not self.points_checked):
             self.points_checked = True
             try:
@@ -502,6 +512,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                     backend.release_lock(backend.trials)
                 logger.debug("Couldn't tell points to the optimizer, %s", e)
         elif self.points_checked:
+            logger.debug("clearing points checked flag")
             self.points_checked = False
 
     def _tell_points(self, t, opt: IOptimizer):
@@ -512,18 +523,25 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         t_points = len(opt.Xi)
         backoff = 0
 
+        logger.debug("telling points from %s to %s", t_points + len(Xi), t)
         while t > t_points + len(Xi):
             for n_res, res in backend.trials.results.items():
                 Xi.append((list(res["params_dict"].values()), res["params_meta"],))
                 yi.append(res["loss"])
                 del backend.trials.results[n_res]
+            # the tail list can have trials if workers crashed mid run
+            for trial in backend.trials.tail_list:
+                Xi.append(list(trial["params_dict"].values()), trial["params_meta"])
+                yi.append(trial["loss"])
+
             logger.debug(
-                "fetched %s results to tell the opt, unf: %s, disp: %s, opt: %s, void: %s",
+                "fetched %s results to tell the opt, unf: %s, disp: %s, opt: %s, void: %s, t: %s",
                 len(Xi),
                 self._unfinished(),
                 backend.epochs.dispatched,
                 len(opt.Xi),
                 backend.trials.n_void,
+                t,
             )
             if not opt.is_blocking:
                 break
@@ -560,6 +578,14 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         t = 0
         sri = self.space_reduction_interval
         opt = self.opt
+        # tell previous points if any
+        params_df = self._from_group()
+        params_df = self.progressive_filtering(params_df, self.n_rand, self.config)
+        params_df.drop_duplicates(subset='Xi_h', inplace=True)
+        logger.warning("resuming optimization from %s trials", len(params_df))
+        if len(params_df):
+            Xi, yi = self.zip_points(params_df)
+            opt.tell(Xi, yi, fit=True)
 
         # loop indefinitely
         for _ in iter(lambda: 0, 1):
