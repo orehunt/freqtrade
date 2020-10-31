@@ -274,6 +274,7 @@ class HyperoptMulti(HyperoptOut):
             backend.just_reduced = True
         elif backend.just_reduced:
             backend.just_reduced = False
+        assert opt is not None
         return opt
 
     @staticmethod
