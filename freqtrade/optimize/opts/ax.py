@@ -71,6 +71,7 @@ class Ax(IOptimizer):
         opt._params_names = self._params_names
         opt._space = self._space
         opt._strategy = self._strategy
+        opt._experiment = self._experiment
         return opt
 
     def update_space(self, parameters: Iterable):
