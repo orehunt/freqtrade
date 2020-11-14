@@ -7,7 +7,7 @@ from os import makedirs
 from pathlib import Path
 from shutil import rmtree
 from time import sleep
-from typing import Any, Dict, Iterable, List, Tuple, Union
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 
 import numcodecs
 import numpy as np
@@ -94,7 +94,7 @@ class HyperoptData(backend.HyperoptBase):
     # True if optimization mode is shared or multi
     async_sched = False
 
-    metrics = ("profit", "avg_profit", "duration", "trade_count", "loss")
+    metrics = ("profit", "avg_profit", "duration", "trade_count")
     min_date: datetime
     max_date: datetime
 
@@ -397,88 +397,6 @@ class HyperoptData(backend.HyperoptBase):
         return trials
 
     @staticmethod
-    def trials_to_csv_file(
-        config: dict,
-        trials: DataFrame,
-        total_epochs: int,
-        highlight_best: bool,
-        csv_file: str,
-    ) -> None:
-        """
-        Log result to csv-file
-        """
-        if len(trials) < 1:
-            return
-
-        # Verification for overwrite
-        if path.isfile(csv_file):
-            logger.error("CSV-File already exists!")
-            return
-
-        try:
-            io.open(csv_file, "w+").close()
-        except IOError:
-            logger.error("Filed to create CSV-File!")
-            return
-
-        trials["Best"] = ""
-        trials["Stake currency"] = config["stake_currency"]
-        trials = trials[
-            [
-                "Best",
-                "current_epoch",
-                "results_metrics.trade_count",
-                "results_metrics.avg_profit",
-                "results_metrics.total_profit",
-                "Stake currency",
-                "results_metrics.profit",
-                "results_metrics.duration",
-                "loss",
-                "is_initial_point",
-                "is_best",
-            ]
-        ]
-        trials.columns = [
-            "Best",
-            "Epoch",
-            "Trades",
-            "Avg profit",
-            "Total profit",
-            "Stake currency",
-            "Profit",
-            "Avg duration",
-            "Objective",
-            "is_initial_point",
-            "is_best",
-        ]
-        trials["is_profit"] = False
-        trials.loc[trials["is_initial_point"], "Best"] = "*"
-        trials.loc[trials["is_best"], "Best"] = "Best"
-        trials.loc[trials["Total profit"] > 0, "is_profit"] = True
-        trials["Epoch"] = trials["Epoch"].astype(str)
-        trials["Trades"] = trials["Trades"].astype(str)
-
-        trials["Total profit"] = trials["Total profit"].apply(
-            lambda x: "{:,.8f}".format(x) if x != 0.0 else ""
-        )
-        trials["Profit"] = trials["Profit"].apply(
-            lambda x: "{:,.2f}".format(x) if not isna(x) else ""
-        )
-        trials["Avg profit"] = trials["Avg profit"].apply(
-            lambda x: "{:,.2f}%".format(x) if not isna(x) else ""
-        )
-        trials["Avg duration"] = trials["Avg duration"].apply(
-            lambda x: "{:,.1f} m".format(x) if not isna(x) else ""
-        )
-        trials["Objective"] = trials["Objective"].apply(
-            lambda x: "{:,.5f}".format(x) if x != 100000 else ""
-        )
-
-        trials = trials.drop(columns=["is_initial_point", "is_best", "is_profit"])
-        trials.to_csv(csv_file, index=False, header=True, mode="w", encoding="UTF-8")
-        logger.info(f"CSV-File created at {csv_file} !")
-
-    @staticmethod
     def _filter_options(config: Dict[str, Any]):
         """ Parse filtering config options into dict """
         return {
@@ -505,8 +423,8 @@ class HyperoptData(backend.HyperoptBase):
         }
 
     @staticmethod
-    def list_or_df(d: DataFrame, return_list: bool) -> Any:
-        if return_list:
+    def list_or_df(d: Optional[DataFrame], return_list: bool) -> Any:
+        if return_list and d:
             return d.to_dict("records")
         else:
             return d
@@ -603,11 +521,12 @@ class HyperoptData(backend.HyperoptBase):
 
         if len(trials) > 0:
             flt_trials = [no_trades]
+            trials, objectives = HyperoptData.expand_objectives(trials)
             if filters["dedup"]:
                 flt_trials.append(hd.dedup_trials(trials))
             if filters["best"]:
-                flt_trials.append(hd.norm_best(trials, filters, intensity))
-            flt_trials.append(hd.sample_trials(trials, filters, intensity))
+                flt_trials.append(hd.norm_best(trials, filters, objectives, intensity))
+            flt_trials.append(hd.sample_trials(trials, filters, objectives, intensity))
             return hd.list_or_df(
                 # filtering can overlap, drop dups
                 concat(flt_trials).drop_duplicates(subset="current_epoch"),
@@ -648,13 +567,28 @@ class HyperoptData(backend.HyperoptBase):
             return flt(trials, val)
 
     @staticmethod
-    def norm_best(trials: Any, filters: dict, intensity=1) -> List:
-        """ Normalize metrics and sort by sum or minimum score """
-        metrics = ("profit", "avg_profit", "duration", "trade_count", "loss")
+    def expand_objectives(trials: DataFrame) -> Tuple[DataFrame, List[str]]:
+        # expand loss into each objective
+        objectives = DataFrame(trials["loss"].values.tolist(), index=trials.index)
+        return (
+            concat([trials, objectives], axis=1),
+            objectives.columns.values.tolist(),
+        )
 
-        # invert loss and duration to simplify
-        trials["loss"] = trials["loss"].mul(-1)
+    @staticmethod
+    def norm_best(
+        trials: Any, filters: dict, objectives: List[str], intensity=1
+    ) -> Optional[DataFrame]:
+        """ Normalize metrics and sort by sum or minimum score """
+
+        # invert objectives values and duration to simplify
         trials["duration"] = trials["duration"].mul(-1)
+        trials[objectives] = trials[objectives].mul(-1)
+
+        metrics = ("profit", "avg_profit", "duration", "trade_count") + tuple(
+            objectives
+        )
+
         # calculate the normalized metrics as columns
         for m in metrics:
             m_col = trials[m].values
@@ -662,7 +596,7 @@ class HyperoptData(backend.HyperoptBase):
             m_max = m_col.max()
             trials[f"norm_{m}"] = (m_col - m_min) / ((m_max - m_min) or 1)
         # re-invert
-        trials["loss"] = trials["loss"].mul(-1)
+        trials[objectives] = trials[objectives].mul(-1)
         trials["duration"] = trials["duration"].mul(-1)
 
         # Calc cutoff percentage based on normalization
@@ -709,7 +643,7 @@ class HyperoptData(backend.HyperoptBase):
         return concat([cutoff_best, sum_best]).drop_duplicates(subset="current_epoch")
 
     @staticmethod
-    def dedup_trials(trials: DataFrame) -> DataFrame:
+    def dedup_trials(trials: DataFrame) -> Optional[DataFrame]:
         """ Filter out duplicate metrics, then filter duplicate epochs """
         metrics = HyperoptData.metrics
         dedup_metrics = []
@@ -719,13 +653,15 @@ class HyperoptData(backend.HyperoptBase):
         return concat(dedup_metrics).drop_duplicates(subset="current_epoch")
 
     @staticmethod
-    def sample_trials(trials: DataFrame, filters: Dict, intensity=1) -> DataFrame:
+    def sample_trials(
+        trials: DataFrame, filters: Dict, objectives: List[str], intensity=1
+    ) -> Optional[DataFrame]:
         """
         Pick one trial, every `step_value` of `step_metric`...
         or pick n == `range` trials for every `step_metric`...
         for every `step_metric`, sorted by `sort_metric` for every `sort_metric`...
         """
-        metrics = HyperoptData.metrics
+        metrics = HyperoptData.metrics + tuple(objectives)
         if filters["step_keys"]:
             step_keys = (
                 metrics if filters["step_keys"] == ["all"] else filters["step_keys"]

@@ -70,7 +70,8 @@ def start_hyperopt_list(args: Dict[str, Any]) -> None:
             print("User interrupted..")
 
     if n_trials and not no_details:
-        best = trials.sort_values("loss").iloc[:1].to_dict(orient="records")[:1]
+        objectives = list(trials.iloc[0]['loss'].keys())
+        best = trials.sort_values(objectives).iloc[:1].to_dict(orient="records")[:1]
         if best:
             ho.print_epoch_details(best[0], total_epochs, print_json, no_header)
 

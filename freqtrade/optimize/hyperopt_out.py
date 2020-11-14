@@ -150,7 +150,6 @@ class HyperoptOut(HyperoptData):
             )
             + f"{results['current_epoch']:5d}/{total_epochs}: "
             + f"{results['results_explanation']} "
-            + f"Objective: {results['loss']:2.2e}"
         )
 
     @staticmethod
@@ -341,7 +340,7 @@ class HyperoptOut(HyperoptData):
         # or causes a very rare exception with a resize lock held by the enlighten manager
         trials_format = (
             "Best: "
-            "{Style.BRIGHT}{backend.epochs.last_best_epoch}"
+            "{Style.BRIGHT}{backend.epochs.last_best_epoch} "
             "{Style.RESET_ALL}"
             f"{opt_format}"
             "Buf: {Style.BRIGHT}{Fore.YELLOW}{backend.trials.num_done} "
