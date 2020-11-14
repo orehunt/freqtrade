@@ -34,7 +34,7 @@ from freqtrade.configuration.configuration import Configuration, RunMode
 from freqtrade.data.btanalysis import load_trades
 from freqtrade.loggers import setup_logging, setup_logging_pre
 from freqtrade.optimize.hyperopt import Hyperopt
-from scripts.hopt.args import parse_hopt_args
+from scripts.hopt.args import parse_hopt_args, update
 from scripts.hopt.env import set_environment
 from user_data.modules import sequencer as ts
 
@@ -238,9 +238,12 @@ class Main:
         )
         self.config_spaces(amounts_group)
         config = Configuration.from_files(self.config_files)
-        config.update(self.config)
+        update(config, self.config)
         # don't clobber the optimizer config dict, only overwrite
-        config.get("hyperopt_optimizer", {}).update(self.opt_config)
+        if "hyperopt_optimizer" in config:
+            update(config["hyperopt_optimizer"], self.opt_config)
+        else:
+            config["hyperopt_optimizer"] = self.opt_config
         self.config = config
         self.config.update(self.read_json_file(self.roi_config))
         self.update_evals()
@@ -349,11 +352,16 @@ class Main:
                 self.spaces.update(amounts_group)
             else:
                 if self.args.amt == "off":
-                    config["backtesting_amounts"] = {
-                        "roi": False,
-                        "trailing": False,
-                        "stoploss": False,
-                    }
+                    update(
+                        config,
+                        {
+                            "backtesting_amounts": {
+                                "roi": False,
+                                "trailing": False,
+                                "stoploss": False,
+                            }
+                        },
+                    )
                 elif not self.args.amt:
                     config.update(self.read_json_file(self.roi_config))
                 self.spaces.update(self.sgn if self.sgn else ["buy"])
@@ -372,18 +380,18 @@ class Main:
                     cs.update({name: count})
                 spaces_dict["custom"] = cs
                 self.spaces_dict = spaces_dict
-            update = False
+            upd = False
         else:
             config["hyperopt_loss"] = "DecideCoreLoss"
             self.spaces.update(self.sgn if self.sgn else ["buy"])
-            update = True
+            upd = True
         if not self.spaces:
             self.spaces.update(self.sgn if self.sgn else ["buy"])
         if self.args.lo:
             config["hyperopt_loss"] = self.args.lo
-        self.write_json_file(spaces_dict, paths["spaces"], update=update)
+        self.write_json_file(spaces_dict, paths["spaces"], update=upd)
         config["spaces"] = self.spaces
-        self.config.update(config)
+        update(self.config, config)
 
     def get_tickers_number(self):
         with open(self.exchange_config, "r") as fe:
@@ -1063,7 +1071,9 @@ class Main:
         amounts = best["params_details"]
         if "roi" in best:
             roi = json.loads(best["roi"])
-            params.update({"minimal_roi": {str(int(float(k))): v for k, v in roi.items()}})
+            params.update(
+                {"minimal_roi": {str(int(float(k))): v for k, v in roi.items()}}
+            )
         if "stoploss" in amounts:
             params.update(amounts["stoploss"])
         if "trailing" in amounts:

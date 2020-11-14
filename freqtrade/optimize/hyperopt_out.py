@@ -194,7 +194,6 @@ class HyperoptOut(HyperoptData):
                 "total_profit",
                 "profit",
                 "duration",
-                "loss",
                 "is_initial_point",
                 "is_best",
             ],
@@ -207,7 +206,6 @@ class HyperoptOut(HyperoptData):
             "Total profit",
             "Profit",
             "Avg duration",
-            "Objective",
             "is_initial_point",
             "is_best",
         ]
@@ -232,11 +230,6 @@ class HyperoptOut(HyperoptData):
             lambda x: l(x, "{:,.1f} m").rjust(7, " ")
             if not isna(x)
             else "--".rjust(7, " ")
-        )
-        trials["Objective"] = trials["Objective"].apply(
-            lambda x: l(x, "{:,.5f}").rjust(8, " ")
-            if x != 100000
-            else "N/A".rjust(8, " ")
         )
 
         trials["Profit"] = trials.apply(
@@ -349,7 +342,6 @@ class HyperoptOut(HyperoptData):
         trials_format = (
             "Best: "
             "{Style.BRIGHT}{backend.epochs.last_best_epoch}"
-            "[{backend.epochs.last_best_loss:.02}] "
             "{Style.RESET_ALL}"
             f"{opt_format}"
             "Buf: {Style.BRIGHT}{Fore.YELLOW}{backend.trials.num_done} "

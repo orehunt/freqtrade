@@ -612,3 +612,30 @@ def join_column_names(pairs, timeframes, columns):
             for c in columns:
                 new_names.append(t + "_" + p + "_" + c)
     return new_names
+
+@njit(cache=True)
+def dont_buy_over_max_stake(max_staked, open_date, open_amount, close_date, close_amount):
+    n_trades = len(open_date)
+    avl_stake = max_staked
+    can_buy = np.full(n_trades, False)
+    outstanding = []
+    for i in range(n_trades):
+        # at start of loop check if the dates of past non closed trades
+        # are >= the date of the trade to be evaluated
+        for n, (c_date, c_amt) in enumerate(outstanding):
+            if open_date[i] >= c_date:
+                # update the current stake from closed amounts
+                avl_stake += c_amt
+                del outstanding[n]
+        # only enter new trades if available stake is >=
+        # the would be open_amount of the virtual trade
+        if avl_stake >= open_amount[i]:
+            can_buy[i] = True
+            avl_stake -= open_amount[i]
+            outstanding.append((close_date[i], close_amount[i]))
+        # check that the stake is non negative, but only
+        # end if are no open trades since those
+        # can turn stake positive again
+        elif avl_stake < 0 and not len(outstanding):
+            break
+    return can_buy

@@ -377,7 +377,8 @@ def generate_profit_graph(
     trades = extract_trades_of_period(df_comb, trades, date_index=True)
 
     # Add combined cumulative profit
-    df_comb = create_cum_profit(df_comb, trades, "cum_profit", timeframe)
+    df_comb = create_cum_profit(df_comb, trades, "cum_profit", timeframe,
+                                profit_col='profit_abs')
 
     # Plot the pairs average close prices, and total profit growth
     avgclose = go.Scatter(x=df_comb.index, y=df_comb["mean"], name="Avg close price",)
@@ -409,7 +410,8 @@ def generate_profit_graph(
             profit_col = f"cum_profit_{pair}"
             pair_trades = trades[trades["pair"] == pair]
             if len(pair_trades) > 0:
-                df_comb = create_cum_profit(df_comb, pair_trades, profit_col, timeframe)
+                df_comb = create_cum_profit(df_comb, pair_trades, profit_col, timeframe,
+                                            profit_col='profit_abs')
             else:
                 df_comb[profit_col] = 0
 

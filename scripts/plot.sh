@@ -43,8 +43,8 @@ export NUMEXPR_MAX_THREADS=16
 export FREQTRADE_NOSS=
 export FREQTRADE_USERDIR=$userdir
 freqtrade $plot_type \
-	-c $strategy \
 	-c $hyperopt \
+	-c $strategy \
 	-c $live \
 	-c $exchange \
 	-c $amounts \

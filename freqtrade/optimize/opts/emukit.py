@@ -11,11 +11,14 @@ from emukit.core.encodings import OneHotEncoding, OrdinalEncoding
 from emukit.core.loop.user_function_result import UserFunctionResult
 from emukit.experimental_design.experimental_design_loop import ExperimentalDesignLoop
 from emukit.model_wrappers.gpy_model_wrappers import GPyModelWrapper
+from emukit.examples.gp_bayesian_optimization.single_objective_bayesian_optimization import (
+    GPBayesianOptimization,
+)
 
 from freqtrade.exceptions import OperationalException
 from freqtrade.optimize.optimizer import IOptimizer
 
-from ..optimizer import CAT, RANGE
+from ..optimizer import CAT, RANGE, Loss
 
 
 class EmuKit(IOptimizer):
@@ -26,6 +29,7 @@ class EmuKit(IOptimizer):
     _init = True
     _opt = None
     _told_idx = 0
+    _params_list: ek.core.Parameter
     logging.getLogger("emukit").setLevel(logging.ERROR)
     logging.getLogger("GP").setLevel(logging.ERROR)
 
@@ -33,7 +37,6 @@ class EmuKit(IOptimizer):
         """ Return a new combination of parameters to evaluate """
         if self._init:
             # NOTE: this can overshoot the random points if the batch size is bigger
-            # Xi = [(p, {}) for p in self._space.sample_uniform(n).reshape(n, len(self._params)).tolist()]
             Xi = [(p, {"enc_p": ep}) for p, ep in zip(*self._sample_space(n))]
         else:
             Xi = []
@@ -52,7 +55,7 @@ class EmuKit(IOptimizer):
     def tell(
         self,
         Xi: Iterable[Tuple[Sequence, Dict]],
-        yi: Sequence[float],
+        yi: Sequence[Loss],
         fit=False,
         *args,
         **kwargs,
@@ -61,6 +64,7 @@ class EmuKit(IOptimizer):
         a list of tuples in the form (parameters, meta) """
         for X, y in zip(Xi, yi):
             _, meta = X
+            y = next(iter(y.values()))
             self._results.append(
                 UserFunctionResult(np.asarray(meta["enc_p"]), np.asarray((y,)))
             )
@@ -137,6 +141,7 @@ class EmuKit(IOptimizer):
                     cls = OneHotEncoding
                 encoding = cls(self.sub_to_list(par.sub))
                 new_space.append(CategoricalParameter(name=par.name, encoding=encoding))
+        self._params_list = new_space
         self._space = ek.core.parameter_space.ParameterSpace(
             new_space, constraints=None
         )
@@ -182,9 +187,13 @@ class EmuKit(IOptimizer):
                 pt_ofs += 1
         return tuple(parsed)
 
-    def ExpD(self):
+    def _validate_points(self):
         n_points = len(self.Xi)
         assert n_points == len(self.yi)
+        return n_points
+
+    def ExpD(self):
+        n_points = self._validate_points()
         if n_points > 0:
             model = GPy.models.GPRegression(
                 np.asarray(self.Xi),
@@ -195,5 +204,19 @@ class EmuKit(IOptimizer):
             self._opt = ExperimentalDesignLoop(
                 space=self._space, model=GPyModelWrapper(model)
             )
+
     def BO(self):
-        """"""
+        """ Bayesian optimization """
+        n_points = self._validate_points()
+        if n_points > 0:
+            self._opt = GPBayesianOptimization(
+                variables_list=self._params_list,
+                X=np.asarray(self.Xi),
+                Y=np.asarray(self.yi),
+                batch_size=self.ask_points,
+                model_update_interval=self._config.get("update_interval", self.n_jobs),
+                noiseless=self._config.get("noiseless", False),
+            )
+
+# class GPBayesianOptimization(GPBayesianOptimization):
+#     def _model_chooser(self):

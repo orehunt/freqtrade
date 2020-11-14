@@ -157,6 +157,7 @@ class HyperoptBacktesting(Backtesting):
         self.position_stacking = self.config.get("position_stacking", False)
         if self.config.get("max_open_trades", 0) > 0:
             logger.warn("Ignoring max open trades...")
+        self.max_staked = self.config.get("max_staked", 0)
         self.force_sell_max_duration = self.config.get("signals", {}).get(
             "force_sell_max_duration", False
         )
@@ -280,9 +281,7 @@ class HyperoptBacktesting(Backtesting):
             close_rate -= close_rate * sell_vals[:, sell_cols["spread"]]
 
         profits_abs, profits_prc = self._calc_profits(
-            open_rate,
-            close_rate,
-            calc_abs=True,
+            open_rate, close_rate, calc_abs=True,
         )
 
         trade_duration = to_timedelta(
@@ -316,10 +315,17 @@ class HyperoptBacktesting(Backtesting):
             }
         )
         results.sort_values(by="open_date", inplace=True)
+        if self.max_staked:
+            close_amount = results["amount"].values + results["profit_abs"].values
+            can_buy = dont_buy_over_max_stake(
+                self.max_staked,
+                results["open_date"].values,
+                results["amount"].values,
+                results["close_date"].values,
+                close_amount,
+            )
+            results = results[can_buy]
 
-        # loss.timeframe = self.timeframe
-        # loss.hyperopt_loss_function(results, len(results), min_date=self.min_date, max_date=self.max_date)
-        # exit()
         return results
 
     def _calc_profits(
@@ -355,9 +361,7 @@ class HyperoptBacktesting(Backtesting):
             return profits_prc.round(8)
 
     @staticmethod
-    def _calc_profits_np(
-        sa, fee, open_rate, close_rate, calc_abs, minus=1
-    ) -> Tuple:
+    def _calc_profits_np(sa, fee, open_rate, close_rate, calc_abs, minus=1) -> Tuple:
         am = sa / open_rate
         open_amount = am * open_rate
         close_amount = am * close_rate
@@ -1188,6 +1192,7 @@ class HyperoptBacktesting(Backtesting):
 
         logger.debug("applying post processing")
         df_vals = self.post_process(df_vals, self.pairs_offset)
+
 
         logger.debug("setting sold candles")
         bts_vals = self.set_sold(df_vals)

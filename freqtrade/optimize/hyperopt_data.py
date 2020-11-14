@@ -160,7 +160,6 @@ class HyperoptData(backend.HyperoptBase):
         trials = trials.astype(
             dtype={
                 "total_profit": float64,
-                "loss": float64,
                 "total_profit": float64,
                 "avg_profit": float64,
                 "duration": float64,

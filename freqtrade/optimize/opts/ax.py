@@ -3,9 +3,10 @@ from itertools import cycle
 from typing import Dict, Iterable, List, Sequence, Tuple
 
 import ax
+from ax.core.parameter import FixedParameter
 import numpy as np
 from ax.core.metric import Metric
-from ax.core.objective import Objective
+from ax.core.objective import Objective, ScalarizedObjective
 from ax.core.optimization_config import OptimizationConfig
 from ax.modelbridge.generation_strategy import GenerationStep, GenerationStrategy
 from ax.modelbridge.registry import Models
@@ -19,7 +20,6 @@ from ..optimizer import IOptimizer, Points
 class Xi(Points):
     _client: AxClient
     _parameters_names: List[str]
-    counter = 0
 
     def __init__(self, client: AxClient):
         self._client = client
@@ -34,7 +34,7 @@ class Xi(Points):
         del self._client.experiment._trials[item]
 
     def __len__(self):
-        return self.counter
+        return len(self._client.experiment._trials)
 
 
 class yi(Xi):
@@ -46,7 +46,7 @@ class yi(Xi):
     def __getitem__(self, item):
         res = self._client.get_trials_data_frame().loc[item, "objective"]
         if isinstance(res, Iterable):
-            return res.values.tolist()
+            return res.values
         else:
             return res
 
@@ -118,12 +118,22 @@ class Ax(IOptimizer):
                     pt = ax.ParameterType.BOOL
                 else:
                     raise ValueError("Can't set parameter type for %s", par.name)
-                new_space[par.name] = ax.ChoiceParameter(
-                    name=par.name,
-                    parameter_type=pt,
-                    values=par.sub,
-                    is_ordered=is_ordered,
-                )
+
+                kwargs = {
+                    "name": par.name,
+                    "parameter_type": pt,
+                    "values": par.sub,
+                    "is_ordered": is_ordered,
+                }
+                if len(par.sub) < 2:
+                    del kwargs["values"]
+                    del kwargs["is_ordered"]
+                    kwargs["value"] = par.sub[0]
+                    cls = ax.FixedParameter
+                else:
+                    cls = ax.ChoiceParameter
+
+                new_space[par.name] = cls(**kwargs)
 
         constraints = []
         cs_config = self._config.get("constraints", {})
@@ -165,40 +175,47 @@ class Ax(IOptimizer):
     def _rand_model(self):
         return getattr(Models, next(self._random_sampling))
 
-    def _setup_mode(self):
-
+    def _setup_experiment(self):
+        if self.algo == "MOO":
+            metrics = self._config.get("Ax", {}).get("MOO", {}).get("metrics", [])
+            objective = ScalarizedObjective(metrics, minimize=True)
+        else:
+            objective = Objective(
+                metric=Metric(name="objective", lower_is_better=True,),
+            )
         self._experiment = ax.Experiment(
             name="experiment",
             search_space=self._space,
             optimization_config=OptimizationConfig(
-                objective=Objective(
-                    metric=Metric(name="objective", lower_is_better=True,),
-                ),
+                objective=objective,
                 outcome_constraints=self._config.get("outcome_constraints"),
             ),
         )
 
+    def _setup_mode(self):
+
         self.algo = next(self._algos_pool)
         if not self.algo:
             self.algo = "auto"
+        self._setup_experiment()
         kwargs = {"random_seed": self.rs}
         steps = [
             GenerationStep(
                 self._rand_model(),
                 num_trials=self.n_rand,
                 min_trials_observed=self.ask_points,
-                model_kwargs=kwargs
+                model_kwargs=kwargs,
             )
         ]
         if self.algo == "rand":
             model = self._rand_model()
-        elif self.algo == "MOO":
-            model = Models.MOO
         elif self.algo == "auto":
             model = Models.GPMES
         else:
             model = getattr(Models, self.algo)
-        steps.append(GenerationStep(model, num_trials=self.n_epochs, model_kwargs=kwargs))
+        steps.append(
+            GenerationStep(model, num_trials=self.n_epochs, model_kwargs=kwargs)
+        )
         self._strategy = GenerationStrategy(steps)
 
     def create_optimizer(self, parameters: Iterable, config) -> IOptimizer:
@@ -226,23 +243,19 @@ class Ax(IOptimizer):
     def tell(
         self,
         Xi: Iterable[Tuple[Sequence, Dict]],
-        yi: Sequence[float],
+        yi: Sequence[Loss],
         fit=True,
         *args,
         **kwargs
     ):
         # at the start attach trials
-        if self._Xi.counter == 0:
+        if len(self.Xi) == 0:
             for n, obs in enumerate(Xi):
                 X, _ = obs[0], obs[1]
                 params = {k: v for k, v in zip(self._params_names, X)}
                 _, idx = self._client.attach_trial(params)
                 self._client.complete_trial(trial_index=idx, raw_data=yi[n])
-                self._yi.counter += 1
-                self._Xi.counter += 1
         else:
             for n, obs in enumerate(Xi):
                 X, meta = obs[0], obs[1]
                 self._client.complete_trial(trial_index=meta["idx"], raw_data=yi[n])
-                self._yi.counter += 1
-                self._Xi.counter += 1

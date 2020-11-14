@@ -193,8 +193,8 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         return result
 
     @staticmethod
-    def is_best_loss(trial, current_best_loss: float) -> bool:
-        return isfinite(trial["loss"]) & (trial["loss"] < current_best_loss)
+    def is_best_loss(trial, current_best_loss: Dict[str, float]) -> bool:
+        return all(trial["loss"][k] < current_best_loss[k] for k in current_best_loss)
 
     def has_space(self, space: str) -> bool:
         """
@@ -329,6 +329,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         )
         hyperoptloss.min_date = min_date
         hyperoptloss.max_date = max_date
+        hyperoptloss.config = config
 
     def _setup_loss_funcs(self):
         """ Map a (cycled) list of loss functions to the optimizers random states """
@@ -381,7 +382,9 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         loss: float = VOID_LOSS
         if trade_count >= self.config["hyperopt_min_trades"]:
             loss_func = (
-                self.calculate_loss_dict[rs] if rs is not None and self.multi_loss else self.calculate_loss
+                self.calculate_loss_dict[rs]
+                if rs is not None and self.multi_loss
+                else self.calculate_loss
             )
             loss = loss_func(
                 results=backtesting_results,
@@ -390,12 +393,6 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                 max_date=max_date.datetime,
                 processed=processed,
             )
-            if not np.isfinite(loss):
-                logger.warning(
-                    "loss result by %s is not finite, using VOID_LOSS value",
-                    loss_func.__name__,
-                )
-                loss = VOID_LOSS if np.isnan(loss) else np.sign(loss) * VOID_LOSS
         return {
             "loss": loss,
             "params_dict": params_dict,
@@ -581,7 +578,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         # tell previous points if any
         params_df = self._from_group()
         params_df = self.progressive_filtering(params_df, self.n_rand, self.config)
-        params_df.drop_duplicates(subset='Xi_h', inplace=True)
+        params_df.drop_duplicates(subset="Xi_h", inplace=True)
         logger.warning("resuming optimization from %s trials", len(params_df))
         if len(params_df):
             Xi, yi = self.zip_points(params_df)
@@ -651,6 +648,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             v["is_initial_point"] = t < cls.n_rand if cls.cv else False
             v["random_state"] = cls.random_state  # this is 0 in CV
             v["Xi_h"] = hash(cls.params_Xi(v))
+            v["loss"] = HyperoptMulti.filter_loss_vals(v["loss"])
             backend.trials_list.append(v)
             trials_state.num_done += 1
         else:
@@ -698,10 +696,10 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                 f"Optimizer epoch evaluated: %s, yi: %s", v["current_epoch"], v["loss"]
             )
             if is_best:
-                ep.improvement = abs(
-                    ep.current_best_loss[rs] / (v["loss"] or ep.current_best_loss[rs])
-                    - 1
-                )
+                imp = 0
+                for cur, last in zip(ep.current_best_loss[rs].values(), v["loss"].values()):
+                    imp += abs( cur / (last or cur) - 1 )
+                ep.improvement = imp
                 ep.current_best_epoch[rs] = ep.last_best_epoch = current
                 ep.current_best_loss[rs] = ep.last_best_loss = v["loss"]
         # in single mode push the results to the main worker
@@ -846,10 +844,10 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         if self.multi:
             for rs in self.rngs:
                 ep.current_best_epoch[rs] = 0
-                ep.current_best_loss[rs] = VOID_LOSS
+                ep.current_best_loss[rs] = {self.custom_hyperoptloss.metrics: VOID_LOSS}
         else:
             ep.current_best_epoch[None] = 0
-            ep.current_best_loss[None] = VOID_LOSS
+            ep.current_best_loss[None] = {self.custom_hyperoptloss: VOID_LOSS}
         # shared collections have to use the manager
         len_trials = len(self.trials)
         ep.epochs_since_last_best = backend.manager.list([0, 0])

@@ -334,7 +334,7 @@ def combine_dataframes_with_mean(data: Dict[str, pd.DataFrame],
 
 
 def create_cum_profit(
-    df: pd.DataFrame, trades: pd.DataFrame, col_name: str, timeframe: str
+        df: pd.DataFrame, trades: pd.DataFrame, col_name: str, timeframe: str, profit_col='profit_percent'
 ) -> pd.DataFrame:
     """
     Adds a column `col_name` with the cumulative profit for the given trades array.
@@ -352,7 +352,7 @@ def create_cum_profit(
     timeframe_minutes = timeframe_to_minutes(timeframe)
     # Resample to timeframe to make sure trades match candles
     _trades_sum = trades.resample(f'{timeframe_minutes}min', on='close_date'
-                                  )[['profit_percent']].sum()
+                                  )[profit_col].sum()
     df.loc[:, col_name] = _trades_sum.cumsum()
     # Set first value to 0
     df.loc[df.iloc[0].name, col_name] = 0

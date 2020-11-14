@@ -4,7 +4,7 @@ import logging
 from abc import abstractmethod
 from enum import IntEnum
 from types import SimpleNamespace
-from typing import Any, Dict, Iterable, List, Sequence, Tuple, Union
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 from itertools import cycle
 
 import numpy as np
@@ -37,6 +37,8 @@ class ParameterKind(IntEnum):
 CAT = ParameterKind.CAT
 RANGE = ParameterKind.RANGE
 MIX = ParameterKind.MIX
+
+Loss = Dict[str, float]
 
 
 class Parameter(SimpleNamespace):
@@ -196,8 +198,8 @@ class IOptimizer:
     _args: Tuple
     _kwargs: Dict
     _config: Dict
-    _Xi: Points
-    _yi: Points
+    _Xi: Optional[Points] = None
+    _yi: Optional[Points] = None
     _models: Points
 
     def __init__(
@@ -225,7 +227,9 @@ class IOptimizer:
         self._kwargs = kwargs
         self._setup_missing_tags_handler()
 
-    def copy(self, rand: int = None, new_seed: bool = False) -> IOptimizer:
+    def copy(
+        self, rand: Optional[int] = None, new_seed: Optional[bool] = False
+    ) -> IOptimizer:
         """
         Return a new instance of the optimizer with modified rng, from the previous
         optimizer random state
@@ -338,7 +342,7 @@ class IOptimizer:
     def tell(
         self,
         Xi: Iterable[Tuple[Sequence, Dict]],
-        yi: Sequence[float],
+        yi: Sequence[Loss],
         fit=False,
         *args,
         **kwargs,
@@ -347,17 +351,25 @@ class IOptimizer:
         a list of tuples in the form (parameters, meta) """
 
     @abstractmethod
-    def exploit(self, loss_tail: List[float], current_best: float, *args, **kwargs):
+    def exploit(
+        self, loss_tail: List[Loss], current_best: Loss, *args, **kwargs,
+    ):
         """ Tune search for exploitation """
 
     @abstractmethod
-    def explore(self, loss_tail: List[float], current_best: float, *args, **kwargs):
+    def explore(self, loss_tail: List[List], current_best: Loss, *args, **kwargs):
         """ Tune search for exploration """
 
     @property
     def can_tune(self) -> bool:
         """ Optimizer should return True if it provides eploit/explore methods """
         return False
+
+    @property
+    def multi_obj(self) -> bool:
+        """ True if the optimizer supports multi objective optimization """
+        return False
+
     @property
     def accepts_nans(self) -> bool:
         """ Optimzer can receive NaN observation results """

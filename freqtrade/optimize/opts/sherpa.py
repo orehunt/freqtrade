@@ -14,7 +14,7 @@ from sherpa.core import Trial
 from freqtrade.exceptions import OperationalException
 from user_data.modules.helper import read_json_file
 
-from ..optimizer import CAT, RANGE, IOptimizer, Points
+from ..optimizer import CAT, RANGE, IOptimizer, Points, Loss
 
 
 hash = partial(hash, hash_name="sha1")
@@ -107,46 +107,50 @@ class Sherpa(IOptimizer):
         # if self.algo in ("PBT", "ASHA"):
         #     if len(self._iterations) and not len(self.Xi):
         #         raise OperationalException(f"Can't ask for new points before telling old ones")
-        for n in range(1 if n is None else n):
-            trial = self._study.get_suggestion()
-            # check if optimizer is DONE
-            if trial is str or trial is None:
-                self.void = True
-                return asked
-            tp = trial.parameters
-            # the parameters dict has keys other than just parameters
-            # with some algos, (like PBT)
-            tp_tup = tuple(tp[name] for name in self._params_names)
-            # we only set the meta keys once since we assume they are
-            # always the same for a particular mode of operation
-            if not self._meta_keys:
-                spn = set(self._params_names)
-                self._meta_keys = set(k for k in tp if k not in spn)
-                # cols = self._study.results.columns.values.tolist()
-                # for mk in self._meta_keys:
-                #     if mk not in self._study.results.columns:
-                #         cols.append(mk)
-                # self._study.results.columns = cols
-            meta = {k: trial.parameters[k] for k in self._meta_keys}
-            meta["trial_id"] = trial.id
-            h = hash(tp_tup)
-            self._obs[h] = trial
-            asked.append((tp_tup, meta))
-            if trial.id not in self._iterations:
-                self._iterations[trial.id] = 1
+        try:
+            for n in range(1 if n is None else n):
+                trial = self._study.get_suggestion()
+                # check if optimizer is DONE
+                if trial is str or trial is None:
+                    self.void = True
+                    return asked
+                tp = trial.parameters
+                # the parameters dict has keys other than just parameters
+                # with some algos, (like PBT)
+                tp_tup = tuple(tp[name] for name in self._params_names)
+                # we only set the meta keys once since we assume they are
+                # always the same for a particular mode of operation
+                if not self._meta_keys:
+                    spn = set(self._params_names)
+                    self._meta_keys = set(k for k in tp if k not in spn)
+                    # cols = self._study.results.columns.values.tolist()
+                    # for mk in self._meta_keys:
+                    #     if mk not in self._study.results.columns:
+                    #         cols.append(mk)
+                    # self._study.results.columns = cols
+                meta = {k: trial.parameters[k] for k in self._meta_keys}
+                meta["trial_id"] = trial.id
+                h = hash(tp_tup)
+                self._obs[h] = trial
+                asked.append((tp_tup, meta))
+                if trial.id not in self._iterations:
+                    self._iterations[trial.id] = 1
+        except KeyError as e:
+            raise KeyError("possible conflicting (saved) trials: %s", e)
 
         return asked
 
     def tell(
         self,
         Xi: Iterable[Tuple[Sequence, Dict]],
-        yi: Sequence[float],
+        yi: Sequence[Loss],
         fit=False,
         *args,
         **kwargs,
     ) -> Any:
         for n, obs in enumerate(Xi):
             X, meta = obs[0], obs[1]
+            y = next(iter(yi[n].values()))
             h = hash(tuple(p for p in X))
             # IN PBT gotta tell the same points
             if self.algo != "PBT" and h in self._evaluated:
@@ -167,7 +171,7 @@ class Sherpa(IOptimizer):
                 trial = self._obs[h]
                 itr = self._iterations[trial.id]
                 del self._obs[h]
-            self._study.add_observation(trial, objective=yi[n], iteration=itr)
+            self._study.add_observation(trial, objective=y, iteration=itr)
             if (itr or 1) >= self.epoch_to_obs or self.algo == "PBT":
                 self._study.finalize(trial)
             self._iterations[trial.id] += 1

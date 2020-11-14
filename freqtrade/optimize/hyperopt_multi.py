@@ -5,7 +5,9 @@ import os
 from functools import partial
 
 # use math finite check for small loops
+from math import copysign
 from math import isfinite as is_finite
+from math import isnan as is_nan
 from multiprocessing.managers import SyncManager
 from queue import Queue
 from time import time as now
@@ -13,20 +15,7 @@ from typing import Dict, Iterable, List, Optional, Tuple, Union
 
 import numpy as np
 from joblib import Parallel, delayed, hash
-from numpy import (
-    array,
-    asarray,
-    fromiter,
-    inf,
-    isfinite,
-    isin,
-    nan,
-    nanmax,
-    nanmean,
-    nanmin,
-    nanstd,
-    nanvar,
-)
+from numpy import array, fromiter, isin, nanmean
 from numpy.core.numeric import flatnonzero
 from pandas import DataFrame
 
@@ -231,6 +220,7 @@ class HyperoptMulti(HyperoptOut):
         # get an optimizer instance
         if s_opt:
             backend.opt = s_opt
+            logger.debug("opt %s was kept in global state", s_opt.rs)
             return s_opt
         # check if a space reduction has been performed
         # and delete current parameters if so
@@ -331,7 +321,7 @@ class HyperoptMulti(HyperoptOut):
                             axis=0,
                             inplace=True,
                         )
-                    params_df.drop_duplicates(subset='Xi_h', inplace=True)
+                    params_df.drop_duplicates(subset="Xi_h", inplace=True)
                     backend.release_lock(trials_state)
             except (KeyError, FileNotFoundError, IOError, OSError,) as e:
                 # only happens when df is empty and empty df is not saved
@@ -373,7 +363,11 @@ class HyperoptMulti(HyperoptOut):
             # this can (at least) happen if space reduction has been performed and the
             # points of the previous tests are outside the new search space
             except ValueError as e:
-                logger.info("telling points to the optimizer at startup got: %s", e)
+                logger.info(
+                    "telling points (had %s) to the optimizer at startup got: %s",
+                    len(opt.Xi),
+                    e,
+                )
         elif len(opt.Xi):
             # get a new point by copy if didn't tell new ones
             logger.debug("no new points were found to tell, rolling a new optimizer..")
@@ -421,12 +415,11 @@ class HyperoptMulti(HyperoptOut):
         if len(void_filtered) > 0:
             void = False
         # the last run for save doesn't run other trials
-        elif opt.void_loss != VOID_LOSS and not backend.is_exit(trials_state):
+        elif not backend.is_exit(trials_state):
             void = False
         else:
             void = True
-        # NOTE: some trials at the beginning won't be published
-        # because they are removed by filter_void_losses
+
         rs = opt.rs
         if not void:
             # set initial point flag and optimizer random state
@@ -462,10 +455,8 @@ class HyperoptMulti(HyperoptOut):
             # after saving epochs also update optimizer acquisition
             # since there will be new loss scores
             if self.adjust_acquisition:
+                logger.debug("adjusting acquisition for opt %s", opt.rs)
                 opt = self.opt_adjust_acq(opt, jobs, epochs, trials_state, is_shared)
-            # update the void loss to a worse one
-            if opt.yi:
-                opt.void_loss = nanmax(opt.yi)
         self.opt_state(s_opt=opt)
 
     def maybe_log_trials(
@@ -530,7 +521,7 @@ class HyperoptMulti(HyperoptOut):
                 backend.yi.append(r[1])
             # delete from the managed list, the whole list, since copy is not a reference
             del last_results, trials_state.last_results[opt.rs]
-            assert opt.rs not in trials_state.last_results
+            # assert opt.rs not in trials_state.last_results
 
         # at startup always fetch previous points from storage,
         # in shared mode periodically check for new points computed by other workers,
@@ -559,14 +550,12 @@ class HyperoptMulti(HyperoptOut):
             for X in untested_Xi
         ]
         # filter losses
-        if opt.accepts_nans:
-            void_filtered = trials
-        else:
-            void_filtered = HyperoptMulti.filter_void_losses(
+        if not opt.accepts_nans:
+            trials = HyperoptMulti.filter_void_losses(
                 trials, opt, trials_state, is_shared
             )
 
-        cls.opt_log_trials(opt, void_filtered, t, jobs, is_shared, trials_state, epochs)
+        cls.opt_log_trials(opt, trials, t, jobs, is_shared, trials_state, epochs)
         # disable gc at the end to prevent disposal of global vars
 
         gc.disable()
@@ -673,7 +662,7 @@ class HyperoptMulti(HyperoptOut):
             )
         n_tail = backend.just_saved * jobs
         if is_shared:
-            loss = fromiter(backend.Xi_h.values(), dtype=float)
+            loss = array(list(backend.Xi_h.values()))
         else:
             loss = array(opt.yi)
             last_period = last_period // jobs
@@ -722,9 +711,9 @@ class HyperoptMulti(HyperoptOut):
 
             # increase exploitation around
             # any obs that exhibits a better (lower) score
-            last_mean = nanmean(loss_last)
+            last_mean = nanmean(DataFrame(loss_last).values)
             epochs.average = last_mean
-            if nanmean(loss_tail) < last_mean:
+            if nanmean(DataFrame(loss_tail).values) < last_mean:
                 # decrement for exploitation if was previous exploring
                 if not backend.exploit:
                     epochs.explo -= 1
@@ -768,33 +757,54 @@ class HyperoptMulti(HyperoptOut):
         backend.exploit = 0
 
     @staticmethod
+    def _loss_vals(trial):
+        loss_arr = np.fromiter(trial["loss"].values(), dtype=float)
+        return is_finite(loss_arr).all() and (loss_arr != VOID_LOSS).all()
+
+    @staticmethod
     def filter_void_losses(
         trials: List, opt: IOptimizer, trials_state: TrialsState, is_shared=False
     ) -> List:
         """ Remove out of bound losses from the results """
-        if opt.void_loss == VOID_LOSS and (
-            (len(backend.Xi_h) < 1 and is_shared) or (len(opt.Xi) < 1 and not is_shared)
-        ):
-            # only exclude results at the beginning when void loss is yet to be set
-            void_filtered = list(
-                filter(
-                    lambda t: is_finite(t["loss"]) and t["loss"] is not VOID_LOSS,
-                    trials,
-                )
-            )
-            # assert isfinite([t["loss"] for t in void_filtered]).all()
-        else:
-            if opt.void_loss == VOID_LOSS:  # set void loss once
-                if is_shared:
-                    if trials_state.void_loss == VOID_LOSS:
-                        trials_state.void_loss = nanmax(list(backend.Xi_h.values()))
-                    opt.void_loss = trials_state.void_loss
-                else:
-                    opt.void_loss = nanmax(opt.yi)
-            void_filtered = []
-            # default bad losses to set void_loss
-            for n, t in enumerate(trials):
-                if t["loss"] == VOID_LOSS or not isfinite(t["loss"]):
-                    trials[n]["loss"] = opt.void_loss
-            void_filtered = trials
-        return void_filtered
+        # if opt.void_loss == VOID_LOSS and (
+        #     (len(backend.Xi_h) < 1 and is_shared) or (len(opt.Xi) < 1 and not is_shared)
+        # ):
+        # only exclude results at the beginning when void loss is yet to be set
+        # void_filtered = list(
+        #     filter(
+        #         self._loss_vals,
+        #         trials,
+        #     )
+        # )
+        # assert isfinite([t["loss"] for t in void_filtered]).all()
+        # else:
+        # if opt.void_loss == VOID_LOSS:  # set void loss once
+        #     if is_shared:
+        #         if trials_state.void_loss == VOID_LOSS:
+        #             trials_state.void_loss = nanmax(list(backend.Xi_h.values()))
+        #         opt.void_loss = trials_state.void_loss
+        #     else:
+        #         opt.void_loss = nanmax(opt.yi)
+        # void_filtered = []
+        # # default bad losses to set void_loss
+        # for n, t in enumerate(trials):
+        #     if t["loss"] == VOID_LOSS or not isfinite(t["loss"]):
+        #         trials[n]["loss"] = opt.void_loss
+        # void_filtered = trials
+        for t in trials:
+            for k in t["loss"]:
+                val = t["loss"][k]
+                if is_nan(val):
+                    t["loss"][k] = VOID_LOSS
+                elif not is_finite(val):
+                    t["loss"][k] = copysign(VOID_LOSS, t["loss"][k])
+        return trials
+
+    @staticmethod
+    def filter_loss_vals(loss: Dict[str, float]):
+        for k, val in loss.items():
+            if is_nan(val):
+                loss[k] = VOID_LOSS
+            elif not is_finite(val):
+                loss[k] = copysign(VOID_LOSS, val)
+        return loss

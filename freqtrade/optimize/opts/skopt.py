@@ -1,14 +1,15 @@
 import warnings
+from pandas import DataFrame
 from decimal import Decimal
 from itertools import cycle
-from typing import Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional
 
 from numpy import nanmean, nanmin, nanstd, nanvar
 from psutil import virtual_memory
 
 from freqtrade.exceptions import OperationalException
 
-from ..optimizer import CAT, RANGE, IOptimizer
+from ..optimizer import CAT, RANGE, IOptimizer, Loss
 
 
 with warnings.catch_warnings():
@@ -64,11 +65,21 @@ class Skopt(IOptimizer):
             asked = [(tuple(p for p in asked), {})]
         return asked
 
+    def copy(
+        self, rand: Optional[int] = None, new_seed: Optional[bool] = None
+    ) -> IOptimizer:
+        opt = super().copy(rand, new_seed)
+        opt._opt = self._opt
+        opt._lie_strat = self._lie_strat
+        opt._all_real = self._all_real
+        return opt
+
     def tell(self, Xi, yi, fit=False, *args, **kwargs):
         if not isinstance(Xi, Iterable):
             Xi, yi = (Xi,), (yi,)
         # remove meta dict from params
         Xi = [pars for pars, _ in Xi]
+        yi = [next(iter(loss.values())) for loss in yi]
         told = self._opt.tell(Xi, yi, fit)
         if fit and not self._fit:
             self._fit = True
@@ -102,7 +113,9 @@ class Skopt(IOptimizer):
             base_estimator=base_estimator,
             acq_optimizer=acq_optimizer,
             acq_func=self.chosen_acq_func,
-            n_initial_points=self.n_rand,
+            # always use a minimum of initial points because
+            # scikit doesn't like when there isn't enough data (throws a value error)
+            n_initial_points=max(8, self.n_rand),
             acq_optimizer_kwargs={
                 "n_jobs": n_jobs,
                 "n_points": self.calc_n_points(
@@ -222,27 +235,29 @@ class Skopt(IOptimizer):
             self.chosen_acq_func = self._config.get("acq_func", "gp_hedge")
             self.opt_acq_optimizer = self._config.get("acq_opt", "auto")
 
-    def exploit(self, loss_tail: List[float], current_best: float, *args, **kwargs):
+    def exploit(self, loss_tail: List[Loss], current_best: Loss, *args, **kwargs):
         xi = kappa = None
+        loss_vals = DataFrame(loss_tail).values[:, 0]
+        best_val = next(iter(current_best.values()))
         # default xi is 0.01, we want some 10e even lower values
         if self._opt.acq_func in ("PI", "gp_hedge"):
-            _, digits, exponent = Decimal(nanvar(loss_tail)).as_tuple()
+            _, digits, exponent = Decimal(nanvar(loss_vals)).as_tuple()
             if len(digits) and digits[0]:
-                xi = nanstd(loss_tail) * 10 ** -abs(len(digits) + exponent - 1) or 0.01
+                xi = nanstd(loss_vals) * 10 ** -abs(len(digits) + exponent - 1) or 0.01
             else:
                 xi = 0.01
         # with EI that supports negatives we can just use negative std
         elif self._opt.acq_func == "EI":
-            xi = -nanstd(loss_tail)
+            xi = -nanstd(loss_vals)
         # LCB uses kappa instead of xi, and is based on variance
         if self._opt.acq_func in ("LCB", "gp_hedge"):
-            kappa = nanvar([current_best, nanmin(loss_tail)]) or nanvar(
+            kappa = nanvar([best_val, nanmin(loss_vals)]) or nanvar(
                 # use mean when we just found a new best as var would be 0
-                [current_best, nanmean(loss_tail)]
+                [best_val, nanmean(loss_vals)]
             )
         self._opt.acq_func_kwargs.update({"xi": xi, "kappa": kappa})
 
-    def explore(self, loss_tail: List[float], current_best: float, *args, **kwargs):
+    def explore(self, loss_tail: List[Loss], current_best: Loss, *args, **kwargs):
         xi = kappa = None
         loss_last = kwargs["loss_last"]
         tail_position = kwargs["tail_position"]

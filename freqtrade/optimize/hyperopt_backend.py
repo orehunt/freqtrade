@@ -84,8 +84,8 @@ class Epochs(Namespace):
     improvement: float
     average: float
     explo: int
-    current_best_loss: Dict[Union[None, int], float]
-    last_best_loss: float
+    current_best_loss: Dict[Union[None, int], Dict[str, float]]
+    last_best_loss: Dict[str, float]
     current_best_epoch: Dict[Union[None, int], int]
     last_best_epoch: int
     avg_wait_time: float
