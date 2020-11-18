@@ -509,7 +509,7 @@ class Main:
         # the last epoch is needed to check correct paramters in case of continuing epochs
         last = trials.iloc[-1:].to_dict("records")[0]
         # sort is ascending, and loss min is better so iloc[:1] to get the best value
-        best = trials.sort_values("loss").iloc[:1].to_dict("records")[0]
+        best = self.ho.get_best_trial(trials)
         return trials, best, last
 
     prev_cond, cond_best, run_best = {}, inf, inf

@@ -379,7 +379,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         # interesting -- consider it as 'bad' (assigned max. loss value)
         # in order to cast this hyperspace point away from optimization
         # path. We do not want to optimize 'hodl' strategies.
-        loss: float = VOID_LOSS
+        loss = {m: VOID_LOSS for m in self.custom_hyperoptloss.metrics}
         if trade_count >= self.config["hyperopt_min_trades"]:
             loss_func = (
                 self.calculate_loss_dict[rs]
@@ -697,8 +697,10 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             )
             if is_best:
                 imp = 0
-                for cur, last in zip(ep.current_best_loss[rs].values(), v["loss"].values()):
-                    imp += abs( cur / (last or cur) - 1 )
+                for cur, last in zip(
+                    ep.current_best_loss[rs].values(), v["loss"].values()
+                ):
+                    imp += abs(cur / (last or cur) - 1)
                 ep.improvement = imp
                 ep.current_best_epoch[rs] = ep.last_best_epoch = current
                 ep.current_best_loss[rs] = ep.last_best_loss = v["loss"]
@@ -844,10 +846,14 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         if self.multi:
             for rs in self.rngs:
                 ep.current_best_epoch[rs] = 0
-                ep.current_best_loss[rs] = {self.custom_hyperoptloss.metrics: VOID_LOSS}
+                ep.current_best_loss[rs] = {
+                    m: VOID_LOSS for m in self.custom_hyperoptloss.metrics
+                }
         else:
             ep.current_best_epoch[None] = 0
-            ep.current_best_loss[None] = {self.custom_hyperoptloss: VOID_LOSS}
+            ep.current_best_loss[None] = {
+                m: VOID_LOSS for m in self.custom_hyperoptloss.metrics
+            }
         # shared collections have to use the manager
         len_trials = len(self.trials)
         ep.epochs_since_last_best = backend.manager.list([0, 0])
@@ -1154,15 +1160,11 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             trials = self.load_trials(
                 self.trials_file, self.trials_instance, backend.trials,
             )
-            best_trial = (
-                trials.sort_values(by="loss").iloc[:1].to_dict(orient="records")
-            )[:1]
+            best_trial = self.get_best_trial(trials)
 
-            if len(best_trial):
-                logger.debug("best trial: %s", best_trial[0])
-                self.print_epoch_details(
-                    best_trial[0], self.epochs_limit, self.print_json
-                )
+            if best_trial:
+                logger.debug("best trial: %s", best_trial)
+                self.print_epoch_details(best_trial, self.epochs_limit, self.print_json)
         elif print_best:
             # This is printed when Ctrl+C is pressed quickly, before first epochs have
             # a chance to be evaluated.

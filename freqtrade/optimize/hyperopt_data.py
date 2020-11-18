@@ -568,12 +568,21 @@ class HyperoptData(backend.HyperoptBase):
 
     @staticmethod
     def expand_objectives(trials: DataFrame) -> Tuple[DataFrame, List[str]]:
-        # expand loss into each objective
-        objectives = DataFrame(trials["loss"].values.tolist(), index=trials.index)
+        # get objectives names
+        objs = list(trials.iloc[0]["loss"].keys())
+        if objs[0] not in trials.columns:
+            # expand loss into each objective
+            objectives = DataFrame(trials["loss"].values.tolist(), index=trials.index)
         return (
             concat([trials, objectives], axis=1),
-            objectives.columns.values.tolist(),
+            objs,
         )
+
+    @staticmethod
+    def get_best_trial(trials: DataFrame) -> Dict[str, Any]:
+        trials, objs = HyperoptData.expand_objectives(trials)
+        return trials.sort_values(by=objs).iloc[:1].to_dict("records")[0]
+
 
     @staticmethod
     def norm_best(
