@@ -12,7 +12,7 @@ from functools import partial
 from itertools import cycle
 from time import sleep
 from time import time as now
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 from colorama import init as colorama_init
@@ -27,7 +27,7 @@ from joblib import (
     wrap_non_picklable_objects,
 )
 from joblib.externals.loky import get_reusable_executor
-from numpy import iinfo, int32, isfinite
+from numpy import iinfo, int32
 from pandas import DataFrame, Timedelta, concat, json_normalize
 
 # Import IHyperOpt and IHyperOptLoss to allow unpickling classes from these modules
@@ -331,23 +331,28 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         hyperoptloss.max_date = max_date
         hyperoptloss.config = config
 
-    def _setup_loss_funcs(self):
+    def _setup_loss_func(self, rs: Optional[int]):
         """ Map a (cycled) list of loss functions to the optimizers random states """
-        self.adjust_acquisition = self.config.get("hyperopt_adjust_acquisition", True)
         config = self.config.copy()
+        metrics = None
         if self.multi and self.multi_loss:
-            self.calculate_loss_dict = {}
-            loss_func_list = cycle(self.config.get("hyperopt_loss_multi", []))
+            if not self.calculate_loss_dict:
+                self.calculate_loss_dict = {}
+            loss_func_list = self.config.get("hyperopt_loss_multi", [])
             logger.debug("Cycling over loss functions: %s", loss_func_list)
             # NOTE: the resolver walks over all the files in the dir on each call
-            for rs in self.rngs:
-                config["hyperopt_loss"] = next(loss_func_list)
-                hyperoptloss = HyperOptLossResolver.load_hyperoptloss(config)
-                self._set_hyperoptloss_attrs(
-                    hyperoptloss, config, self.min_date, self.max_date
-                )
-                self.calculate_loss_dict[rs] = hyperoptloss.hyperopt_loss_function
-        else:
+            config["hyperopt_loss"] = loss_func_list[
+                # use modulo to cycle over loss functions
+                len(self.calculate_loss_dict)
+                % len(loss_func_list)
+            ]
+            hyperoptloss = HyperOptLossResolver.load_hyperoptloss(config)
+            self._set_hyperoptloss_attrs(
+                hyperoptloss, config, self.min_date, self.max_date
+            )
+            self.calculate_loss_dict[rs] = hyperoptloss.hyperopt_loss_function
+            metrics = hyperoptloss.metrics
+        elif not self.custom_hyperoptloss:
             self.custom_hyperoptloss = HyperOptLossResolver.load_hyperoptloss(
                 self.config
             )
@@ -355,6 +360,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                 self.custom_hyperoptloss, config, self.min_date, self.max_date
             )
             self.calculate_loss = self.custom_hyperoptloss.hyperopt_loss_function
+        return metrics or self.custom_hyperoptloss.metrics
 
     def _get_result(
         self,
@@ -393,6 +399,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                 max_date=max_date.datetime,
                 processed=processed,
             )
+            loss = self.filter_loss_vals(loss)
         return {
             "loss": loss,
             "params_dict": params_dict,
@@ -420,7 +427,9 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             "duration": backtesting_results.trade_duration.mean(),
         }
 
-    def get_optimizer(self, random_state: int = None, parameters=[]) -> IOptimizer:
+    def get_optimizer(
+        self, random_state: Optional[int] = None, parameters=[]
+    ) -> IOptimizer:
         " Construct an optimizer object "
         config = self.config.get("hyperopt_optimizer", {})
         config["mode"] = self.mode
@@ -429,6 +438,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         config["n_jobs"] = self.config.get("hyperopt_jobs", -1)
         config["n_epochs"] = self.config.get("hyperopt_epochs", 10)
         config["constraints"] = self.custom_hyperopt.constraints()
+        config["metrics"] = self._setup_loss_func(random_state)
         opt_type = config.get("type", "Skopt")
         kwargs = {"seed": random_state}
 
@@ -921,6 +931,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                 config = SINGLE_SPACE_CONFIG
         self.space_reduction_interval = config["hyperopt_spc_red_interval"]
         self.space_reduction_config = config
+        self.adjust_acquisition = self.config.get("hyperopt_adjust_acquisition", True)
 
     def _set_random_state(self, random_state: Optional[int]) -> int:
         if self.cv:
@@ -1132,7 +1143,8 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
 
         if not self.cv:
             self._setup_optimizers()
-        self._setup_loss_funcs()
+        else:
+            self._setup_loss_func(None)
 
         # Count the epochs
         self._setup_epochs()

@@ -1,20 +1,26 @@
 import logging
 from itertools import cycle
-from typing import Dict, Iterable, List, Sequence, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 import ax
-from ax.core.parameter import FixedParameter
 import numpy as np
 from ax.core.metric import Metric
 from ax.core.objective import Objective, ScalarizedObjective
-from ax.core.optimization_config import OptimizationConfig
+from ax.core.optimization_config import (
+    MultiObjectiveOptimizationConfig,
+    ObjectiveThreshold,
+    OptimizationConfig,
+)
+from ax.modelbridge import ModelBridge
+from ax.modelbridge.factory import get_MOO_PAREGO
 from ax.modelbridge.generation_strategy import GenerationStep, GenerationStrategy
 from ax.modelbridge.registry import Models
+from ax.runners.synthetic import SyntheticRunner
 from ax.service.ax_client import AxClient
 
 from freqtrade.optimize.optimizer import CAT, RANGE, IOptimizer
 
-from ..optimizer import IOptimizer, Points
+from ..optimizer import IOptimizer, Loss, Points
 
 
 class Xi(Points):
@@ -54,23 +60,34 @@ class yi(Xi):
         del self._client.experiment._trials[item]
 
 
+ALGOS = cycle(("BOTORCH", "GPEI", "GPKG", "GPMES",))
+
+
 class Ax(IOptimizer):
     _space: ax.SearchSpace
+    _model = Union[Models, Callable[..., ModelBridge]]
     _strategy: GenerationStrategy
     _random_sampling = cycle(("SOBOL",))
     _client: AxClient
     _params_names: Sequence[str]
+    _is_init = True
+    _metrics: List[str]
     is_blocking = False
 
     logging.getLogger("ax.modelbridge.transforms.int_to_float").setLevel(logging.ERROR)
     logging.getLogger("ax.service.ax_client").setLevel(logging.ERROR)
+
+    def __init__(self, parameters: Iterable, seed=None, config={}, *args, **kwargs):
+        super().__init__(parameters, seed, config, *args, **kwargs)
+        if self._config.get("algo") == "auto":
+            self._algos_pool = ALGOS
 
     def copy(self, *args, **kwargs) -> IOptimizer:
         opt = super().copy(*args, **kwargs)
         opt._client = self._client
         opt._params_names = self._params_names
         opt._space = self._space
-        opt._strategy = self._strategy
+        opt._model = self._model
         opt._experiment = self._experiment
         return opt
 
@@ -112,7 +129,7 @@ class Ax(IOptimizer):
                     pt = ax.ParameterType.STRING
                 elif isinstance(test, (float, np.float64, np.float32)):
                     pt = ax.ParameterType.FLOAT
-                elif isinstance(test, (float, np.int64, np.int32)):
+                elif isinstance(test, (int, np.int64, np.int32)):
                     pt = ax.ParameterType.INT
                 elif isinstance(test, (bool, np.bool)):
                     pt = ax.ParameterType.BOOL
@@ -177,68 +194,120 @@ class Ax(IOptimizer):
 
     def _setup_experiment(self):
         if self.algo == "MOO":
-            metrics = self._config.get("Ax", {}).get("MOO", {}).get("metrics", [])
+            metrics = [Metric(m, lower_is_better=True,) for m in self._metrics]
             objective = ScalarizedObjective(metrics, minimize=True)
+            OptCfg = MultiObjectiveOptimizationConfig
+            cfg_kwargs = {
+                "objective_thresholds": [
+                    ObjectiveThreshold(metric=m, bound=np.nan) for m in metrics
+                ]
+            }
         else:
+            OptCfg = OptimizationConfig
             objective = Objective(
                 metric=Metric(name="objective", lower_is_better=True,),
             )
+            cfg_kwargs = {}
         self._experiment = ax.Experiment(
             name="experiment",
             search_space=self._space,
-            optimization_config=OptimizationConfig(
+            optimization_config=OptCfg(
                 objective=objective,
                 outcome_constraints=self._config.get("outcome_constraints"),
+                **cfg_kwargs,
             ),
+            runner=SyntheticRunner(),
         )
 
-    def _setup_mode(self):
+    def _setup_model(self):
 
         self.algo = next(self._algos_pool)
         if not self.algo:
             self.algo = "auto"
-        self._setup_experiment()
-        kwargs = {"random_seed": self.rs}
-        steps = [
-            GenerationStep(
-                self._rand_model(),
-                num_trials=self.n_rand,
-                min_trials_observed=self.ask_points,
-                model_kwargs=kwargs,
-            )
-        ]
         if self.algo == "rand":
             model = self._rand_model()
         elif self.algo == "auto":
             model = Models.GPMES
+        elif self.algo == "MOO":
+            model = get_MOO_PAREGO
         else:
             model = getattr(Models, self.algo)
-        steps.append(
-            GenerationStep(model, num_trials=self.n_epochs, model_kwargs=kwargs)
-        )
+        self._model = model
+
+    def _setup_strategy(self):
+        kwargs = {}
+        steps = []
+        if self._is_init:
+            steps.append(
+                GenerationStep(
+                    self._rand_model(),
+                    num_trials=self.n_rand,
+                    min_trials_observed=self.ask_points,
+                    model_kwargs=kwargs,
+                )
+            )
+        if self.algo != "MOO":
+            steps.append(
+                GenerationStep(self._model, num_trials=-1, model_kwargs=kwargs)
+            )
+        else:
+            steps.append(
+                GenerationStep(get_MOO_PAREGO, num_trials=-1, model_kwargs=kwargs)
+            )
         self._strategy = GenerationStrategy(steps)
+
+    def _setup_client(self):
+        self._setup_strategy()
+        self._client = AxClient(
+            generation_strategy=self._strategy,
+            random_seed=self.rs,
+            verbose_logging=False,
+        )
+        self._setup_experiment()
+        self._client._experiment = self._experiment
+        self._Xi = Xi(self._client)
+        self._yi = yi(self._client)
 
     def create_optimizer(self, parameters: Iterable, config) -> IOptimizer:
         if parameters is not None:
             self.update_space(parameters)
             self._params_names = list(p.name for p in parameters)
+        self._metrics = list(self._config.get("metrics", []))
 
-        self._setup_mode()
+        self._setup_model()
+        self._setup_client()
 
-        self._client = AxClient(random_seed=self.rs, verbose_logging=False)
-        self._client._experiment = self._experiment
-        self._client._generation_strategy = self._strategy
-        self._Xi = Xi(self._client)
-        self._yi = yi(self._client)
         return self
 
     def ask(self, n, *args, **kwargs) -> List[Tuple[Tuple, Dict]]:
         asked = []
-        for n in range(n):
-            tp, idx = self._client.get_next_trial()
-            tp_tup = tuple(tp[p] for p in self._params_names)
-            asked.append((tp_tup, {"idx": idx}))
+        try:
+            for n in range(n):
+                tp, idx = self._client.get_next_trial()
+                tp_tup = tuple(tp[p] for p in self._params_names)
+                asked.append((tp_tup, {"idx": idx}))
+        except Exception as e:
+            print(f"Exception asking optimizer with algo {self.algo}: ", e)
+            import traceback
+
+            traceback.print_exc()
         return asked
+
+    def _get_y(self, yin):
+        if self.algo != "MOO":
+            return next(iter(yin.values()))
+        else:
+            return {m: (yin[m], None) for m in yin}
+
+    def _attach_trials(self, Xi, yi, x_has_meta=True):
+        for n, obs in enumerate(Xi):
+            if x_has_meta:
+                X, _ = obs[0], obs[1]
+            else:
+                X = list(obs.values())
+            params = {k: v for k, v in zip(self._params_names, X)}
+            _, idx = self._client.attach_trial(params)
+            self._client.complete_trial(trial_index=idx, raw_data=self._get_y(yi[n]))
 
     def tell(
         self,
@@ -246,16 +315,14 @@ class Ax(IOptimizer):
         yi: Sequence[Loss],
         fit=True,
         *args,
-        **kwargs
+        **kwargs,
     ):
         # at the start attach trials
         if len(self.Xi) == 0:
-            for n, obs in enumerate(Xi):
-                X, _ = obs[0], obs[1]
-                params = {k: v for k, v in zip(self._params_names, X)}
-                _, idx = self._client.attach_trial(params)
-                self._client.complete_trial(trial_index=idx, raw_data=yi[n])
+            self._attach_trials(Xi, yi)
         else:
             for n, obs in enumerate(Xi):
-                X, meta = obs[0], obs[1]
-                self._client.complete_trial(trial_index=meta["idx"], raw_data=yi[n])
+                _, meta = obs[0], obs[1]
+                self._client.complete_trial(
+                    trial_index=meta["idx"], raw_data=self._get_y(yi[n])
+                )

@@ -241,6 +241,7 @@ class IOptimizer:
         opt = self.__class__(
             self._params, rand or self.rs, self._config, *self._args, **self._kwargs
         )
+        opt.algo = self.algo
         opt.void_loss = self.void_loss
         opt.void = self.void
         opt._Xi = self._Xi

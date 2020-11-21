@@ -47,7 +47,12 @@ def start_hyperopt_list(args: Dict[str, Any]) -> None:
     if config.get("hyperopt_list_recount", False):
         logger.info("Rearranging trials with an ordered count")
         trials["current_epoch"] = range(1, len(trials) + 1)
-    trials = ho.filter_trials(trials, config).copy()
+    # filtering already normalizes objectives into columns
+    if config.get('hyperopt_list_filter', False):
+        trials = ho.filter_trials(trials, config).copy()
+        objectives = []
+    else:
+        trials, objectives = ho.expand_objectives(trials)
     n_trials = len(trials)
     logger.info(f"Filtered trials down to {n_trials}...")
 
@@ -70,7 +75,8 @@ def start_hyperopt_list(args: Dict[str, Any]) -> None:
             print("User interrupted..")
 
     if n_trials and not no_details:
-        objectives = list(trials.iloc[0]['loss'].keys())
+        if not objectives:
+            objectives = list(trials.iloc[0]['loss'].keys())
         best = trials.sort_values(objectives).iloc[:1].to_dict(orient="records")[:1]
         if best:
             ho.print_epoch_details(best[0], total_epochs, print_json, no_header)

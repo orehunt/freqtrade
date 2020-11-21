@@ -1077,6 +1077,12 @@ class Main:
         if "stoploss" in amounts:
             params.update(amounts["stoploss"])
         if "trailing" in amounts:
+            amounts["trailing"]["trailing_stop"] = bool(
+                amounts["trailing"]["trailing_stop"]
+            )
+            amounts["trailing"]["trailing_only_offset_is_reached"] = bool(
+                amounts["trailing"]["trailing_only_offset_is_reached"]
+            )
             params.update(amounts["trailing"])
         if params:
             print(f"updating amounts at {amounts_path}")

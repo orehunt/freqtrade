@@ -93,6 +93,8 @@ class HyperoptData(backend.HyperoptBase):
     n_rand = 10
     # True if optimization mode is shared or multi
     async_sched = False
+    # loss
+    custom_hyperoptloss = None
 
     metrics = ("profit", "avg_profit", "duration", "trade_count")
     min_date: datetime

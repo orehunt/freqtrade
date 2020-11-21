@@ -520,7 +520,7 @@ class HyperoptMulti(HyperoptOut):
                 backend.Xi.append(r[0])
                 backend.yi.append(r[1])
             # delete from the managed list, the whole list, since copy is not a reference
-            del last_results, trials_state.last_results[opt.rs]
+            del trials_state.last_results[opt.rs], last_results,
             # assert opt.rs not in trials_state.last_results
 
         # at startup always fetch previous points from storage,

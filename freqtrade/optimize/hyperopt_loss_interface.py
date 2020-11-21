@@ -5,6 +5,7 @@ This module defines the interface for the loss-function for hyperopt
 
 from abc import ABC, abstractmethod
 from datetime import datetime
+from typing import Dict, List
 
 from pandas import DataFrame
 
@@ -14,7 +15,9 @@ class IHyperOptLoss(ABC):
     Interface for freqtrade hyperopt Loss functions.
     Defines the custom loss function (`hyperopt_loss_function()` which is evaluated every epoch.)
     """
+
     timeframe: str
+    metrics: List[str]
 
     @staticmethod
     @abstractmethod
@@ -25,7 +28,7 @@ class IHyperOptLoss(ABC):
         max_date: datetime,
         *args,
         **kwargs
-    ) -> float:
+    ) -> Dict[str, float]:
         """
         Objective function, returns smaller number for better results
         """
