@@ -63,6 +63,7 @@ class DictArr(NamedTuple):
 
 class Features(NamedTuple):
     roi_enabled: Union[bool, None]
+    weighted_roi: Union[bool, None]
     stoploss_enabled: Union[bool, None]
     trailing_enabled: Union[bool, None]
     not_position_stacking: Union[bool, None]
@@ -70,8 +71,8 @@ class Features(NamedTuple):
 
 TIMEFRAME_WND = {
     "1m": 60,  # 1h
-    "5m": 12,  # 1h
-    "15m": 8,  # 2h
+    "5m": 24,  # 2h
+    "15m": 16,  # 4h
     "30m": 16,  # 8h
     "1h": 24,  # 24h
     "8h": 90,  # 30 days

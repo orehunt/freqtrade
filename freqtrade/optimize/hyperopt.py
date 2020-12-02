@@ -194,7 +194,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
 
     @staticmethod
     def is_best_loss(trial, current_best_loss: Dict[str, float]) -> bool:
-        return all(trial["loss"][k] < current_best_loss[k] for k in current_best_loss)
+        return all(trial["loss"][k] <= current_best_loss[k] for k in current_best_loss)
 
     def has_space(self, space: str) -> bool:
         """
@@ -710,7 +710,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                 for cur, last in zip(
                     ep.current_best_loss[rs].values(), v["loss"].values()
                 ):
-                    imp += abs(cur / (last or cur) - 1)
+                    imp += abs(cur / (last or cur or 1) - 1)
                 ep.improvement = imp
                 ep.current_best_epoch[rs] = ep.last_best_epoch = current
                 ep.current_best_loss[rs] = ep.last_best_loss = v["loss"]
@@ -779,7 +779,10 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             # truncate hash to 4 digits
             str(hash([d.name for d in self.parameters]))[:4],
         )
-        logger.info(f"Hyperopt state will be saved to " f"key {self.trials_instance}")
+        cv_tail = "_cv" if self.cv else ""
+        logger.info(
+            f"Hyperopt state will be saved to " f"key {self.trials_instance}{cv_tail}"
+        )
 
         self.cleanup_store_tables()
 
@@ -789,6 +792,9 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             if load_instance == "cv":
                 trials_instance = self.trials_instance + "_cv"
             # or load directly from specified instance
+            elif load_instance == "last":
+                with open(self.last_instance_file, "r") as li:
+                    trials_instance = json.load(li)
             elif load_instance:
                 trials_instance = load_instance
             else:
@@ -816,7 +822,9 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                 )
 
                 if len(self.target_trials) < 1:
-                    logger.warn("Filtering returned 0 trials, using original dataset.")
+                    logger.warning(
+                        "Filtering returned 0 trials, using original dataset."
+                    )
                     self.target_trials = self.trials
                 else:
                     logger.info(
@@ -826,13 +834,18 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                     )
             elif len(self.trials) > 0 and not self.async_sched:
                 if self.random_state != self.trials.iloc[-1]["random_state"]:
-                    logger.warn("Random state in saved trials doesn't match runtime...")
+                    logger.warning(
+                        "Random state in saved trials doesn't match runtime..."
+                    )
         if self.cv:
             # CV trials are saved in their own table
             self.trials_instance += "_cv"
             # reset cv trials only if not specified
             if not load_instance or load_instance != "cv":
                 self.clear_instance(self.trials_file, self.trials_instance)
+        # update the last instance name
+        with open(self.last_instance_file, "w") as li:
+            json.dump(self.trials_instance, li)
 
     @property
     def epochs_limit(self) -> int:
@@ -882,23 +895,25 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                 if self.multi:
                     for rs in self.rngs:
                         # sorting from lowest to highest, the first value is the current best
-                        opt_best = self.trials[self.trials["random_state"].values == rs]
-                        if len(opt_best) > 0:
-                            best = opt_best.sort_values(by=["loss"]).iloc[0].to_dict()
+                        opt_trials = self.trials[
+                            self.trials["random_state"].values == rs
+                        ]
+                        if len(opt_trials) > 0:
+                            best = self.get_best_trial(opt_trials)
                             ep.current_best_epoch[rs] = best["current_epoch"]
                             ep.current_best_loss[rs] = best["loss"]
                     # group by random state, get the lowest loss for each state, then pick the one with
                     # the highest current_epoch
                     last_best_trial = (
                         self.trials.groupby("random_state")
-                        .apply(lambda x: x.sort_values(by=["loss"]).iloc[0])
+                        .apply(partial(self.get_best_trial, as_dict=False))
                         .sort_values(by="current_epoch")
                         .iloc[-1]
                     ).to_dict()
                     ep.last_best_epoch = last_best_trial["current_epoch"]
                     ep.last_best_loss = last_best_trial["loss"]
                 else:
-                    best = self.trials.sort_values(by=["loss"]).iloc[0].to_dict()
+                    best = self.get_best_trial(self.trials)
                     ep.current_best_epoch[None] = ep.last_best_epoch = best[
                         "current_epoch"
                     ]

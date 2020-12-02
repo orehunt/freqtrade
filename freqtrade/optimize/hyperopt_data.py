@@ -67,6 +67,7 @@ class HyperoptData(backend.HyperoptBase):
     trials_instance: str
     # store the indentifier string here
     trials_instances_file: Path
+    last_instance_file: Path
     # when to save trials
     trials_timeout: float
     trials_maxout: int
@@ -117,6 +118,9 @@ class HyperoptData(backend.HyperoptBase):
 
         self.trials_instances_file = (
             self.config["user_data_dir"] / self.hyperopt_dir / "trials_instances.json"
+        )
+        self.last_instance_file = (
+            self.config["user_data_dir"] / self.hyperopt_dir / "last_instance.json"
         )
         self.data_pickle_file = (
             self.config["user_data_dir"] / self.hyperopt_dir / "processed_data.pkl"
@@ -575,16 +579,19 @@ class HyperoptData(backend.HyperoptBase):
         if objs[0] not in trials.columns:
             # expand loss into each objective
             objectives = DataFrame(trials["loss"].values.tolist(), index=trials.index)
+            trials = concat([trials, objectives], axis=1)
         return (
-            concat([trials, objectives], axis=1),
+            trials,
             objs,
         )
 
     @staticmethod
-    def get_best_trial(trials: DataFrame) -> Dict[str, Any]:
+    def get_best_trial(trials: DataFrame, as_dict=True) -> Dict[str, Any]:
         trials, objs = HyperoptData.expand_objectives(trials)
-        return trials.sort_values(by=objs).iloc[:1].to_dict("records")[0]
-
+        if as_dict:
+            return trials.sort_values(by=objs).iloc[:1].to_dict("records")[0]
+        else:
+            return trials.sort_values(by=objs).iloc[:1]
 
     @staticmethod
     def norm_best(
@@ -812,22 +819,13 @@ class HyperoptData(backend.HyperoptBase):
         return trials
 
     @staticmethod
-    def get_last_instance(trials_instances_file: Path, cv=False) -> str:
+    def get_last_instance(last_instance_file: Path) -> str:
         """
         When an instance is not specified get the last one saved,
         should be used by hyperopt related commands
         """
-        with open(trials_instances_file, "r") as tif:
-            instances = json.load(tif)
-        if len(instances) < 1:
-            raise OperationalException(
-                f"No instances were found at {trials_instances_file}"
-            )
-        else:
-            if cv:
-                return "{}_cv".format(instances[-1])
-            else:
-                return instances[-1]
+        with open(last_instance_file, "r") as lif:
+            return json.load(lif)
 
     @staticmethod
     def clear_instance(

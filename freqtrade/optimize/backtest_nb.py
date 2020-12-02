@@ -1,4 +1,5 @@
 from typing import Optional
+import logging
 
 import numba as nb
 import numpy as np
@@ -8,6 +9,7 @@ from numpy import ndarray
 from freqtrade.optimize.backtest_constants import *
 from freqtrade.optimize.backtest_utils import *
 
+logger = logging.getLogger(__name__)
 
 @njit(cache=True, nogil=True)
 def for_trail_idx(index, trig_idx, next_sold) -> int64[:]:
@@ -114,6 +116,7 @@ def pct_change(arr, period, window=None):
             wnd[pw:] += pct[pw + n : -pw + n]
         return wnd / window
     return pct
+
 
 # https://stackoverflow.com/a/62841583/2229761
 @njit(cache=True, nogil=True)
@@ -405,13 +408,51 @@ def roi_is_triggered(*args):
 @njit(cache=True, nogil=True)
 def roi_is_triggered_op(n, i, high_profit, inv_roi_timeouts, inv_roi_values, fl_cols):
     for t, tm in enumerate(inv_roi_timeouts):
-        # i is the timeframe counter for the current trade at the current position
+        # i is the timeframe counter for the current trade at the current position (trade duration)
         # tm is the timeframe count after which a roi ratio is enabled
         # a roi with tm == 0 should be enabled at i == 0
         # a roi with tm 3 should not be enabled at i == 2
         if tm <= i:
             if high_profit > inv_roi_values[t]:
                 fl_cols["col_roi_profit"][n] = inv_roi_values[t]
+                fl_cols["col_roi_triggered"][n] = True
+                return True
+    return False
+
+
+@njit(cache=True, nogil=True)
+def calc_roi_weight(
+    trade_dur: int, roi_val: int, roi_tm: int, roi_next_val: int, roi_next_tm: int
+):
+    """ roi calculation weighted by elapsed time, weight is linear """
+    roi_timespan = roi_next_tm - roi_tm
+    roi_elapsed = trade_dur - roi_tm
+    roi_next_ratio = roi_elapsed / roi_timespan if roi_timespan > 0 else 1
+    roi_ratio = 1 - roi_next_ratio
+    return (roi_val * roi_ratio + roi_next_val * roi_next_ratio) / 2
+
+
+@njit(cache=True, nogil=True)
+def weighted_roi_is_triggered_op(
+    n, i, high_profit, inv_roi_timeouts, inv_roi_values, fl_cols
+):
+    for t, tm in enumerate(inv_roi_timeouts):
+        if tm <= i:
+            next_t = t - 1 if t > 0 else t
+            weight = calc_roi_weight(
+                # trade dur
+                i,
+                # current roi value
+                inv_roi_values[t],
+                # current roi timeout
+                tm,
+                # next roi value
+                inv_roi_values[next_t],
+                # next roi timeout
+                inv_roi_timeouts[next_t],
+            )
+            if high_profit > weight:
+                fl_cols["col_roi_profit"][n] = weight
                 fl_cols["col_roi_triggered"][n] = True
                 return True
     return False
@@ -478,11 +519,13 @@ def copy_trigger_data(b, tf, n, fl_cols, it_cols):
 def define_callbacks(feat):
     global calc_stoploss_static, stoploss_is_triggered
     if feat["stoploss_enabled"] or feat["trailing_enabled"]:
+        logger.debug("enabling stoploss calculation")
         calc_stoploss_static = calc_stoploss_static_op
         stoploss_is_triggered = stoploss_is_triggered_op
 
     global calc_trailing_rate
     if feat["trailing_enabled"]:
+        logger.debug("enabling trailing calculation")
         calc_trailing_rate = calc_trailing_rate_op
 
     global calc_high_profit
@@ -491,10 +534,16 @@ def define_callbacks(feat):
 
     global roi_is_triggered
     if feat["roi_enabled"]:
-        roi_is_triggered = roi_is_triggered_op
+        if feat["weighted_roi"]:
+            logger.debug("enabling weighted roi calculation")
+            roi_is_triggered = weighted_roi_is_triggered_op
+        else:
+            logger.debug("enabling static roi calculation")
+            roi_is_triggered = roi_is_triggered_op
 
     global get_last_trigger, set_last_trigger, trade_is_overlap
     if feat["not_position_stacking"]:
+        logger.debug("enabling sequential position")
         get_last_trigger = get_last_trigger_op
         set_last_trigger = set_last_trigger_op
         trade_is_overlap = trade_is_overlap_op
@@ -556,7 +605,10 @@ def iter_triggers(
 
             # otherwise check against new high
             high_profit = calc_high_profit(
-                buy_rate, fl_cols["ohlc_high"][tf], fl_cols["stake_amount"][b], fl["fee"]
+                buy_rate,
+                fl_cols["ohlc_high"][tf],
+                fl_cols["stake_amount"][b],
+                fl["fee"],
             )
             stoploss_rate = calc_trailing_rate(
                 stoploss_rate, tf, bl, high_profit, fl_cols, fl
@@ -613,8 +665,11 @@ def join_column_names(pairs, timeframes, columns):
                 new_names.append(t + "_" + p + "_" + c)
     return new_names
 
+
 @njit(cache=True)
-def dont_buy_over_max_stake(max_staked, open_date, open_amount, close_date, close_amount):
+def dont_buy_over_max_stake(
+    max_staked, min_stake, open_date, open_amount, close_date, close_amount
+):
     n_trades = len(open_date)
     avl_stake = max_staked
     can_buy = np.full(n_trades, False)
@@ -636,6 +691,6 @@ def dont_buy_over_max_stake(max_staked, open_date, open_amount, close_date, clos
         # check that the stake is non negative, but only
         # end if are no open trades since those
         # can turn stake positive again
-        elif avl_stake < 0 and not len(outstanding):
+        elif avl_stake < min_stake and not len(outstanding):
             break
     return can_buy

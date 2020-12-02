@@ -29,6 +29,7 @@ def _loop_candles_select_triggers(
         k: v[k] or None
         for k in (
             "roi_enabled",
+            "weighted_roi",
             "stoploss_enabled",
             "trailing_enabled",
             "not_position_stacking",

@@ -34,7 +34,7 @@ def parse_hopt_args() -> dict:
     # "all": all
     # "allone": all, then one by one
     # "byone": one by one
-    parser.add_argument("-amt", help="spaces for amounts", default="", type=str)
+    parser.add_argument("-amt", help="spaces for amounts", default="on:roi,stoploss,trailing", type=str)
     parser.add_argument("-edg", help="spaces for edge amounts", action="store_true")
     parser.add_argument("-pp", help="path for pairlist for profits tuning", default="")
     parser.add_argument("-ne", help="optimize evals number", type=str, default="")
@@ -71,7 +71,7 @@ def parse_hopt_args() -> dict:
     parser.add_argument("-i", help="timeframe", type=str, default="1h")
     parser.add_argument("-cvg", help="max convergence ratio", type=float, default=0.5)
     parser.add_argument("-rand", help="random state", type=int)
-    parser.add_argument("-alg", help="optimizer algo", type=str, default="rand")
+    parser.add_argument("-alg", help="optimizer algo", type=str, default="skopt:rand")
     parser.add_argument("-psco", help="print scores", action="store_true")
     parser.add_argument("-inst", help="trials instance name", type=str, default="")
     parser.add_argument(

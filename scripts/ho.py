@@ -123,9 +123,11 @@ class Main:
     # optimizer
     config["hyperopt_epochs"] = args.e
     config["hyperopt_mode"] = args.mode
+    opt, alg = args.alg.split(":")
     opt_config = {
         "lie_strat": args.lie,
-        "algo": args.alg,
+        "type": opt,
+        "algo": alg,
         "meta_tag_conflict": args.mtc,
     }
     config["hyperopt_ask_points"] = args.pts
@@ -155,7 +157,8 @@ class Main:
     if sgn[0] == "":
         sgn = []
     spaces = set()
-    amounts_groups = [("roi",), ("stoploss", "trailing")]
+    amounts_groups = [("roi",), ("stoploss",)]
+    amounts_names = ("roi", "trailing", "stoploss")
 
     # make a stub lock to save trials from outside hyperopt
     # stub = lambda: None
@@ -245,7 +248,8 @@ class Main:
         else:
             config["hyperopt_optimizer"] = self.opt_config
         self.config = config
-        self.config.update(self.read_json_file(self.roi_config))
+        # NOTE: this should be needed since config_spaces takes care of proper amounts config
+        # self.config.update(self.read_json_file(self.roi_config))
         self.update_evals()
 
     def update_config(self, amounts_group=None):
@@ -257,10 +261,15 @@ class Main:
         # don't prefer sell signal when optimizing buy space
         if "buy" in self.spaces:
             self.config["ask_strategy"]["prefer_sell_signal"] = False
-            logger.warn("Disabling prefer_sell_signal")
+            logger.warning("Disabling prefer_sell_signal")
         elif "sell" in self.spaces:
             self.config["ask_strategy"]["prefer_sell_signal"] = True
-            logger.warn("Enabling prefer_sell_signal")
+            logger.warning("Enabling prefer_sell_signal")
+        if "buy" not in self.spaces and "sell" not in self.spaces:
+            logger.warning(
+                "Disabling force_sell_max_duration since buy/sell not in space"
+            )
+            self.config["signals"]["force_sell_max_duration"] = False
         self.update_evals()
 
     def parse_pairs(self, pa=args.pa):
@@ -339,32 +348,42 @@ class Main:
             config["hyperopt_loss"] = "SharpeLoss"
             if self.args.amt:
                 # disable position stacking when optimizing amounts
+                logger.warning("Position stacking is disabled during amounts optimization")
                 config["position_stacking"] = False
-            # in -1 first run is all, then 1 by 1
-            # in 1 only one run with all spaces
-            if self.args.amt in ("all", "allone") and amounts_group == None:
-                self.spaces.update(["roi", "stoploss", "trailing"])
-            elif self.args.amt == "byone" and amounts_group != None:
+            amt = self.args.amt.split(":")
+            amt_mode = amt[0]
+            prefs = (
+                amt[1].split(",")
+                if len(amt) > 1
+                else self.amounts_names
+            )
+            if amt_mode == "test":
                 config.update(self.read_json_file(self.amounts_tuned_config))
-                # delete previous amounts when optimizing 1 by 1
-                for s in ("roi", "stoploss", "trailing"):
-                    self.spaces.discard(s)
-                self.spaces.update(amounts_group)
+                if amounts_group == "roi":
+                    self.spaces.discard("stoploss")
+                    self.spaces.discard("trailing")
+                    self.spaces.add("roi")
+                elif amounts_group == "stoploss":
+                    self.spaces.discard("roi")
+                    self.spaces.add("stoploss")
+                    self.spaces.add("trailing")
+            elif amt_mode in ("on", "off"):
+                config.update(self.read_json_file(self.roi_config))
+                enabled = amt_mode == "on"
+                bta = {a: not enabled for a in self.amounts_names}
+                for p in prefs:
+                    assert p in self.amounts_names
+                    bta[p] = enabled
+                update(
+                    config, {"backtesting_amounts": bta},
+                )
+            # make sure something is in the space
+            if not self.sgn:
+                sp = ["buy"]
+                logger.warning("adding buy space since space was empty")
             else:
-                if self.args.amt == "off":
-                    update(
-                        config,
-                        {
-                            "backtesting_amounts": {
-                                "roi": False,
-                                "trailing": False,
-                                "stoploss": False,
-                            }
-                        },
-                    )
-                elif not self.args.amt:
-                    config.update(self.read_json_file(self.roi_config))
-                self.spaces.update(self.sgn if self.sgn else ["buy"])
+                sp = self.sgn
+            self.spaces.update(sp)
             if self.args.ne:
                 if not self.args.lo:
                     config["hyperopt_loss"] = "DecideCoreLoss"
@@ -981,20 +1000,14 @@ class Main:
     def opt_amounts(self, amounts=args.amt):
         # disable ignore roi
         if "roi" in self.spaces or "all" in self.spaces:
+            logger.warning("disabling ignore_roi_if_buy_signal since ROI is being optimized")
             self.config["ask_strategy"]["ignore_roi_if_buy_signal"] = False
         # reset best
         self.write_json_file({"run_best": None}, paths["best"], update=False)
-        if amounts == "all":
-            self.run_hyperopt()
-            return
-        else:
-            if amounts == "allone":
-                # this does a first run with all the limit, then loop one by one
-                self.run_hyperopt()
-            if amounts in ("allone", "byone"):
-                for grp in self.amounts_groups:
-                    self.run_hyperopt(amounts_group=grp)
-                    self.update_amounts()
+        runs = amounts.split(":")[1].split(",")
+        for grp in runs:
+            self.run_hyperopt(amounts_group=grp)
+            self.update_amounts()
 
     def opt_amounts_per_pair(self):
         pairs_amounts_path = f"{self.config_dir}/amounts/pairs"
@@ -1085,8 +1098,10 @@ class Main:
             )
             params.update(amounts["trailing"])
         if params:
+            amounts = {"amounts": params}
+            amounts.update(params)
             print(f"updating amounts at {amounts_path}")
-            self.write_json_file(params, amounts_path)
+            self.write_json_file(amounts, amounts_path)
             self.write_json_file(
                 {"run_best": best["loss"]}, paths["best"], update=False
             )
@@ -1307,7 +1322,7 @@ class Main:
             self.concat_pairs_amounts(self.args.cat)
         elif self.args.pp:
             self.opt_amounts_per_pair()
-        elif self.args.amt not in ("", "off"):
+        elif self.args.amt.split(":")[0] == "test":
             self.opt_amounts(self.args.amt)
         elif self.args.pl:
             self.pick_limits()

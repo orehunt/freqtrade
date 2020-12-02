@@ -2,6 +2,7 @@ import logging
 from itertools import cycle
 from functools import partial
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
+import random
 
 import numpy as np
 import pandas as pd
@@ -183,6 +184,8 @@ class Sherpa(IOptimizer):
         self, parameters: Optional[Iterable] = None, config={}
     ) -> IOptimizer:
         " Construct an optimizer object "
+        random.seed(self.rs)
+
         if parameters is not None:
             self.update_space(parameters)
             self._params_names = list(p.name for p in parameters)
@@ -263,6 +266,17 @@ class Sherpa(IOptimizer):
                 raise OperationalException(
                     "PBT and ASHA not compatible with shared mode"
                 )
+            if self.algo == "LOC":
+                if self.n_jobs > 1 and self.mode != "multi":
+                    raise OperationalException(
+                        "LOC mode only works with one worker, use multi mode"
+                        "for parallel evals"
+                    )
+                if self.ask_points > 1:
+                    raise OperationalException(
+                        "LOC mode only evaluates one point at a time, set"
+                        "ask_points to 1"
+                    )
             # kwargs = self._config.get("opt_kwargs", {})
             kwargs = self.algo_args()
             if self.algo in dir(self):

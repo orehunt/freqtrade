@@ -89,6 +89,8 @@ class IStrategy(ABC):
 
     # associated minimal roi
     minimal_roi: Dict
+    # if roi config should be time weighted
+    time_weighted_roi: bool = False
 
     # associated stoploss
     stoploss: float

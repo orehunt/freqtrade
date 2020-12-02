@@ -116,7 +116,10 @@ class HyperoptBacktesting(Backtesting):
 
         backtesting_amounts = config.get("backtesting_amounts", {})
         self.stoploss_enabled = backtesting_amounts.get("stoploss", False)
-        self.trailing_enabled = backtesting_amounts.get("trailing", False)
+        self.trailing_enabled = backtesting_amounts.get(
+            "trailing", False
+            # this is only useful for single backtesting
+        ) and config.get("amounts", {}).get("trailing_stop", True)
         self.roi_enabled = backtesting_amounts.get("roi", False)
         self.any_trigger = (
             self.stoploss_enabled or self.trailing_enabled or self.roi_enabled
@@ -319,6 +322,7 @@ class HyperoptBacktesting(Backtesting):
             close_amount = results["amount"].values + results["profit_abs"].values
             can_buy = dont_buy_over_max_stake(
                 self.max_staked,
+                self.config.get("min_stake", 0),
                 results["open_date"].values,
                 results["amount"].values,
                 results["close_date"].values,
@@ -686,6 +690,7 @@ class HyperoptBacktesting(Backtesting):
         amounts = SimpleNamespace(**self.strategy.amounts)
         v = {
             "roi_enabled": self.roi_enabled,
+            "weighted_roi": self.strategy.time_weighted_roi,
             "stoploss_enabled": self.stoploss_enabled,
             "trailing_enabled": self.trailing_enabled,
             "roi_or_trailing": self.roi_enabled or self.trailing_enabled,
@@ -1192,7 +1197,6 @@ class HyperoptBacktesting(Backtesting):
 
         logger.debug("applying post processing")
         df_vals = self.post_process(df_vals, self.pairs_offset)
-
 
         logger.debug("setting sold candles")
         bts_vals = self.set_sold(df_vals)

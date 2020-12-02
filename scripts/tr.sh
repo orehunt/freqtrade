@@ -18,6 +18,7 @@ fi
 telegram=$dir/tg/${exchange_name}_${tg_bot}_telegram.json
 exchange=$dir/${exchange_name}.json
 amounts=$dir/amounts.json
+def_amounts=$dir/amounts/default.json
 
 if [ "$open_trades" = "-1" ]; then
 	edge=$dir/edge.json
@@ -25,7 +26,7 @@ else
 	edge=
 fi
 
-config_files="$(echo $strategy $live $askbid $amounts $amounts_tuned \
+config_files="$(echo $strategy $live $askbid $def_amounts $amounts $amounts_tuned \
 	$edge $pairlists $exchange $paths $telegram)"
 
 [ -n "$edge" ] && echo "EDGE is Enabled!"

@@ -1,16 +1,14 @@
 import logging
 from itertools import cycle
-from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple, Union
+from typing import Callable, Dict, Iterable, List, Sequence, Tuple, Union
 
 import ax
+import ax.modelbridge.factory as factory
 import numpy as np
 from ax.core.metric import Metric
 from ax.core.objective import Objective, ScalarizedObjective
-from ax.core.optimization_config import (
-    MultiObjectiveOptimizationConfig,
-    ObjectiveThreshold,
-    OptimizationConfig,
-)
+from ax.core.optimization_config import (MultiObjectiveOptimizationConfig, ObjectiveThreshold,
+                                         OptimizationConfig,)
 from ax.modelbridge import ModelBridge
 from ax.modelbridge.factory import get_MOO_PAREGO
 from ax.modelbridge.generation_strategy import GenerationStep, GenerationStrategy
@@ -61,6 +59,7 @@ class yi(Xi):
 
 
 ALGOS = cycle(("BOTORCH", "GPEI", "GPKG", "GPMES",))
+ALGOS_MOO = cycle(("get_MOO_EHVI", "get_MOO_PAREGO", "get_MOO_RS"))
 
 
 class Ax(IOptimizer):
@@ -79,8 +78,11 @@ class Ax(IOptimizer):
 
     def __init__(self, parameters: Iterable, seed=None, config={}, *args, **kwargs):
         super().__init__(parameters, seed, config, *args, **kwargs)
-        if self._config.get("algo") == "auto":
+        algo_cfg = self._config.get("algo")
+        if algo_cfg == "auto":
             self._algos_pool = ALGOS
+        elif algo_cfg == "auto_moo":
+            self._algos_pool = ALGOS_MOO
 
     def copy(self, *args, **kwargs) -> IOptimizer:
         opt = super().copy(*args, **kwargs)
@@ -230,6 +232,8 @@ class Ax(IOptimizer):
             model = Models.GPMES
         elif self.algo == "MOO":
             model = get_MOO_PAREGO
+        elif self.algo.replace("get_", "") != self.algo:
+            model = getattr(factory, self.algo)
         else:
             model = getattr(Models, self.algo)
         self._model = model
