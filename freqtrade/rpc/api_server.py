@@ -336,7 +336,7 @@ class ApiServer(RPC):
         """
         Prints the bot's version
         """
-        return jsonify(self._rpc_show_config(self._config))
+        return jsonify(RPC._rpc_show_config(self._config, self._freqtrade.state))
 
     @require_login
     @rpc_catch_errors
@@ -514,6 +514,8 @@ class ApiServer(RPC):
         """
         asset = request.json.get("pair")
         price = request.json.get("price", None)
+        price = float(price) if price is not None else price
+
         trade = self._rpc_forcebuy(asset, price)
         if trade:
             return jsonify(trade.to_json())

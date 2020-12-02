@@ -249,10 +249,9 @@ def _download_pair_history(
         data_handler.ohlcv_store(pair, timeframe, data=data)
         return True
 
-    except Exception as e:
-        logger.error(
-            f'Failed to download history data for pair: "{pair}", timeframe: {timeframe}. '
-            f"Error: {e}"
+    except Exception:
+        logger.exception(
+            f'Failed to download history data for pair: "{pair}", timeframe: {timeframe}.'
         )
         return False
 
@@ -351,10 +350,10 @@ def _download_trades_history(
         logger.info(f"New Amount of trades: {len(trades)}")
         return True
 
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        logger.error(f'Failed to download historic trades for pair: "{pair}". ' f"Error: {e}")
+    except Exception:
+        logger.exception(
+            f'Failed to download historic trades for pair: "{pair}". '
+        )
         return False
 
 
@@ -410,10 +409,13 @@ def convert_trades_to_ohlcv(
         for timeframe in timeframes:
             if erase:
                 if data_handler_ohlcv.ohlcv_purge(pair, timeframe):
-                    logger.info(f"Deleting existing data for pair {pair}, interval {timeframe}.")
-            ohlcv = trades_to_ohlcv(trades, timeframe)
-            # Store ohlcv
-            data_handler_ohlcv.ohlcv_store(pair, timeframe, data=ohlcv)
+                    logger.info(f'Deleting existing data for pair {pair}, interval {timeframe}.')
+            try:
+                ohlcv = trades_to_ohlcv(trades, timeframe)
+                # Store ohlcv
+                data_handler_ohlcv.ohlcv_store(pair, timeframe, data=ohlcv)
+            except ValueError:
+                logger.exception(f'Could not convert {pair} to OHLCV.')
 
 
 def get_timerange(data: Dict[str, DataFrame]) -> Tuple[arrow.Arrow, arrow.Arrow]:

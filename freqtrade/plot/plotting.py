@@ -9,9 +9,9 @@ from freqtrade.data.btanalysis import (calculate_max_drawdown, combine_dataframe
                                        create_cum_profit, extract_trades_of_period, load_trades)
 from freqtrade.data.converter import trim_dataframe
 from freqtrade.data.dataprovider import DataProvider
-from freqtrade.data.history import load_data
+from freqtrade.data.history import get_timerange, load_data
 from freqtrade.exceptions import OperationalException
-from freqtrade.exchange import timeframe_to_prev_date
+from freqtrade.exchange import timeframe_to_prev_date, timeframe_to_seconds
 from freqtrade.misc import pair_to_filename
 from freqtrade.resolvers import ExchangeResolver, StrategyResolver
 from freqtrade.strategy import IStrategy
@@ -29,7 +29,7 @@ except ImportError:
     exit(1)
 
 
-def init_plotscript(config):
+def init_plotscript(config, startup_candles: int = 0):
     """
     Initialize objects needed for plotting
     :return: Dict with candle (OHLCV) data, trades and pairs
@@ -48,8 +48,15 @@ def init_plotscript(config):
         pairs=pairs,
         timeframe=config.get('timeframe', '5m'),
         timerange=timerange,
-        data_format=config.get("dataformat_ohlcv", "json"),
+        startup_candles=startup_candles,
+        data_format=config.get('dataformat_ohlcv', 'json'),
     )
+
+    if startup_candles:
+        min_date, max_date = get_timerange(data)
+        logger.info(f"Loading data from {min_date} to {max_date}")
+        timerange.adjust_start_if_necessary(timeframe_to_seconds(config.get('timeframe', '5m')),
+                                            startup_candles, min_date)
 
     no_trades = False
     filename = config.get('exportfilename')
@@ -69,11 +76,11 @@ def init_plotscript(config):
     )
     trades = trim_dataframe(trades, timerange, 'open_date')
 
-    return {
-        "ohlcv": data,
-        "trades": trades,
-        "pairs": pairs,
-    }
+    return {"ohlcv": data,
+            "trades": trades,
+            "pairs": pairs,
+            "timerange": timerange,
+            }
 
 
 def add_indicators(fig, row, indicators: Dict[str, Dict], data: pd.DataFrame) -> make_subplots:
@@ -463,15 +470,17 @@ def load_and_plot_trades(config: Dict[str, Any]):
 
     exchange = ExchangeResolver.load_exchange(config['exchange']['name'], config)
     IStrategy.dp = DataProvider(config, exchange)
-    plot_elements = init_plotscript(config)
-    trades = plot_elements["trades"]
+    plot_elements = init_plotscript(config, strategy.startup_candle_count)
+    timerange = plot_elements['timerange']
+    trades = plot_elements['trades']
     pair_counter = 0
     for pair, data in plot_elements["ohlcv"].items():
         pair_counter += 1
         logger.info("analyse pair %s", pair)
 
-        df_analyzed = strategy.analyze_ticker(data, {"pair": pair})
-        trades_pair = trades.loc[trades["pair"] == pair]
+        df_analyzed = strategy.analyze_ticker(data, {'pair': pair})
+        df_analyzed = trim_dataframe(df_analyzed, timerange)
+        trades_pair = trades.loc[trades['pair'] == pair]
         trades_pair = extract_trades_of_period(df_analyzed, trades_pair)
 
         fig = generate_candlestick_graph(

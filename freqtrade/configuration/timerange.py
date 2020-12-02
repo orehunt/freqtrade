@@ -61,13 +61,13 @@ class TimeRange:
                          has to be moved
         :return: None (Modifies the object in place)
         """
-        if not self.starttype or (startup_candles and min_date.timestamp >= self.startts):
+        if (not self.starttype or (startup_candles
+                                   and min_date.int_timestamp >= self.startts)):
             # If no startts was defined, or backtest-data starts at the defined backtest-date
-            logger.warning(
-                "Moving start-date by %s candles to account for startup time.", startup_candles
-            )
-            self.startts = min_date.timestamp + timeframe_secs * startup_candles
-            self.starttype = "date"
+            logger.warning("Moving start-date by %s candles to account for startup time.",
+                           startup_candles)
+            self.startts = (min_date.int_timestamp + timeframe_secs * startup_candles)
+            self.starttype = 'date'
 
     @staticmethod
     def parse_timerange(text: Optional[str]) -> "TimeRange":
@@ -99,8 +99,8 @@ class TimeRange:
                 stop: int = 0
                 if stype[0]:
                     starts = rvals[index]
-                    if stype[0] == "date" and len(starts) == 8:
-                        start = arrow.get(starts, "YYYYMMDD").timestamp
+                    if stype[0] == 'date' and len(starts) == 8:
+                        start = arrow.get(starts, 'YYYYMMDD').int_timestamp
                     elif len(starts) == 13:
                         start = int(starts) // 1000
                     else:
@@ -108,8 +108,8 @@ class TimeRange:
                     index += 1
                 if stype[1]:
                     stops = rvals[index]
-                    if stype[1] == "date" and len(stops) == 8:
-                        stop = arrow.get(stops, "YYYYMMDD").timestamp
+                    if stype[1] == 'date' and len(stops) == 8:
+                        stop = arrow.get(stops, 'YYYYMMDD').int_timestamp
                     elif len(stops) == 13:
                         stop = int(stops) // 1000
                     else:
