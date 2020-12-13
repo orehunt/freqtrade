@@ -34,7 +34,9 @@ def parse_hopt_args() -> dict:
     # "all": all
     # "allone": all, then one by one
     # "byone": one by one
-    parser.add_argument("-amt", help="spaces for amounts", default="on:roi,stoploss,trailing", type=str)
+    parser.add_argument(
+        "-amt", help="spaces for amounts", default="on:roi,stoploss,trailing", type=str
+    )
     parser.add_argument("-edg", help="spaces for edge amounts", action="store_true")
     parser.add_argument("-pp", help="path for pairlist for profits tuning", default="")
     parser.add_argument("-ne", help="optimize evals number", type=str, default="")
@@ -65,7 +67,9 @@ def parse_hopt_args() -> dict:
         type=int,
         default=None,
     )
-    parser.add_argument("-ns", help="no position stacking", action="store_true")
+    parser.add_argument(
+        "-ns", help="no position stacking", default=False, action="store_true"
+    )
     parser.add_argument("-d", help="number of days", type=int, default=0)
     parser.add_argument("-g", help="timerange", type=str, default="")
     parser.add_argument("-i", help="timeframe", type=str, default="1h")

@@ -528,8 +528,8 @@ class HyperoptBacktesting(Backtesting):
         df.set_index("ohlc_ofs", inplace=True, drop=False)
         if self.ignore_zero_volume:
             zvol_mask = df["volume"].values > 0
-            df["buy"].values[:] = df["buy"].values & zvol_mask
-            df["sell"].values[:] = df["sell"].values & zvol_mask
+            df["buy"].values[:] = df["buy"].values.astype(bool) & zvol_mask
+            df["sell"].values[:] = df["sell"].values.astype(bool) & zvol_mask
         return df
 
     def bought_or_sold(self, df: DataFrame) -> Tuple[DataFrame, bool]:

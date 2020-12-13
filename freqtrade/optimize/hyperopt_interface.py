@@ -269,7 +269,6 @@ class IHyperOpt(ABC):
         ]
 
     @staticmethod
-    @abstractmethod
     def constraints() -> Dict[str, Any]:
         """
         Bridge method to pass constraints configuration to the optimizer instance.

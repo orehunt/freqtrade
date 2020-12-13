@@ -346,10 +346,6 @@ class Main:
         config = {}
         if self.args.amt or self.args.ne:
             config["hyperopt_loss"] = "SharpeLoss"
-            if self.args.amt:
-                # disable position stacking when optimizing amounts
-                logger.warning("Position stacking is disabled during amounts optimization")
-                config["position_stacking"] = False
             amt = self.args.amt.split(":")
             amt_mode = amt[0]
             prefs = (
@@ -746,11 +742,13 @@ class Main:
             instance = self.args.inst
         else:
             instance = self.ho.get_last_instance(self.ho.trials_instances_file)
-        trials, _, _ = self.get_trials(instance=instance, cv=(mode == "cv"))
+        trials, _, _ = self.get_trials(instance=instance)
         idx = int(num) - 1  # human
         trial = trials.iloc[idx : idx + 1, :].iloc[:1].to_dict("records")[0]
+        if self.args.path:
+            self.write_json_file(trial["params_dict"], self.args.path, update=False)
+            # print(json.dumps(trial["params_details"]))
         self.ho.print_epoch_details(trial, len(trials), True)
-        # print(json.dumps(trial["params_details"]))
 
     def print_conditions(self):
         """
@@ -1109,6 +1107,32 @@ class Main:
             exit(0)
         return
 
+    def delete_amounts_keys(self, di):
+        for key in [
+                "stoploss",
+                "trailing_stop",
+                "trailing_stop_positive",
+                "trailing_stop_offset_p1",
+                "trailing_stop_positive_offset_p1",
+                "trailing_only_offset_is_reached",
+                "roi_t1",
+                "roi_t2",
+                "roi_t3",
+                "roi_t4",
+                "roi_t5",
+                "roi_t6",
+                "roi_p1",
+                "roi_p2",
+                "roi_p3",
+                "roi_l1",
+                "roi_l2",
+                "roi_l3",
+        ]:
+            try:
+                del di[key]
+            except:
+                pass
+
     def handle_data(self, params, n_path, idx, data={}):
         if not data:
             if os.path.exists(n_path):
@@ -1151,6 +1175,7 @@ class Main:
                 params = t["params_dict"]
                 data = self.handle_data(params, path, nt, data)
                 save_map[(t["current_epoch"], t["profit"])] = str(path.resolve())
+            self.delete_amounts_keys(data)
             self.write_json_file(data, path, update=False)
         else:
             for nt, t in enumerate(trials):
@@ -1159,6 +1184,7 @@ class Main:
                     str(path.parent) + "/" + path.stem + f"-{nt}" + path.suffix
                 )
                 data = self.handle_data(params, n_path, idx)
+                self.delete_amounts_keys(data)
                 self.write_json_file(data, n_path, update=False)
                 save_map[(t["current_epoch"], t["profit"])] = str(n_path.resolve())
         from pprint import PrettyPrinter as pp

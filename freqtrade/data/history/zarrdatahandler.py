@@ -304,6 +304,7 @@ class ZarrDataHandler(IDataHandler):
         else:
             arr = self.group[key]
 
+
         # only trim by timerange if data is cleaned
         # otherwise can't guess ranges correctly
         if timerange and cleaned:

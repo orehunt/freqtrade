@@ -189,6 +189,9 @@ class IOptimizer:
     """ Points per trial, how many observations to run between epochs """
     ask_points: int
 
+    """ If the optimization should start from a known seed point """
+    from_seed: bool = False
+
     """ Set to the algo of an instantiated optimizer """
     algo: str
     """ Hint to help the optimizer decide what to use """
@@ -212,6 +215,7 @@ class IOptimizer:
         self.n_rand = config.get("n_rand", 1)
         self.n_epochs = config.get("n_epochs", 10)
         self.ask_points = config.get("ask_points", 1) or 1
+        self.from_seed = bool(config.get("seed_path"))
 
         # parse the algo if it is comma separated;
         algo = config.get("algo", "rand")

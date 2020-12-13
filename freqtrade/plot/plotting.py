@@ -369,6 +369,16 @@ def generate_candlestick_graph(
         fig = add_indicators(
             fig=fig, row=3 + i, indicators=plot_config["subplots"][name], data=data
         )
+    if plot_config.get("pair_profits", False):
+        profit_col = f"cum_profit_{pair}"
+        pair_trades = trades[trades["pair"] == pair]
+        if len(pair_trades) > 0:
+            data = create_cum_profit(data, pair_trades, profit_col, timeframe,
+                                        profit_col='profit_abs')
+        else:
+            data[profit_col] = 0
+
+        fig = add_profit(fig, 3, df_comb, profit_col, f"Profit {pair}")
 
     return fig
 
@@ -473,6 +483,7 @@ def load_and_plot_trades(config: Dict[str, Any]):
     plot_elements = init_plotscript(config, strategy.startup_candle_count)
     timerange = plot_elements['timerange']
     trades = plot_elements['trades']
+    print(trades)
     pair_counter = 0
     for pair, data in plot_elements["ohlcv"].items():
         pair_counter += 1

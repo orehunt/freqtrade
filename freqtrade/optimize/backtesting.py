@@ -76,12 +76,14 @@ class Backtesting:
 
     def __init__(self, config: Dict[str, Any]) -> None:
         self.config = config
+        validate_exchange = self.config.get('backtesting_validate_exchange', True)
 
         # Reset keys for backtesting
         remove_credentials(self.config)
         self.strategylist: List[IStrategy] = []
         self.exchange = ExchangeResolver.load_exchange(
-            self.config["exchange"]["name"], self.config
+            self.config["exchange"]["name"], self.config,
+            validate=validate_exchange
         )
 
         dataprovider = DataProvider(self.config, self.exchange)

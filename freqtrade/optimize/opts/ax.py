@@ -7,8 +7,11 @@ import ax.modelbridge.factory as factory
 import numpy as np
 from ax.core.metric import Metric
 from ax.core.objective import Objective, ScalarizedObjective
-from ax.core.optimization_config import (MultiObjectiveOptimizationConfig, ObjectiveThreshold,
-                                         OptimizationConfig,)
+from ax.core.optimization_config import (
+    MultiObjectiveOptimizationConfig,
+    ObjectiveThreshold,
+    OptimizationConfig,
+)
 from ax.modelbridge import ModelBridge
 from ax.modelbridge.factory import get_MOO_PAREGO
 from ax.modelbridge.generation_strategy import GenerationStep, GenerationStrategy
@@ -17,6 +20,7 @@ from ax.runners.synthetic import SyntheticRunner
 from ax.service.ax_client import AxClient
 
 from freqtrade.optimize.optimizer import CAT, RANGE, IOptimizer
+from user_data.modules.helper import read_json_file
 
 from ..optimizer import IOptimizer, Loss, Points
 
@@ -69,6 +73,7 @@ class Ax(IOptimizer):
     _random_sampling = cycle(("SOBOL",))
     _client: AxClient
     _params_names: Sequence[str]
+    _seed_Xi: List = []
     _is_init = True
     _metrics: List[str]
     is_blocking = False
@@ -278,6 +283,18 @@ class Ax(IOptimizer):
             self._params_names = list(p.name for p in parameters)
         self._metrics = list(self._config.get("metrics", []))
 
+        if self.from_seed:
+            seed_path = self._config.get("seed_path", "")
+            if os.path.exists:
+                seed_config = read_json_file(seed_path)
+                assert isinstance(seed_config, dict)
+                if set(self._params_names) != set(seed_config.keys()):
+                    raise ValueError(
+                        f"seed configuration parameters (from: {seed_path})"
+                        "don't match optimizer parameters"
+                    )
+                self._seed_Xi.append(seed_config)
+
         self._setup_model()
         self._setup_client()
 
@@ -286,10 +303,15 @@ class Ax(IOptimizer):
     def ask(self, n, *args, **kwargs) -> List[Tuple[Tuple, Dict]]:
         asked = []
         try:
-            for n in range(n):
-                tp, idx = self._client.get_next_trial()
+            if self._seed_Xi:
+                tp = self._seed_Xi.pop()
                 tp_tup = tuple(tp[p] for p in self._params_names)
-                asked.append((tp_tup, {"idx": idx}))
+                asked.append((tp_tup, {"idx": len(self.Xi)}))
+            else:
+                for n in range(n):
+                    tp, idx = self._client.get_next_trial()
+                    tp_tup = tuple(tp[p] for p in self._params_names)
+                    asked.append((tp_tup, {"idx": idx}))
         except Exception as e:
             print(f"Exception asking optimizer with algo {self.algo}: ", e)
             import traceback

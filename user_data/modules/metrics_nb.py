@@ -5,7 +5,6 @@ import vectorbt as vbt
 
 from vectorbt.utils.datetime import freq_delta
 from vectorbt.returns import nb as rnb
-from vectorbt.records import drawdowns as dd
 
 from freqtrade.optimize.backtest_nb import rolling_norm, calc_illiquidity
 

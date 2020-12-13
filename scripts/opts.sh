@@ -145,3 +145,4 @@ export NUMEXPR_MAX_THREADS=16
 export FQT_NOSS=
 export FQT_USERDIR=$userdir
 export FQT_TEST_COND=$testcond
+export JOBLIB_TEMP_FOLDER=/tmp

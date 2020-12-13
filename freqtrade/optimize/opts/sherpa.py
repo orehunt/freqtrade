@@ -332,10 +332,13 @@ class Sherpa(IOptimizer):
         """ Population based training """
         default = {
             "population_size": self.ask_points,
-            "num_generations": self.n_epochs / self.n_jobs,
+            "num_generations": self.n_epochs / self.ask_points,
             "perturbation_factors": (0.8, 1.2),
             "parameter_range": {},
         }
+        if "num_generations" in kwargs or "population_size" in kwargs:
+            del kwargs['num_generations']
+            del kwargs['population_size']
         default.update(kwargs)
         if self.mode == "single" and self.ask_points != self.n_jobs:
             raise OperationalException(
@@ -366,17 +369,15 @@ class Sherpa(IOptimizer):
         self._algo = she.algorithms.SuccessiveHalving(**default)
 
     def LOC(self, **kwargs):
-        seed_key = "seed_configuration"
+        seed_key = "seed_path"
         default = {"perturbation_factors": (0.8, 1.2), "repeat_trials": 1}
-        seed = kwargs.get(seed_key, {})
-        if isinstance(seed, dict) and seed:
-            pass
-        elif isinstance(seed, str) and seed:
-            kwargs[seed_key] = read_json_file(seed)
+        seed = self._config.get(seed_key, {})
+        if isinstance(seed, str) and seed:
+            kwargs["seed_configuration"] = read_json_file(seed)
         else:
             raise OperationalException(
                 f"Local search requires '{seed_key}', "
-                "(dict, or as path to json file)"
+                "as path to json file"
             )
         default.update(kwargs)
         logger.info(
