@@ -146,15 +146,15 @@ class HyperoptBacktesting(Backtesting):
         # after having loaded the strategy
         # null all config amounts for disabled ones (to compare against vanilla backtesting)
         if not self.roi_enabled:
-            self.strategy.amounts["minimal_roi"] = {0: 10}
+            self.strategy.minimal_roi = {0: 10}
             config["minimal_roi"] = {"0": 10}
             self.strategy.minimal_roi = {"0": 10}
         if not self.trailing_enabled:
-            self.strategy.amounts["trailing_stop"] = False
+            self.strategy.trailing_stop = False
             config["trailing_stop"] = False
             self.strategy.trailing_stop = False
         if not self.stoploss_enabled:
-            self.strategy.amounts["stoploss"] = -100
+            self.strategy.stoploss = -100
             config["stoploss"] = -100
             self.strategy.stoploss = -100
 
@@ -273,12 +273,12 @@ class HyperoptBacktesting(Backtesting):
 
         # use stake amount decided by the strategy
         if self.static_stake:
-            self.strategy.amounts["stake"] = np.full(
+            self.strategy.stake = np.full(
                 len(buy_vals), self.config["stake_amount"]
             )
         else:
-            self.strategy.amounts["stake"] = buy_vals[:, buy_cols["stake_amount"]]
-        # assert (self.strategy.amounts["stake"] > 0.01).all()
+            self.strategy.stake = buy_vals[:, buy_cols["stake_amount"]]
+        # assert (self.strategy.stake > 0.01).all()
 
         # if spread is included in the profits calculation
         # increase open_rate and decrease close_rate
@@ -311,7 +311,7 @@ class HyperoptBacktesting(Backtesting):
                 "close_date": to_datetime(sell_vals[:, sell_cols["date"]], utc=True),
                 "close_rate": close_rate,
                 "close_fee": self.fee,
-                "amount": self.strategy.amounts["stake"],
+                "amount": self.strategy.stake,
                 "trade_duration": trade_duration.dt.total_seconds() / 60,
                 "open_at_end": False,
                 "sell_reason": sell_reason,
@@ -343,7 +343,7 @@ class HyperoptBacktesting(Backtesting):
         self, open_rate: ndarray, close_rate: ndarray, dec=False, calc_abs=False,
     ) -> ndarray:
 
-        sa = self.strategy.amounts["stake"]
+        sa = self.strategy.stake
         fee = self.fee
         minus = 1
 
@@ -474,14 +474,14 @@ class HyperoptBacktesting(Backtesting):
                 )
             # since the stake_amount is decided by the signal, and we work on forward shifted signals
             # shift the stake_amount accordingly
-            self.strategy.amounts["stake"] = self._shift_paw(
+            self.strategy.stake = self._shift_paw(
                 df_vals[:, loc["stake_amount"]],
                 period=1,
                 diff_arr=df_vals[:, loc["pair"]],
             )
-            df_vals[:, loc["stake_amount"]] = self.strategy.amounts["stake"]
+            df_vals[:, loc["stake_amount"]] = self.strategy.stake
         else:
-            self.strategy.amounts["stake"] = np.full(
+            self.strategy.stake = np.full(
                 len(df_vals), self.config["stake_amount"]
             )
         return df_vals
@@ -694,7 +694,7 @@ class HyperoptBacktesting(Backtesting):
         return bts_vals
 
     def _get_vars(self, df_vals: ndarray, bought: ndarray, bought_ranges) -> Dict:
-        amounts = SimpleNamespace(**self.strategy.amounts)
+        stp = self.strategy.get_stoploss()
         v = {
             "roi_enabled": self.roi_enabled,
             "weighted_roi": self.strategy.time_weighted_roi,
@@ -703,12 +703,12 @@ class HyperoptBacktesting(Backtesting):
             "roi_or_trailing": self.roi_enabled or self.trailing_enabled,
             "stoploss_or_trailing": self.stoploss_enabled or self.trailing_enabled,
             "not_position_stacking": not self.position_stacking,
-            "sl_positive": amounts.trailing_stop_positive or 0.0,
-            "sl_positive_not_null": amounts.trailing_stop_positive is not None,
-            "sl_offset": amounts.trailing_stop_positive_offset,
-            "sl_only_offset": amounts.trailing_only_offset_is_reached,
-            "stoploss": abs(amounts.stoploss),
-            "stake_amount": amounts.stake,
+            "sl_positive": stp.trailing_stop_positive or 0.0,
+            "sl_positive_not_null": stp.trailing_stop_positive is not None,
+            "sl_offset": stp.trailing_stop_positive_offset,
+            "sl_only_offset": stp.trailing_only_offset_is_reached,
+            "stoploss": abs(stp.stoploss),
+            "stake_amount": self.strategy.stake,
             "fee": self.fee,
             # columns of the trigger array which stores all the calculations
             "col_names": ["trigger_ofs", "trigger_date", "trigger_bought_ofs",],
@@ -999,7 +999,7 @@ class HyperoptBacktesting(Backtesting):
         # with the latest duplicate value when rounding to timeframes
         # NOTE: make sure to sort numerically
 
-        minimal_roi = self.strategy.amounts["minimal_roi"]
+        minimal_roi = self.strategy.minimal_roi
         try:
             assert (np.fromiter(minimal_roi, dtype=float) >= 0).all()
         except AssertionError:

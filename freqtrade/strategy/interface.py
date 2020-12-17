@@ -2,6 +2,7 @@
 IStrategy interface
 This module defines the interface to apply for strategies
 """
+import numpy as np
 from types import SimpleNamespace
 import logging
 import sys
@@ -9,7 +10,7 @@ import warnings
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Dict, List, NamedTuple, Optional, Tuple
+from typing import Dict, List, NamedTuple, Optional, Tuple, Union
 
 import arrow
 from pandas import DataFrame
@@ -93,8 +94,9 @@ class IStrategy(ABC):
     _populate_fun_len: int = 0
     _buy_fun_len: int = 0
     _sell_fun_len: int = 0
-    # amounts
-    amounts: dict
+
+    # Stake (quote currency) for each trade
+    stake:  Union[float, np.ndarray] = 0
 
     # associated minimal roi
     minimal_roi: Dict
@@ -111,7 +113,7 @@ class IStrategy(ABC):
     trailing_only_offset_is_reached = False
 
     # stoploss namespace
-    stop_config: StoplossConfig = None
+    stop_config: Optional[StoplossConfig] = None
 
     # associated timeframe
     ticker_interval: str  # DEPRECATED
