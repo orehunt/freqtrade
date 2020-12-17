@@ -20,6 +20,7 @@ ARGS_COMMON_OPTIMIZE = ["timeframe", "timerange", "max_open_trades", "stake_amou
 ARGS_BACKTEST = ARGS_COMMON_OPTIMIZE + [
     "position_stacking",
     "use_max_market_positions",
+    "enable_protections",
     "strategy_list",
     "export",
     "exportfilename",
@@ -32,6 +33,7 @@ ARGS_HYPEROPT = ARGS_COMMON_OPTIMIZE + [
     "epochs",
     "spaces",
     "use_max_market_positions",
+    "enable_protections",
     "print_all",
     "print_colorized",
     "print_json",
@@ -67,7 +69,8 @@ ARGS_LIST_PAIRS = [
     "list_pairs_all",
 ]
 
-ARGS_TEST_PAIRLIST = ["config", "quote_currencies", "print_one_column", "list_pairs_print_json"]
+ARGS_TEST_PAIRLIST = ["verbosity", "config", "quote_currencies", "print_one_column",
+                      "list_pairs_print_json"]
 
 ARGS_CREATE_USERDIR = ["user_data_dir", "reset"]
 

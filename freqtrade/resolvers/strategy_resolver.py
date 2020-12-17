@@ -89,9 +89,6 @@ class StrategyResolver(IResolver):
             else:
                 StrategyResolver._override_attribute_helper(strategy, config, attribute, default)
 
-        # Assign deprecated variable - to not break users code relying on this.
-        strategy.ticker_interval = strategy.timeframe
-
         # Loop this list again to have output combined
         for attribute, _, subkey in attributes:
             if subkey and attribute in config[subkey]:
@@ -99,14 +96,7 @@ class StrategyResolver(IResolver):
             elif attribute in config:
                 logger.info("Strategy using %s: %s", attribute, config[attribute])
 
-        # Sort and apply type conversions
-        strategy.minimal_roi = OrderedDict(
-            sorted(
-                {int(key): value for (key, value) in strategy.minimal_roi.items()}.items(),
-                key=lambda t: t[0],
-            )
-        )
-        strategy.stoploss = float(strategy.stoploss)
+        StrategyResolver._normalize_attributes(strategy)
 
         StrategyResolver._strategy_sanity_validations(strategy)
         return strategy
@@ -136,6 +126,24 @@ class StrategyResolver(IResolver):
         elif default is not None:
             setattr(strategy, attribute, default)
             config[attribute] = default
+
+    @staticmethod
+    def _normalize_attributes(strategy: IStrategy) -> IStrategy:
+        """
+        Normalize attributes to have the correct type.
+        """
+        # Assign deprecated variable - to not break users code relying on this.
+        if hasattr(strategy, 'timeframe'):
+            strategy.ticker_interval = strategy.timeframe
+
+        # Sort and apply type conversions
+        if hasattr(strategy, 'minimal_roi'):
+            strategy.minimal_roi = OrderedDict(sorted(
+                {int(key): value for (key, value) in strategy.minimal_roi.items()}.items(),
+                key=lambda t: t[0]))
+        if hasattr(strategy, 'stoploss'):
+            strategy.stoploss = float(strategy.stoploss)
+        return strategy
 
     @staticmethod
     def _strategy_sanity_validations(strategy):

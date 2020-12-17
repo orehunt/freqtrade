@@ -275,6 +275,39 @@ class RPC:
             "trades_count": len(output)
         }
 
+    def _rpc_stats(self) -> Dict[str, Any]:
+        """
+        Generate generic stats for trades in database
+        """
+        def trade_win_loss(trade):
+            if trade.close_profit > 0:
+                return 'wins'
+            elif trade.close_profit < 0:
+                return 'losses'
+            else:
+                return 'draws'
+        trades = trades = Trade.get_trades([Trade.is_open.is_(False)])
+        # Sell reason
+        sell_reasons = {}
+        for trade in trades:
+            if trade.sell_reason not in sell_reasons:
+                sell_reasons[trade.sell_reason] = {'wins': 0, 'losses': 0, 'draws': 0}
+            sell_reasons[trade.sell_reason][trade_win_loss(trade)] += 1
+
+        # Duration
+        dur: Dict[str, List[int]] = {'wins': [], 'draws': [], 'losses': []}
+        for trade in trades:
+            if trade.close_date is not None and trade.open_date is not None:
+                trade_dur = (trade.close_date - trade.open_date).total_seconds()
+                dur[trade_win_loss(trade)].append(trade_dur)
+
+        wins_dur = sum(dur['wins']) / len(dur['wins']) if len(dur['wins']) > 0 else 'N/A'
+        draws_dur = sum(dur['draws']) / len(dur['draws']) if len(dur['draws']) > 0 else 'N/A'
+        losses_dur = sum(dur['losses']) / len(dur['losses']) if len(dur['losses']) > 0 else 'N/A'
+
+        durations = {'wins': wins_dur, 'draws': draws_dur, 'losses': losses_dur}
+        return {'sell_reasons': sell_reasons, 'durations': durations}
+
     def _rpc_trade_statistics(
             self, stake_currency: str, fiat_display_currency: str) -> Dict[str, Any]:
         """ Returns cumulative profit statistics """
@@ -542,7 +575,7 @@ class RPC:
         else:
             return None
 
-    def _rpc_delete(self, trade_id: str) -> Dict[str, Union[str, int]]:
+    def _rpc_delete(self, trade_id: int) -> Dict[str, Union[str, int]]:
         """
         Handler for delete <id>.
         Delete the given trade and close eventually existing open orders.
@@ -645,7 +678,8 @@ class RPC:
                }
         return res
 
-    def _rpc_get_logs(self, limit: Optional[int]) -> Dict[str, Any]:
+    @staticmethod
+    def _rpc_get_logs(limit: Optional[int]) -> Dict[str, Any]:
         """Returns the last X logs"""
         if limit:
             buffer = bufferHandler.buffer[-limit:]

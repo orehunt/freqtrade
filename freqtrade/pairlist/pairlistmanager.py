@@ -3,7 +3,7 @@ PairList manager class
 """
 import logging
 from copy import deepcopy
-from typing import Dict, List
+from typing import Any, Dict, List
 
 from cachetools import TTLCache, cached
 
@@ -25,9 +25,6 @@ class PairListManager:
         self._pairlist_handlers: List[IPairList] = []
         self._tickers_needed = False
         for pairlist_handler_config in self._config.get('pairlists', None):
-            if 'method' not in pairlist_handler_config:
-                logger.warning(f"No method found in {pairlist_handler_config}, ignoring.")
-                continue
             pairlist_handler = PairListResolver.load_pairlist(
                     pairlist_handler_config['method'],
                     exchange=exchange,
@@ -99,7 +96,7 @@ class PairListManager:
 
         self._whitelist = pairlist
 
-    def _prepare_whitelist(self, pairlist: List[str], tickers) -> List[str]:
+    def _prepare_whitelist(self, pairlist: List[str], tickers: Dict[str, Any]) -> List[str]:
         """
         Prepare sanitized pairlist for Pairlist Handlers that use tickers data - remove
         pairs that do not have ticker available

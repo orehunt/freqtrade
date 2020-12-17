@@ -327,7 +327,7 @@ class IStrategy(ABC):
 
         if not candle_date:
             # Simple call ...
-            return PairLocks.is_pair_locked(pair, candle_date)
+            return PairLocks.is_pair_locked(pair)
         else:
             lock_time = timeframe_to_next_date(self.timeframe, candle_date)
             return PairLocks.is_pair_locked(pair, lock_time)
@@ -506,52 +506,43 @@ class IStrategy(ABC):
             high=high,
         )
 
-        if stoplossflag.sell_flag:
-            logger.debug(
-                f"{trade.pair} - Stoploss hit. sell_flag=True, "
-                f"sell_type={stoplossflag.sell_type}"
-            )
-            return stoplossflag
-
         # Set current rate to high for backtesting sell
         current_rate = high or rate
         current_profit = trade.calc_profit_ratio(current_rate)
         config_ask_strategy = self.config.get("ask_strategy", {})
 
-        if buy and config_ask_strategy.get("ignore_roi_if_buy_signal", False):
-            # This one is noisy, commented out
-            # logger.debug(f"{trade.pair} - Buy signal still active. sell_flag=False")
-            return SellCheckTuple(sell_flag=False, sell_type=SellType.NONE)
+        # if buy signal and ignore_roi is set, we don't need to evaluate min_roi.
+        roi_reached = (not (buy and config_ask_strategy.get('ignore_roi_if_buy_signal', False))
+                       and self.min_roi_reached(trade=trade, current_profit=current_profit,
+                                                current_time=date))
 
-        # Check if minimal roi has been reached and no longer in buy conditions (avoiding a fee)
-        if self.min_roi_reached(trade=trade, current_profit=current_profit, current_time=date):
-            logger.debug(
-                f"{trade.pair} - Required profit reached. sell_flag=True, "
-                f"sell_type=SellType.ROI"
-            )
+        if config_ask_strategy.get('sell_profit_only', False) and trade.calc_profit(rate=rate) <= 0:
+            # Negative profits and sell_profit_only - ignore sell signal
+            sell_signal = False
+        else:
+            sell_signal = sell and not buy and config_ask_strategy.get('use_sell_signal', True)
+            # TODO: return here if sell-signal should be favored over ROI
+
+        # Start evaluations
+        # Sequence:
+        # ROI (if not stoploss)
+        # Sell-signal
+        # Stoploss
+        if roi_reached and stoplossflag.sell_type != SellType.STOP_LOSS:
+            logger.debug(f"{trade.pair} - Required profit reached. sell_flag=True, "
+                         f"sell_type=SellType.ROI")
             return SellCheckTuple(sell_flag=True, sell_type=SellType.ROI)
 
-        if config_ask_strategy.get("sell_profit_only", False):
-            # This one is noisy, commented out
-            # logger.debug(f"{trade.pair} - Checking if trade is profitable...")
-            if trade.calc_profit(rate=rate) <= 0:
-                # This one is noisy, commented out
-                # logger.debug(f"{trade.pair} - Trade is not profitable. sell_flag=False")
-                return SellCheckTuple(sell_flag=False, sell_type=SellType.NONE)
-
-        if (
-            sell
-            and config_ask_strategy.get("use_sell_signal", True)
-            and (
-                config_ask_strategy.get("prefer_sell_signal", False)
-                or not buy
-            )
-        ):
-            logger.debug(
-                f"{trade.pair} - Sell signal received. sell_flag=True, "
-                f"sell_type=SellType.SELL_SIGNAL"
-            )
+        if sell_signal:
+            logger.debug(f"{trade.pair} - Sell signal received. sell_flag=True, "
+                         f"sell_type=SellType.SELL_SIGNAL")
             return SellCheckTuple(sell_flag=True, sell_type=SellType.SELL_SIGNAL)
+
+        if stoplossflag.sell_flag:
+
+            logger.debug(f"{trade.pair} - Stoploss hit. sell_flag=True, "
+                         f"sell_type={stoplossflag.sell_type}")
+            return stoplossflag
 
         # This one is noisy, commented out...
         # logger.debug(f"{trade.pair} - No sell signal. sell_flag=False")
@@ -598,11 +589,8 @@ class IStrategy(ABC):
         # evaluate if the stoploss was hit if stoploss is not on exchange
         # in Dry-Run, this handles stoploss logic as well, as the logic will not be different to
         # regular stoploss handling.
-        if (
-            (self.stoploss is not None)
-            and (trade.stop_loss >= current_rate)
-            and (not self.order_types.get("stoploss_on_exchange") or self.config["dry_run"])
-        ):
+        if ((trade.stop_loss >= current_rate) and
+                (not self.order_types.get('stoploss_on_exchange') or self.config['dry_run'])):
 
             sell_type = SellType.STOP_LOSS
 
