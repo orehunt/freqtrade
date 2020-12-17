@@ -9,7 +9,7 @@ from pandas import DataFrame, read_json, to_datetime
 from freqtrade import misc
 from freqtrade.configuration import TimeRange
 from freqtrade.constants import DEFAULT_DATAFRAME_COLUMNS, ListPairsWithTimeframes, TradeList
-from freqtrade.data.converter import trades_dict_to_list
+from freqtrade.data.converter import clean_ohlcv_dataframe, trades_dict_to_list
 
 from .idatahandler import IDataHandler
 
@@ -72,7 +72,7 @@ class JsonDataHandler(IDataHandler):
         )
 
     def _ohlcv_load(
-        self, pair: str, timeframe: str, timerange: Optional[TimeRange] = None,
+        self, pair: str, timeframe: str, timerange: Optional[TimeRange] = None, cleaned = False
     ) -> DataFrame:
         """
         Internal method used to load data for one pair from disk.
@@ -102,6 +102,10 @@ class JsonDataHandler(IDataHandler):
         pairdata["date"] = to_datetime(
             pairdata["date"], unit="ms", utc=True, infer_datetime_format=True
         )
+        if cleaned:
+            pairdata = clean_ohlcv_dataframe(
+                pairdata, timeframe, pair=pair, fill_missing=True, drop_incomplete=False
+                )
         return pairdata
 
     def ohlcv_purge(self, pair: str, timeframe: str) -> bool:

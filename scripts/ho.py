@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 """
 Examples:
-#     timeframe jobs  nocache lossfunc      mode        timerange     epochs maxtrades   points  spaces                      clear_instance   disable_position_stacking
-ho.py -i 1h     -j 14 -b      -lo OmegaLoss -mode multi -g 20180101-  -e 800 -mt 20      -pts 1  -sgn trailing,stoploss,roi  -res             -ns
+#     timeframe jobs  nocache lossfunc      mode        timerange     epochs maxtrades   points  spaces                      clear_instance   enable_position_stacking
+ho.py -i 1h     -j 14 -b      -lo OmegaLoss -mode multi -g 20180101-  -e 800 -mt 20      -pts 1  -sgn trailing,stoploss,roi  -res             -stack
 
 """
 
@@ -95,8 +95,11 @@ class Main:
         else:
             exchange_overrides.append(f"{config_dir}/{f}.json")
 
-    roi_dir = "roi" if not args.edg else "roi_edge"
-    roi_config = f"{config_dir}/{roi_dir}/{timeframe}.json"
+    if not args.risk:
+        risk_dir = "risk" if not args.edg else "risk_edge"
+        risk_config = f"{config_dir}/{risk_dir}/{timeframe}.json"
+    else:
+        risk_config = args.risk
     config_files = [
         hyperopt_config,
         exchange_config,
@@ -145,7 +148,7 @@ class Main:
     config["logfile"] = "hyperopt.log" if args.log else ""
 
     # trades
-    config["position_stacking"] = not args.ns
+    config["position_stacking"] = args.stack
     config["use_max_market_positions"] = args.mp
     config["timeframe"] = timeframe
     config["fee"] = args.fee
@@ -249,7 +252,7 @@ class Main:
             config["hyperopt_optimizer"] = self.opt_config
         self.config = config
         # NOTE: this should be needed since config_spaces takes care of proper amounts config
-        # self.config.update(self.read_json_file(self.roi_config))
+        # self.config.update(self.read_json_file(self.risk_config))
         self.update_evals()
 
     def update_config(self, amounts_group=None):
@@ -364,7 +367,7 @@ class Main:
                     self.spaces.add("stoploss")
                     self.spaces.add("trailing")
             elif amt_mode in ("on", "off"):
-                config.update(self.read_json_file(self.roi_config))
+                config.update(self.read_json_file(self.risk_config))
                 enabled = amt_mode == "on"
                 bta = {a: not enabled for a in self.amounts_names}
                 for p in prefs:

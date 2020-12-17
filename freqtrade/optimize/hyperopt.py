@@ -538,7 +538,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                 del backend.trials.results[n_res]
             # the tail list can have trials if workers crashed mid run
             for trial in backend.trials.tail_list:
-                Xi.append(list(trial["params_dict"].values()), trial["params_meta"])
+                Xi.append((list(trial["params_dict"].values()), trial["params_meta"]))
                 yi.append(trial["loss"])
 
             logger.debug(
@@ -832,11 +832,14 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                             len(self.trials), len(self.target_trials)
                         )
                     )
-            elif len(self.trials) > 0 and not self.async_sched:
-                if self.random_state != self.trials.iloc[-1]["random_state"]:
-                    logger.warning(
-                        "Random state in saved trials doesn't match runtime..."
-                    )
+            else:
+                if self.config.get('hyperopt_continue_filtered', True):
+                    self.trials = self.progressive_filtering(self.trials, 0, self.config)
+                if len(self.trials) > 0 and not self.async_sched:
+                    if self.random_state != self.trials.iloc[-1]["random_state"]:
+                        logger.warning(
+                            "Random state in saved trials doesn't match runtime..."
+                        )
         if self.cv:
             # CV trials are saved in their own table
             self.trials_instance += "_cv"

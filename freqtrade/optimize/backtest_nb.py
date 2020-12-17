@@ -11,6 +11,11 @@ from freqtrade.optimize.backtest_utils import *
 
 logger = logging.getLogger(__name__)
 
+logging.getLogger("numba.core.ssa").setLevel(logging.WARNING)
+logging.getLogger("numba.core.interpreter").setLevel(logging.WARNING)
+logging.getLogger("numba.core.byteflow").setLevel(logging.WARNING)
+
+
 @njit(cache=True, nogil=True)
 def for_trail_idx(index, trig_idx, next_sold) -> int64[:]:
     last = -2
@@ -594,34 +599,43 @@ def iter_triggers(
         for i, low in enumerate(
             fl_cols["ohlc_low"][b : b + it_cols["bought_ranges"][n]]
         ):
-            # if low happens first
+            # first check roi against open
+            open_profit = calc_high_profit(
+                buy_rate,
+                fl_cols["ohlc_open"][tf],
+                fl_cols["stake_amount"][b],
+                fl["fee"],
+            )
+            if triggered := roi_is_triggered(
+                n, i, open_profit, inv_roi_timeouts, inv_roi_values, fl_cols
+            ):
+                last_trigger = copy_trigger_data(b, tf, n, fl_cols, it_cols)
+                break
+            # if low happens first, check stoploss against previous rate
             if not fl_cols["high_low"][tf]:
-                # check stoploss against previous rate
                 if triggered := stoploss_is_triggered(
                     n, low, stoploss_rate, stoploss_static, fl_cols
                 ):
                     last_trigger = copy_trigger_data(b, tf, n, fl_cols, it_cols)
                     break
-
-            # otherwise check against new high
+            # otherwise check roi against new high
             high_profit = calc_high_profit(
                 buy_rate,
                 fl_cols["ohlc_high"][tf],
                 fl_cols["stake_amount"][b],
                 fl["fee"],
             )
+            if triggered := roi_is_triggered(
+                n, i, high_profit, inv_roi_timeouts, inv_roi_values, fl_cols
+            ):
+                last_trigger = copy_trigger_data(b, tf, n, fl_cols, it_cols)
+                break
+            # finally check against the updated stoploss value
             stoploss_rate = calc_trailing_rate(
                 stoploss_rate, tf, bl, high_profit, fl_cols, fl
             )
             if triggered := stoploss_is_triggered(
-                n,
-                low,
-                stoploss_rate,
-                stoploss_static,
-                fl_cols
-                # check roi only if updated trailing is not triggered
-            ) or roi_is_triggered(
-                n, i, high_profit, inv_roi_timeouts, inv_roi_values, fl_cols
+                n, low, stoploss_rate, stoploss_static, fl_cols
             ):
                 last_trigger = copy_trigger_data(b, tf, n, fl_cols, it_cols)
                 break
@@ -668,26 +682,49 @@ def join_column_names(pairs, timeframes, columns):
 
 @njit(cache=True)
 def dont_buy_over_max_stake(
-    max_staked, min_stake, open_date, open_amount, close_date, close_amount
+    max_staked,
+    min_stake,
+    open_date,
+    close_date,
+    amount,
+    open_rate,
+    close_rate,
+    fee,
+    profit_abs,
+    profit_percent,
 ):
     n_trades = len(open_date)
     avl_stake = max_staked
+    amount_prc = amount / open_rate
+    open_price = amount_prc * open_rate + amount_prc * fee
+    close_price = amount_prc * close_rate - amount_prc * close_rate * fee
+
     can_buy = np.full(n_trades, False)
     outstanding = []
+
     for i in range(n_trades):
         # at start of loop check if the dates of past non closed trades
         # are >= the date of the trade to be evaluated
-        for n, (c_date, c_amt) in enumerate(outstanding):
+        for n, (c_date, c_price) in enumerate(outstanding):
             if open_date[i] >= c_date:
                 # update the current stake from closed amounts
-                avl_stake += c_amt
+                avl_stake += c_price
                 del outstanding[n]
-        # only enter new trades if available stake is >=
-        # the would be open_amount of the virtual trade
-        if avl_stake >= open_amount[i]:
+        # only enter new trades if available stake is tradeable
+        if avl_stake >= min_stake:
             can_buy[i] = True
-            avl_stake -= open_amount[i]
-            outstanding.append((close_date[i], close_amount[i]))
+            # adjust amount if above avl_stake
+            if min(open_price[i], avl_stake) != open_price[i]:
+                amount[i] = avl_stake
+                avl_prc = avl_stake / open_rate[i]
+                o_price = avl_prc * open_rate[i] + avl_prc * open_rate[i] * fee
+                c_price = avl_prc * close_rate[i] - avl_prc * close_rate[i] * fee
+                profit_abs[i] = c_price - o_price
+                profit_percent[i] = c_price / o_price - 1
+            else:
+                c_price = close_price[i]
+            avl_stake -= amount[i]
+            outstanding.append((close_date[i], c_price))
         # check that the stake is non negative, but only
         # end if are no open trades since those
         # can turn stake positive again

@@ -117,7 +117,8 @@ class HyperoptBacktesting(Backtesting):
         backtesting_amounts = config.get("backtesting_amounts", {})
         self.stoploss_enabled = backtesting_amounts.get("stoploss", False)
         self.trailing_enabled = backtesting_amounts.get(
-            "trailing", False
+            "trailing",
+            False
             # this is only useful for single backtesting
         ) and config.get("amounts", {}).get("trailing_stop", True)
         self.roi_enabled = backtesting_amounts.get("roi", False)
@@ -135,8 +136,8 @@ class HyperoptBacktesting(Backtesting):
         ]
         self.account_for_spread = backtesting_amounts.get("account_for_spread", True)
         self.static_stake = bool(backtesting_amounts.get("static_stake", True))
-        self.ignore_zero_volume = bool(
-            backtesting_amounts.get("ignore_zero_volume", True)
+        self.ignore_volume_below = bool(
+            backtesting_amounts.get("ignore_volume_below", True)
         )
 
         # parent init after config overrides
@@ -199,6 +200,8 @@ class HyperoptBacktesting(Backtesting):
             trigger_cols = [sell_cols[c] for c in ("trigger_date", "trigger_ohlc")]
 
         # order of events is stoploss -> trailing -> roi
+        # NOTE: altough it shouldn't matter if the backtesting only computes
+        # the events that truly happened
         # since values are set cascading, the order is inverted
         # NOTE: using .astype(bool) converts nan to True
         if self.roi_enabled:
@@ -318,15 +321,19 @@ class HyperoptBacktesting(Backtesting):
             }
         )
         results.sort_values(by="open_date", inplace=True)
-        if self.max_staked:
-            close_amount = results["amount"].values + results["profit_abs"].values
+        if self.max_staked and not self.position_stacking:
+            # NOTE: updates the amount and profit_abs/percent inplace
             can_buy = dont_buy_over_max_stake(
                 self.max_staked,
                 self.config.get("min_stake", 0),
                 results["open_date"].values,
-                results["amount"].values,
                 results["close_date"].values,
-                close_amount,
+                results["amount"].values,
+                open_rate,
+                close_rate,
+                self.fee,
+                results["profit_abs"].values,
+                results["profit_percent"].values,
             )
             results = results[can_buy]
 
@@ -526,8 +533,8 @@ class HyperoptBacktesting(Backtesting):
         # df[isnan(df["high"].values), "high"] = df["open"]
         # df[isnan(df["close"].values), "close"] = df["open"]
         df.set_index("ohlc_ofs", inplace=True, drop=False)
-        if self.ignore_zero_volume:
-            zvol_mask = df["volume"].values > 0
+        if self.ignore_volume_below:
+            zvol_mask = df["volume"].values > self.max_staked * 10
             df["buy"].values[:] = df["buy"].values.astype(bool) & zvol_mask
             df["sell"].values[:] = df["sell"].values.astype(bool) & zvol_mask
         return df
@@ -760,8 +767,8 @@ class HyperoptBacktesting(Backtesting):
                 "bofs": bought[:, bts_loc["ohlc_ofs"]].astype("int64"),
                 "bsold": bought[:, bts_loc["next_sold_ofs"]].astype("int64"),
                 "bopen": bought[:, bts_loc["open"]],
+                "ohlc_open": df_vals[:, df_loc["open"]],
                 "ohlc_low": df_vals[:, df_loc["low"]],
-                # reshaping __here__ is import for hinting broadcasting during loops
                 "ohlc_high": df_vals[:, df_loc["high"]],
                 "ohlc_date": df_vals[:, df_loc["date"]].astype("int64"),
                 "b": 0,
@@ -824,6 +831,7 @@ class HyperoptBacktesting(Backtesting):
         fl_dict = {
             k: v[k]
             for k in (
+                "ohlc_open",
                 "ohlc_low",
                 "ohlc_high",
                 "bopen",

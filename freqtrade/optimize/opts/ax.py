@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 import logging
+import os
 from itertools import cycle
 from typing import Callable, Dict, Iterable, List, Sequence, Tuple, Union
 
@@ -73,7 +76,7 @@ class Ax(IOptimizer):
     _random_sampling = cycle(("SOBOL",))
     _client: AxClient
     _params_names: Sequence[str]
-    _seed_Xi: List = []
+    _seed_Xi: List
     _is_init = True
     _metrics: List[str]
     is_blocking = False
@@ -89,13 +92,15 @@ class Ax(IOptimizer):
         elif algo_cfg == "auto_moo":
             self._algos_pool = ALGOS_MOO
 
-    def copy(self, *args, **kwargs) -> IOptimizer:
+    def copy(self, *args, **kwargs) -> Ax:
         opt = super().copy(*args, **kwargs)
+        assert isinstance(opt, Ax)
         opt._client = self._client
         opt._params_names = self._params_names
         opt._space = self._space
         opt._model = self._model
         opt._experiment = self._experiment
+        opt._seed_Xi = self._seed_Xi
         return opt
 
     def update_space(self, parameters: Iterable):
@@ -283,15 +288,16 @@ class Ax(IOptimizer):
             self._params_names = list(p.name for p in parameters)
         self._metrics = list(self._config.get("metrics", []))
 
+        self._seed_Xi = []
         if self.from_seed:
             seed_path = self._config.get("seed_path", "")
-            if os.path.exists:
+            if os.path.exists(seed_path):
                 seed_config = read_json_file(seed_path)
                 assert isinstance(seed_config, dict)
                 if set(self._params_names) != set(seed_config.keys()):
                     raise ValueError(
                         f"seed configuration parameters (from: {seed_path})"
-                        "don't match optimizer parameters"
+                        " don't match optimizer parameters"
                     )
                 self._seed_Xi.append(seed_config)
 

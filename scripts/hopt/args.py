@@ -29,13 +29,12 @@ def parse_hopt_args() -> dict:
     parser.add_argument("-b", help="clear backtest cache", action="store_true")
     parser.add_argument("-s", help="no sell signal", action="store_true")
     # amounts:
-    # "": use default amounts config, don't optimize
-    # "off": disable backtesting amounts calculation
-    # "all": all
-    # "allone": all, then one by one
-    # "byone": one by one
+    # "[on|off]:[roi|trailing|stoploss]": use default amounts config, don't optimize
     parser.add_argument(
         "-amt", help="spaces for amounts", default="on:roi,stoploss,trailing", type=str
+    )
+    parser.add_argument(
+        "-risk", help="amounts config", default="", type=str
     )
     parser.add_argument("-edg", help="spaces for edge amounts", action="store_true")
     parser.add_argument("-pp", help="path for pairlist for profits tuning", default="")
@@ -68,7 +67,7 @@ def parse_hopt_args() -> dict:
         default=None,
     )
     parser.add_argument(
-        "-ns", help="no position stacking", default=False, action="store_true"
+        "-stack", help="position stacking", action="store_true"
     )
     parser.add_argument("-d", help="number of days", type=int, default=0)
     parser.add_argument("-g", help="timerange", type=str, default="")

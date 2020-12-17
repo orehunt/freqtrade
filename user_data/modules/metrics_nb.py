@@ -71,7 +71,8 @@ def lower_is_better_metrics(
     lib[2] = rnb.annualized_volatility_1d_nb(rt, af)
 
     rt_1d = rt.reshape((rt.shape[0], 1))
-    dd_rec = vbt.records.nb.drawdown_records_nb(rt_1d)
+    # dd_rec = vbt.records.nb.drawdown_records_nb(rt_1d)
+    dd_rec = vbt.generic.drawdowns.nb.find_drawdowns_nb(rt_1d)
     # avg drawdown dur
     lib[3] = np.nanmean(ts[dd_rec["end_idx"]] - ts[dd_rec["start_idx"]])
     # avg drawdown

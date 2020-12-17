@@ -272,9 +272,13 @@ def generate_candlestick_graph(
     :return: Plotly figure
     """
     plot_config = create_plotconfig(indicators1, indicators2, plot_config)
+    plot_pair_profits = int(bool(plot_config["pair_profits"]))
 
-    rows = 2 + len(plot_config["subplots"])
+    rows = 2 + len(plot_config["subplots"]) + plot_pair_profits
     row_widths = [1 for _ in plot_config["subplots"]]
+    if plot_pair_profits:
+        row_widths.append(1)
+
     # Define the graph
     fig = make_subplots(
         rows=rows,
@@ -369,16 +373,19 @@ def generate_candlestick_graph(
         fig = add_indicators(
             fig=fig, row=3 + i, indicators=plot_config["subplots"][name], data=data
         )
-    if plot_config.get("pair_profits", False):
+    if plot_config.get("pair_profits", True):
+        timeframe = plot_config["timeframe"]
         profit_col = f"cum_profit_{pair}"
         pair_trades = trades[trades["pair"] == pair]
+        data.set_index('date', inplace=True, drop=False)
         if len(pair_trades) > 0:
             data = create_cum_profit(data, pair_trades, profit_col, timeframe,
                                         profit_col='profit_abs')
         else:
             data[profit_col] = 0
 
-        fig = add_profit(fig, 3, df_comb, profit_col, f"Profit {pair}")
+        profit = go.Scatter(x=data.index, y=data[profit_col], name=f"Profits {pair}")
+        fig = add_profit(fig, 4 + i, data, profit_col, f"Profit {pair}")
 
     return fig
 
@@ -483,7 +490,6 @@ def load_and_plot_trades(config: Dict[str, Any]):
     plot_elements = init_plotscript(config, strategy.startup_candle_count)
     timerange = plot_elements['timerange']
     trades = plot_elements['trades']
-    print(trades)
     pair_counter = 0
     for pair, data in plot_elements["ohlcv"].items():
         pair_counter += 1

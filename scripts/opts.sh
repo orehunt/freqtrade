@@ -56,7 +56,7 @@ while getopts "ta:d:q:e:i:p:f:xm:ctd:s:n:g:u:l:r:y:o:v:b:j:" o; do
 		opt_cv=$OPTARG
 		;;
 	b) dburl="--db-url $OPTARG" ;;
-	j) debug="-v=${OPTARG}" ;;
+	w) debug="-v=${OPTARG}" ;;
 	x) set -x ;;
 	*) ;;
 	esac
@@ -114,7 +114,7 @@ if [ -n "$tuned_amounts" ]; then
 		amounts_tuned=$dir/amounts/${tuned_amounts}.json
 	fi
 else
-	amounts_tuned=$dir/roi/${timeframe}.json
+	amounts_tuned=$dir/risk/${timeframe}.json
 fi
 
 # get last trials instance from file
