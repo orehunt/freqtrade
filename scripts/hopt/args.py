@@ -36,7 +36,6 @@ def parse_hopt_args() -> dict:
     parser.add_argument(
         "-risk", help="amounts config", default="", type=str
     )
-    parser.add_argument("-edg", help="spaces for edge amounts", action="store_true")
     parser.add_argument("-pp", help="path for pairlist for profits tuning", default="")
     parser.add_argument("-ne", help="optimize evals number", type=str, default="")
     parser.add_argument(

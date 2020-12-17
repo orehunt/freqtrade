@@ -96,7 +96,7 @@ class Main:
             exchange_overrides.append(f"{config_dir}/{f}.json")
 
     if not args.risk:
-        risk_dir = "risk" if not args.edg else "risk_edge"
+        risk_dir = "risk"
         risk_config = f"{config_dir}/{risk_dir}/{timeframe}.json"
     else:
         risk_config = args.risk
@@ -109,6 +109,7 @@ class Main:
         f"{config_dir}/live.json",
         f"{config_dir}/askbid.json",
         f"{config_dir}/paths.json",
+        f"{config_dir}/protections.json",
     ]
 
     config = {}

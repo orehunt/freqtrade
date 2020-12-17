@@ -20,6 +20,7 @@ pairlists=$dir/pairlists_static.json
 $main_exec \
 	backtesting -c $hyperopt \
 	-c $strategy \
+	-c $protections \
 	-c $live \
 	-c $exchange \
 	-c $amounts \
@@ -31,6 +32,7 @@ $main_exec \
 	--userdir $userdir \
 	$dmmp \
 	$eps \
+	$ept \
 	$open_trades_arg \
 	$stake_amount_arg \
 	--timerange "$timerange" \

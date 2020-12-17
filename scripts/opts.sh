@@ -15,7 +15,9 @@ while getopts "ta:d:q:e:i:p:f:xm:ctd:s:n:g:u:l:r:y:o:v:b:j:" o; do
 		instance="$OPTARG"
 		;;
 	g) timerange="$OPTARG" ;;
-	p) pairs="--pairs $OPTARG" ;;
+	p) pairs="--pairs $OPTARG"
+	   ept="--enabled-protections"
+	   ;;
 	f)
 		pairsfile="--pairs-file $OPTARG"
 		profile=$OPTARG
@@ -86,7 +88,6 @@ else
 fi
 
 hyperopt=$dir/hyperopt.json
-edge=$dir/edge_backtesting.json
 live=$dir/live.json
 askbid=$dir/askbid.json
 exchange=${exchange:-$dir/${exchange_name}${exchange_tag}.json}
@@ -116,6 +117,8 @@ if [ -n "$tuned_amounts" ]; then
 else
 	amounts_tuned=$dir/risk/${timeframe}.json
 fi
+
+protections_file=$dir/protections.json
 
 # get last trials instance from file
 if [ -n "$instance" ]; then
