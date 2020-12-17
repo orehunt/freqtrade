@@ -316,6 +316,21 @@ class IStrategy(ABC):
             )
         return self.stop_config
 
+    def min_roi_reached(
+        self, trade: Trade, current_profit: float, current_time: datetime
+    ) -> Tuple[bool, Optional[int], Optional[float]]:
+        """
+        Based on trade duration defines the ROI entry that may have been reached.
+        :return: (False, None, None) if no ROI entry is found, otherwise bool determining
+        if ROI is reached, with the relative key/value for which it is reached
+        """
+        trade_dur = int((current_time.timestamp() - trade.open_date.timestamp()) // 60)
+        # Get highest entry in ROI dict where key <= trade-duration
+        roi_list = list(filter(lambda x: x <= trade_dur, self.minimal_roi.keys()))
+        if not roi_list:
+            return False, None, None
+        roi_entry = max(roi_list)
+        return current_profit > roi_entry, roi_entry, self.minimal_roi[roi_entry]
 
 ###
 # END - Intended to be overridden by strategy
@@ -651,21 +666,6 @@ class IStrategy(ABC):
 
         return SellCheckTuple(sell_flag=False, sell_type=SellType.NONE)
 
-    def min_roi_reached(
-        self, trade: Trade, current_profit: float, current_time: datetime
-    ) -> Tuple[bool, Optional[int], Optional[float]]:
-        """
-        Based on trade duration defines the ROI entry that may have been reached.
-        :return: (False, None, None) if no ROI entry is found, otherwise bool determining
-        if ROI is reached, with the relative key/value for which it is reached
-        """
-        trade_dur = int((current_time.timestamp() - trade.open_date.timestamp()) // 60)
-        # Get highest entry in ROI dict where key <= trade-duration
-        roi_list = list(filter(lambda x: x <= trade_dur, self.minimal_roi.keys()))
-        if not roi_list:
-            return False, None, None
-        roi_entry = max(roi_list)
-        return current_profit > roi_entry, roi_entry, self.minimal_roi[roi_entry]
 
     def ohlcvdata_to_dataframe(self, data: Dict[str, DataFrame]) -> Dict[str, DataFrame]:
         """
