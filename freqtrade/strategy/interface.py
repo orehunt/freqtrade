@@ -2,6 +2,7 @@
 IStrategy interface
 This module defines the interface to apply for strategies
 """
+from types import SimpleNamespace
 import logging
 import sys
 import warnings
@@ -55,13 +56,15 @@ class SellType(Enum):
         return self.value
 
 
-class SellCheckTuple(NamedTuple):
+class SellCheckTuple(SimpleNamespace):
     """
     NamedTuple for Sell type + reason
     """
 
     sell_flag: bool
     sell_type: SellType
+    roi_entry: Optional[int] = None
+    roi_value: Optional[float] = None
 
 class StoplossConfig(SimpleNamespace):
     stoploss: float
@@ -544,9 +547,11 @@ class IStrategy(ABC):
         config_ask_strategy = self.config.get("ask_strategy", {})
 
         # if buy signal and ignore_roi is set, we don't need to evaluate min_roi.
-        roi_reached = (not (buy and config_ask_strategy.get('ignore_roi_if_buy_signal', False))
-                       and self.min_roi_reached(trade=trade, current_profit=current_profit,
-                                                current_time=date))
+        roi_reached, roi_entry, roi_value = (
+            self.min_roi_reached(trade=trade, current_profit=current_profit, current_time=date)
+            if not (buy and config_ask_strategy.get("ignore_roi_if_buy_signal", False))
+            else (False, None, None,)
+        )
 
         if config_ask_strategy.get('sell_profit_only', False) and trade.calc_profit(rate=rate) <= 0:
             # Negative profits and sell_profit_only - ignore sell signal
@@ -578,7 +583,9 @@ class IStrategy(ABC):
 
         # This one is noisy, commented out...
         # logger.debug(f"{trade.pair} - No sell signal. sell_flag=False")
-        return SellCheckTuple(sell_flag=False, sell_type=SellType.NONE)
+        return SellCheckTuple(
+            sell_flag=False, sell_type=SellType.NONE, roi_entry=roi_entry, roi_value=roi_value
+        )
 
     def stop_loss_reached(
         self,
@@ -644,33 +651,21 @@ class IStrategy(ABC):
 
         return SellCheckTuple(sell_flag=False, sell_type=SellType.NONE)
 
-    def min_roi_reached_entry(self, trade_dur: int) -> Tuple[Optional[int], Optional[float]]:
+    def min_roi_reached(
+        self, trade: Trade, current_profit: float, current_time: datetime
+    ) -> Tuple[bool, Optional[int], Optional[float]]:
         """
         Based on trade duration defines the ROI entry that may have been reached.
-        :param trade_dur: trade duration in minutes
-        :return: minimal ROI entry value or None if none proper ROI entry was found.
+        :return: (False, None, None) if no ROI entry is found, otherwise bool determining
+        if ROI is reached, with the relative key/value for which it is reached
         """
+        trade_dur = int((current_time.timestamp() - trade.open_date.timestamp()) // 60)
         # Get highest entry in ROI dict where key <= trade-duration
         roi_list = list(filter(lambda x: x <= trade_dur, self.minimal_roi.keys()))
         if not roi_list:
-            return None, None
+            return False, None, None
         roi_entry = max(roi_list)
-        return roi_entry, self.minimal_roi[roi_entry]
-
-    def min_roi_reached(self, trade: Trade, current_profit: float, current_time: datetime) -> bool:
-        """
-        Based on trade duration, current profit of the trade and ROI configuration,
-        decides whether bot should sell.
-        :param current_profit: current profit as ratio
-        :return: True if bot should sell at current rate
-        """
-        # Check if time matches and current rate is above threshold
-        trade_dur = int((current_time.timestamp() - trade.open_date.timestamp()) // 60)
-        _, roi = self.min_roi_reached_entry(trade_dur)
-        if roi is None:
-            return False
-        else:
-            return current_profit > roi
+        return current_profit > roi_entry, roi_entry, self.minimal_roi[roi_entry]
 
     def ohlcvdata_to_dataframe(self, data: Dict[str, DataFrame]) -> Dict[str, DataFrame]:
         """
