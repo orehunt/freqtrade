@@ -140,7 +140,7 @@ class FreqtradeBot(LoggingMixin):
         self.rpc.startup_messages(self.config, self.pairlists, self.protections)
         if not self.edge:
             # Adjust stoploss if it was changed
-            Trade.stoploss_reinitialization(self.strategy.amounts)
+            Trade.stoploss_reinitialization(self.strategy.get_stoploss)
 
         # Only update open orders on startup
         # This will update the database after the initial migration

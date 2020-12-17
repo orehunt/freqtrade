@@ -238,9 +238,9 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
 
     def _set_params(self, params_dict: Dict[str, Any]):
         if self.has_space("roi"):
-            self.backtesting.strategy.amounts[
-                "minimal_roi"
-            ] = self.custom_hyperopt.generate_roi_table(params_dict)
+            self.backtesting.strategy.minimal_roi = self.custom_hyperopt.generate_roi_table(
+                params_dict
+            )
         if self.has_space("buy"):
             self.backtesting.strategy.advise_buy = self.custom_hyperopt.buy_strategy_generator(
                 params_dict
@@ -252,20 +252,22 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             )
 
         if self.has_space("stoploss"):
-            self.backtesting.strategy.amounts["stoploss"] = params_dict["stoploss"]
+            self.backtesting.strategy.stoploss = params_dict["stoploss"]
 
         if self.has_space("trailing"):
             d = self.custom_hyperopt.generate_trailing_params(params_dict)
-            self.backtesting.strategy.amounts["trailing_stop"] = d["trailing_stop"]
-            self.backtesting.strategy.amounts["trailing_stop_positive"] = d[
+            self.backtesting.strategy.trailing_stop = d["trailing_stop"]
+            self.backtesting.strategy.trailing_stop_positive = d[
                 "trailing_stop_positive"
             ]
-            self.backtesting.strategy.amounts["trailing_stop_positive_offset"] = d[
+            self.backtesting.strategy.trailing_stop_positive_offset = d[
                 "trailing_stop_positive_offset"
             ]
-            self.backtesting.strategy.amounts["trailing_only_offset_is_reached"] = d[
+            self.backtesting.strategy.trailing_only_offset_is_reached = d[
                 "trailing_only_offset_is_reached"
             ]
+        # reset stoploss config to re-generate with new values
+        self.strategy.stop_config = None
 
     def backtest_params(
         self,
@@ -302,8 +304,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             end_date=max_date.datetime,
             max_open_trades=self.max_open_trades,
             position_stacking=self.position_stacking,
-            enable_protections=self.config.get('enable_protections', False),
-
+            enable_protections=self.config.get("enable_protections", False),
         )
         return self._get_result(
             backtesting_results,
@@ -835,8 +836,10 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                         )
                     )
             else:
-                if self.config.get('hyperopt_continue_filtered', True):
-                    self.trials = self.progressive_filtering(self.trials, 0, self.config)
+                if self.config.get("hyperopt_continue_filtered", True):
+                    self.trials = self.progressive_filtering(
+                        self.trials, 0, self.config
+                    )
                 if len(self.trials) > 0 and not self.async_sched:
                     if self.random_state != self.trials.iloc[-1]["random_state"]:
                         logger.warning(

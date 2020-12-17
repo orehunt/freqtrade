@@ -63,6 +63,12 @@ class SellCheckTuple(NamedTuple):
     sell_flag: bool
     sell_type: SellType
 
+class StoplossConfig(SimpleNamespace):
+    stoploss: float
+    trailing_stop: bool = False
+    trailing_stop_positive: Optional[float] = None
+    trailing_stop_positive_offset: float = 0.0
+    trailing_only_offset_is_reached = False
 
 class IStrategy(ABC):
     """
@@ -100,6 +106,9 @@ class IStrategy(ABC):
     trailing_stop_positive: Optional[float] = None
     trailing_stop_positive_offset: float = 0.0
     trailing_only_offset_is_reached = False
+
+    # stoploss namespace
+    stop_config: StoplossConfig = None
 
     # associated timeframe
     ticker_interval: str  # DEPRECATED
@@ -281,6 +290,29 @@ class IStrategy(ABC):
         :param date: date of the trade (should be the latest candle for live run mode).
         """
         return self.config['stake_amount']
+
+    def get_stoploss(
+        self,
+        trade: Optional[Trade] = None,
+        current_rate: Optional[float] = None,
+        current_time: Optional[datetime] = None,
+        current_profit: Optional[float] = None,
+    ) -> StoplossConfig:
+        """
+        Called when querying for stoplosses
+        """
+        if self.stop_config is None:
+            self.stop_config = StoplossConfig(
+                **{
+                    "stoploss": self.stoploss,
+                    "trailing_stop": self.trailing_stop,
+                    "trailing_stop_positive": self.trailing_stop_positive,
+                    "trailing_stop_positive_offset": self.trailing_stop_positive_offset,
+                    "trailing_only_offset_is_reached": self.trailing_only_offset_is_reached,
+                }
+            )
+        return self.stop_config
+
 
 ###
 # END - Intended to be overridden by strategy

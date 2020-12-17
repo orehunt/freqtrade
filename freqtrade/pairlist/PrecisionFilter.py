@@ -22,11 +22,16 @@ class PrecisionFilter(IPairList):
             raise OperationalException(
                 'PrecisionFilter can only work with stoploss defined. Please add the '
                 'stoploss key to your configuration (overwrites eventual strategy settings).')
-        self._stoploss = self._config['stoploss']
         self._enabled = self._stoploss != 0
 
-        # Precalculate sanitized stoploss value to avoid recalculation for every pair
-        self._stoploss = 1 - abs(self._stoploss)
+    @staticmethod
+    def _sanitize_stoploss(stoploss: float):
+        return  1 - abs(stoploss)
+
+    def _pair_stop_price(self, ticker: Dict[str, Any]):
+        stoploss = self._strategy.get_stoploss().stoploss
+        stoploss = return self._sanitize_stoploss(stoploss)
+        return stoploss * ticker['ask']
 
     @property
     def needstickers(self) -> bool:
@@ -51,7 +56,7 @@ class PrecisionFilter(IPairList):
         :param ticker: ticker dict as returned from ccxt.load_markets()
         :return: True if the pair can stay, false if it should be removed
         """
-        stop_price = ticker['ask'] * self._stoploss
+        stop_price = self._pair_stop_price(pair, ticker)
 
         # Adjust stop-prices to precision
         sp = self._exchange.price_to_precision(pair, stop_price)
