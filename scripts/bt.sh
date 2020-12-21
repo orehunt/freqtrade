@@ -20,7 +20,7 @@ pairlists=$dir/pairlists_static.json
 $main_exec \
 	backtesting -c $hyperopt \
 	-c $strategy \
-	-c $protections \
+	-c $protections_file \
 	-c $live \
 	-c $exchange \
 	-c $amounts \

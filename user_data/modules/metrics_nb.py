@@ -149,3 +149,8 @@ def cmp_ilq(prefix, sig, df, ilq, params):
         return ilq > params[f"{prefix}_{sig}_limit"]
     else:
         return ilq < params[f"{prefix}_{sig}_limit"]
+
+@nb.njit(cache=True)
+def upside_volatility(pnl: np.ndarray):
+    """ The deviation of profits """
+    return pnl.sum() / (pnl[pnl > 0].std() or np.nan)

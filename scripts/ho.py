@@ -500,7 +500,7 @@ class Main:
         if not instance and hasattr(self.ho, "trials_instance"):
             instance = self.ho.trials_instance
         elif instance == "last":
-            instance = self.ho.get_last_instance(self.ho.trials_instances_file, cv=cv)
+            instance = self.ho.get_last_instance(self.ho.last_instance_file)
 
         # try to wait for path, or exit
         if wait:
@@ -1100,10 +1100,8 @@ class Main:
             )
             params.update(amounts["trailing"])
         if params:
-            amounts = {"amounts": params}
-            amounts.update(params)
             print(f"updating amounts at {amounts_path}")
-            self.write_json_file(amounts, amounts_path)
+            self.write_json_file(params, amounts_path)
             self.write_json_file(
                 {"run_best": best["loss"]}, paths["best"], update=False
             )

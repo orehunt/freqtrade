@@ -3,7 +3,7 @@
 . .env/miniconda3/etc/profile.d/conda.sh
 conda activate freqtradej
 
-while getopts "ta:d:q:e:i:p:f:xm:ctd:s:n:g:u:l:r:y:o:v:b:j:" o; do
+while getopts "ta:d:q:e:i:p:f:xm:ctd:s:n:g:u:l:r:y:o:v:b:j:w" o; do
 	case "$o" in
 	a) stake_amount="$OPTARG" ;;
 	t) dltype="--dl-trades" ;;
@@ -16,7 +16,7 @@ while getopts "ta:d:q:e:i:p:f:xm:ctd:s:n:g:u:l:r:y:o:v:b:j:" o; do
 		;;
 	g) timerange="$OPTARG" ;;
 	p) pairs="--pairs $OPTARG"
-	   ept="--enabled-protections"
+	   ept="--enable-protections"
 	   ;;
 	f)
 		pairsfile="--pairs-file $OPTARG"
@@ -58,7 +58,7 @@ while getopts "ta:d:q:e:i:p:f:xm:ctd:s:n:g:u:l:r:y:o:v:b:j:" o; do
 		opt_cv=$OPTARG
 		;;
 	b) dburl="--db-url $OPTARG" ;;
-	w) debug="-v=${OPTARG}" ;;
+	w) debug="-v=vvv" ;;
 	x) set -x ;;
 	*) ;;
 	esac

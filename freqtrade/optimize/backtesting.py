@@ -246,7 +246,7 @@ class Backtesting:
             # Set close_rate to stoploss
             return trade.stop_loss
         elif sell.sell_type == (SellType.ROI):
-            roi_entry, roi = SellCheckTuple.roi_entry, SellCheckTuple.roi_value
+            roi_entry, roi = sell.roi_entry, sell.roi_value
             if roi is not None and roi_entry is not None:
                 if roi == -1 and roi_entry % self.timeframe_min == 0:
                     # When forceselling with ROI=-1, the roi time will always be equal to trade_dur.

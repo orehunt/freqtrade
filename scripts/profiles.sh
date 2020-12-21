@@ -11,7 +11,7 @@ function multi {
 }
 
 function cv {
-    export MODE=cv EPOCHS=0 JOBS=10 LOSSF=MCCalmarRatio RES="" TDATE="-g 20201001-20201201" INST=last
+    export MODE=cv EPOCHS=0 JOBS=10 LOSSF=MCCalmarRatio RES="" TDATE="-g 20201001-20201201" INST=last STACK=
 }
 
 function tdate {
@@ -35,9 +35,9 @@ function tdatef {
 }
 
 function asha {
-   PTS=1 MODE=single ALGO=Sherpa:ASHA JOBS=14
+   PTS=1 MODE=single ALGO=Sherpa:ASHA JOBS=14 LOSSF=MCCalmarRatio
 }
 
 function moo {
-   PTS=1 MODE=multi JOBS=4 ALGO=Ax:MOO
+   PTS=1 MODE=multi JOBS=4 ALGO=Ax:MOO LOSSF=MC_tasp
 }

@@ -380,7 +380,9 @@ def trim(
         # appear later in the timeline
         if trimmed is not None:
             # don't use values as that would loose the timezone
-            trimmed["date"] = trimmed["date"] + td
+            # rule is shift forward by the longer tf and then backward
+            # by the shorter tf
+            trimmed["date"] = trimmed["date"] + td - ref_td
         return trimmed
     # if the timedelta is smaller trim by date, to ensure that
     # the smaller frequency includes all the required (and available) dates

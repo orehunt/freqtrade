@@ -2,8 +2,8 @@
 IStrategy interface
 This module defines the interface to apply for strategies
 """
-import numpy as np
 from types import SimpleNamespace
+import numpy as np
 import logging
 import sys
 import warnings
@@ -38,6 +38,7 @@ class SignalType(Enum):
     SELL = "sell"
 
 
+
 class SellType(Enum):
     """
     Enum to distinguish between sell reasons
@@ -56,8 +57,7 @@ class SellType(Enum):
         # explicitly convert to String to help with exporting data.
         return self.value
 
-
-class SellCheckTuple(SimpleNamespace):
+class SellCheckTuple(NamedTuple):
     """
     NamedTuple for Sell type + reason
     """
@@ -72,7 +72,7 @@ class StoplossConfig(SimpleNamespace):
     trailing_stop: bool = False
     trailing_stop_positive: Optional[float] = None
     trailing_stop_positive_offset: float = 0.0
-    trailing_only_offset_is_reached = False
+    trailing_only_offset_is_reached: bool = False
 
 class IStrategy(ABC):
     """

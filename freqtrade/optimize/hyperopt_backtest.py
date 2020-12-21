@@ -1,5 +1,8 @@
+from collections import namedtuple
 import logging
-from enum import IntEnum
+import os
+from joblib import dump, load
+from enum import Enum, IntEnum
 from types import SimpleNamespace
 from typing import Dict, Iterable, List, Tuple, Union
 
@@ -16,7 +19,7 @@ from freqtrade.optimize.backtest_nb import *  # noqa ignore=F405
 from freqtrade.optimize.backtest_utils import *  # noqa ignore=F405
 from freqtrade.optimize.backtesting import Backtesting, BacktestResult
 from freqtrade.optimize.debug import dbg  # noqa ignore=F405
-from freqtrade.strategy.interface import SellType
+from freqtrade.strategy.interface import SellType, StoplossConfig
 from numpy import (
     append,
     arange,
@@ -38,8 +41,20 @@ from numpy import (
     zeros,
 )
 from pandas import DataFrame, Series, Timedelta, concat, to_datetime, to_timedelta
+from freqtrade.optimize.vbt import order_func_nb, IntSellType, StoplossConfigJit, SellContext
+from vectorbt import Portfolio
 
 logger = logging.getLogger(__name__)
+
+
+class OHLCV(NamedTuple):
+    pairs: np.ndarray
+    open: np.ndarray
+    high: np.ndarray
+    low: np.ndarray
+    close: np.ndarray
+    volume: np.ndarray
+    spread: np.ndarray
 
 
 class HyperoptBacktesting(Backtesting):
@@ -70,15 +85,16 @@ class HyperoptBacktesting(Backtesting):
 
     def __init__(self, config):
         self.bt_ng = config.get("backtesting_engine")
-        if self.bt_ng in ("chunked", "loop_ranges", "loop_candles"):
+        if self.bt_ng in ("chunked", "loop_ranges", "loop_candles", "vbt"):
             self.backtest_vanilla = self.backtest
+            if self.bt_ng == "vbt":
+                self.vectorized_backtest = self.vbt_backtest
             if dbg:
                 dbg._debug_opts()
                 dbg.backtesting = self
                 self.backtest = dbg._wrap_backtest
             else:
                 self.backtest = self.vectorized_backtest
-            self.beacktesting_engine = "vectorized"
         else:
             super().__init__(config)
             return
@@ -162,10 +178,38 @@ class HyperoptBacktesting(Backtesting):
         if self.config.get("max_open_trades", 0) > 0:
             logger.warn("Ignoring max open trades...")
         self.max_staked = self.config.get("max_staked", 0)
+        self.min_stake = self.config.get("min_stake", 1e-8)
         self.force_sell_max_duration = self.config.get("signals", {}).get(
             "force_sell_max_duration", False
         )
         self.spaces = self.config.get("spaces", {})
+
+        # VBT
+        self.vbt_processed_file = (
+            self.config["user_data_dir"] / "hyperopt_data" / "vbt_processed.pkl"
+        )
+        # make sure to delete previous stale files before run starts
+        if os.path.exists(self.vbt_processed_file):
+            os.remove(self.vbt_processed_file)
+        # create int to type map for replacing
+        self.sell_type_map = {}
+        for a, b in zip(IntSellType, SellType):
+            # make sure the IntSellType enum matches the SellType enum
+            if a.name != b.name:
+                raise OperationalException(
+                    "SellType and IntSellType enums do not match"
+                )
+            # we must replace int numbers with selltype values
+            self.sell_type_map[a.value] = b
+
+    def get_trade_duration(self, open_date, close_date) -> np.ndarray:
+        """ Convert difference from two datetime arrays into duration (minutes, float) """
+        trade_duration = to_timedelta(Series(close_date - open_date), unit="ns",)
+        # replace trade duration of same candle trades with half the timeframe reduce to minutes
+        trade_duration[trade_duration == self.td_zero].values[
+            :
+        ] = self.td_half_timeframe
+        return trade_duration.dt.total_seconds() / 60
 
     def get_results(
         self, buy_vals: ndarray, sell_vals: ndarray, ohlc_vals: ndarray
@@ -273,9 +317,7 @@ class HyperoptBacktesting(Backtesting):
 
         # use stake amount decided by the strategy
         if self.static_stake:
-            self.strategy.stake = np.full(
-                len(buy_vals), self.config["stake_amount"]
-            )
+            self.strategy.stake = np.full(len(buy_vals), self.config["stake_amount"])
         else:
             self.strategy.stake = buy_vals[:, buy_cols["stake_amount"]]
         # assert (self.strategy.stake > 0.01).all()
@@ -290,14 +332,10 @@ class HyperoptBacktesting(Backtesting):
             open_rate, close_rate, calc_abs=True,
         )
 
-        trade_duration = to_timedelta(
-            Series(sell_vals[:, sell_cols["date"]] - buy_vals[:, buy_cols["date"]]),
-            unit="ns",
+        trade_duration = self.get_trade_duration(
+            buy_vals[:, buy_cols["date"]], sell_vals[:, sell_cols["date"]]
         )
-        # replace trade duration of same candle trades with half the timeframe reduce to minutes
-        trade_duration[trade_duration == self.td_zero].values[
-            :
-        ] = self.td_half_timeframe
+
         results = DataFrame(
             {
                 "pair": replace_values(
@@ -312,7 +350,7 @@ class HyperoptBacktesting(Backtesting):
                 "close_rate": close_rate,
                 "close_fee": self.fee,
                 "amount": self.strategy.stake,
-                "trade_duration": trade_duration.dt.total_seconds() / 60,
+                "trade_duration": trade_duration,
                 "open_at_end": False,
                 "sell_reason": sell_reason,
                 #
@@ -325,7 +363,7 @@ class HyperoptBacktesting(Backtesting):
             # NOTE: updates the amount and profit_abs/percent inplace
             can_buy = dont_buy_over_max_stake(
                 self.max_staked,
-                self.config.get("min_stake", 0),
+                self.min_stake,
                 results["open_date"].values,
                 results["close_date"].values,
                 results["amount"].values,
@@ -481,9 +519,7 @@ class HyperoptBacktesting(Backtesting):
             )
             df_vals[:, loc["stake_amount"]] = self.strategy.stake
         else:
-            self.strategy.stake = np.full(
-                len(df_vals), self.config["stake_amount"]
-            )
+            self.strategy.stake = np.full(len(df_vals), self.config["stake_amount"])
         return df_vals
 
     def merge_pairs_df(self, processed: Dict[str, DataFrame]) -> DataFrame:
@@ -1170,6 +1206,177 @@ class HyperoptBacktesting(Backtesting):
     @property
     def no_signals_optimization(self):
         return "buy" not in self.spaces and "sell" not in self.spaces
+
+    def _vbt_get_ohlcv(self, processed: Dict[str, DataFrame]) -> OHLCV:
+        vbt_processed = (
+            load(self.vbt_processed_file)
+            if os.path.exists(self.vbt_processed_file)
+            else None
+        )
+        if vbt_processed is None:
+            pairs = np.array(list(processed.keys()))
+            window = self.timeframe_wnd
+            op = []
+            hi = []
+            lo = []
+            cl = []
+            vol = []
+            sp = []
+            for df in processed.values():
+                df.set_index("date", inplace=True)
+                op.append(df["open"])
+                hi.append(df["high"])
+                lo.append(df["low"])
+                cl.append(df["close"])
+                vol.append(df["volume"])
+                spread = calc_skewed_spread(
+                    hi[-1].values,
+                    lo[-1].values,
+                    cl[-1].values,
+                    vol[-1].values,
+                    window,
+                    None,
+                )
+                sp.append(Series(spread, index=df.index))
+            op = concat(op, axis=1)
+            hi = concat(hi, axis=1)
+            lo = concat(lo, axis=1)
+            cl = concat(cl, axis=1)
+            vol = concat(vol, axis=1)
+            sp = concat(sp, axis=1)
+            vbt_processed = OHLCV(pairs, op, hi, lo, cl, vol, sp)
+            dump(vbt_processed, self.vbt_processed_file)
+        return vbt_processed
+
+    def vbt_backtest(self, processed: Dict[str, DataFrame], **kwargs,) -> DataFrame:
+        self.min_date = kwargs["start_date"]
+        self.max_date = kwargs["end_date"]
+        pairs_map = {}
+        buys = []
+        sells = []
+        amount = []
+        for n, (pair, df) in enumerate(processed.items()):
+            meta = {"pair": pair}
+            try:
+                df["buy"].values[:] = 0
+                df["sell"].values[:] = 0
+            # ignore if cols are not present
+            except KeyError:
+                df["buy"] = 0
+                df["sell"] = 0
+                assign = True
+            df = self.strategy.advise_buy(df, meta)
+            df = self.strategy.advise_sell(df, meta)
+            df.set_index("date", inplace=True, drop=False)
+            pairs_map[n] = pair
+            buys.append(df["buy"])
+            sells.append(df["sell"])
+            amount.append(df["stake_amount"])
+
+        ohlcv = self._vbt_get_ohlcv(processed)
+        buy_sigs = concat(buys, axis=1)
+        sell_sigs = concat(sells, axis=1)
+        amount = concat(amount, axis=1)
+
+        assert all(tuple(pairs_map.values()) == ohlcv.pairs)
+        n_pairs = len(pairs_map)
+        roi_timeouts, roi_values = self._filter_roi()
+        # dict to store the sell reason (IntSellReason), keys are entry_idx
+        sell_reason_map = nb.typed.Dict.empty(key_type=nb.int64, value_type=nb.float64)
+        stp = self.strategy.get_stoploss().__dict__
+        stp["stoploss"] = abs(stp["stoploss"])
+        stp = StoplossConfigJit(**stp)
+        n_pairs_arr = lambda tp: np.empty(n_pairs, dtype=tp)
+
+        # initialize sell context to
+        seco = SellContext(
+            buys=buy_sigs.values,
+            sells=sell_sigs.values,
+            buy_rate=n_pairs_arr(float),
+            buy_row=n_pairs_arr(int),
+            op=ohlcv.open.values,
+            hi=ohlcv.high.values,
+            lo=ohlcv.low.values,
+            cl=ohlcv.close.values,
+            slippage=ohlcv.spread.values,
+            slip_window=self.timeframe_wnd,
+            fees=self.fee,
+            stop_rates=n_pairs_arr(float),
+            stop_config=stp,
+            amount=amount.values,
+            sell_reason=sell_reason_map,
+            min_buy_value=self.min_stake,
+            min_sell_value=self.min_stake / 2,
+            # the keys are the rounded timeframes
+            inv_roi_timeouts=np.array(list(roi_timeouts.keys()))[::-1],
+            inv_roi_values=np.array(roi_values)[::-1]
+        )
+
+        logger.debug('generating portfolio')
+        portfolio = Portfolio.from_order_func(
+            ohlcv.close,
+            order_func_nb,
+            seco,
+            init_cash=self.max_staked,
+            cash_sharing=True,
+            group_by=True,
+        )
+        logger.debug('getting orders')
+        # split buy/sell orders
+        orders = portfolio.orders().records
+        buy_orders = orders[orders["side"] == 0]
+        trades_seq = buy_orders["idx"]
+        # this should not be needed as we ensure only executed orders are logged
+        # orders[~np.isnan[orders['size']]]
+
+        logger.debug('getting trades')
+        # sort trades by entry_idx from the logged index
+        trades = portfolio.trades().records
+        trades.set_index("entry_idx", inplace=True, drop=False)
+        trades = trades.loc[trades_seq]
+        # exclude trades that are still open, do this after sorting
+        # because the sorting index (from orders) includes open trades
+        # and can't .loc with missing labels
+        trades = trades[trades["status"] == 1]
+
+        logger.debug('getting trade duration')
+        # shift dates backward by one since the buy is executed
+        # on the open of the next candle
+        dates = shift(ohlcv.close.index.values.astype(float), -1)
+        open_date = dates[trades["entry_idx"]]
+        close_date = dates[trades["exit_idx"]]
+        trade_duration = self.get_trade_duration(open_date, close_date)
+
+        logger.debug('returning results')
+        results = DataFrame(
+            {
+                "pair": trades["col"].replace(pairs_map).values,
+                "profit_percent": trades["return"].values,
+                "profit_abs": trades["pnl"].values,
+                "open_date": to_datetime(open_date),
+                "open_rate": trades["entry_price"].values,
+                "open_fee": trades["entry_fees"].values,
+                "close_date": to_datetime(close_date),
+                "close_rate": trades["exit_price"].values,
+                "close_fee": trades["exit_fees"].values,
+                "amount": trades["size"].values,
+                "trade_duration": trade_duration,
+                "open_at_end": False,
+                # first replace entries from the create sell reason map, then replace
+                # int with equivalent enum selltype,
+                # add one since sell reason tracks with buy row which is the open of the next candle
+                "sell_reason": trades["entry_idx"].add(1)
+                .replace(sell_reason_map)
+                .replace(self.sell_type_map).values,
+            },
+            index=np.arange(len(trades)),
+        )
+        # print(sell_reason_map)
+        # print(trades["entry_idx"]
+        #         .replace(sell_reason_map))
+        # for k in results:
+        #     assert np.isfinite(results[k].values).all()
+        return results
 
     def vectorized_backtest(
         self, processed: Dict[str, DataFrame], **kwargs,

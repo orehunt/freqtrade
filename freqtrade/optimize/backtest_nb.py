@@ -1,4 +1,5 @@
-from typing import Optional
+from typing import Callable, Optional
+from functools import partial
 import logging
 
 import numba as nb
@@ -14,6 +15,15 @@ logger = logging.getLogger(__name__)
 logging.getLogger("numba.core.ssa").setLevel(logging.WARNING)
 logging.getLogger("numba.core.interpreter").setLevel(logging.WARNING)
 logging.getLogger("numba.core.byteflow").setLevel(logging.WARNING)
+
+
+def njit(
+    cache: bool = False,
+    nogil: bool = False,
+    fastmath: bool = False,
+    inline: bool = True,
+) -> Callable:
+    return partial(nb.njit, cache=cache, fastmath=fastmath, nogil=nogil)
 
 
 @njit(cache=True, nogil=True)

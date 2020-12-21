@@ -267,7 +267,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                 "trailing_only_offset_is_reached"
             ]
         # reset stoploss config to re-generate with new values
-        self.strategy.stop_config = None
+        self.backtesting.strategy.stop_config = None
 
     def backtest_params(
         self,

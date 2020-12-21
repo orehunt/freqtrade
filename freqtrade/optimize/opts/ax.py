@@ -205,7 +205,7 @@ class Ax(IOptimizer):
         return getattr(Models, next(self._random_sampling))
 
     def _setup_experiment(self):
-        if self.algo == "MOO":
+        if self.algo in ALGOS_MOO:
             metrics = [Metric(m, lower_is_better=True,) for m in self._metrics]
             objective = ScalarizedObjective(metrics, minimize=True)
             OptCfg = MultiObjectiveOptimizationConfig
@@ -231,21 +231,25 @@ class Ax(IOptimizer):
             runner=SyntheticRunner(),
         )
 
+    @staticmethod
+    def _is_a_getter(algo: str):
+        return algo.replace("get_", "") != algo
+
     def _setup_model(self):
 
-        self.algo = next(self._algos_pool)
-        if not self.algo:
+        algo = self.algo = next(self._algos_pool)
+        if not algo:
             self.algo = "auto"
-        if self.algo == "rand":
+        if algo == "rand":
             model = self._rand_model()
-        elif self.algo == "auto":
+        elif algo == "auto":
             model = Models.GPMES
-        elif self.algo == "MOO":
+        elif algo == "MOO":
             model = get_MOO_PAREGO
-        elif self.algo.replace("get_", "") != self.algo:
-            model = getattr(factory, self.algo)
+        elif self._is_a_getter(algo):
+            model = getattr(factory, algo)
         else:
-            model = getattr(Models, self.algo)
+            model = getattr(Models, algo)
         self._model = model
 
     def _setup_strategy(self):
@@ -260,14 +264,7 @@ class Ax(IOptimizer):
                     model_kwargs=kwargs,
                 )
             )
-        if self.algo != "MOO":
-            steps.append(
-                GenerationStep(self._model, num_trials=-1, model_kwargs=kwargs)
-            )
-        else:
-            steps.append(
-                GenerationStep(get_MOO_PAREGO, num_trials=-1, model_kwargs=kwargs)
-            )
+        steps.append(GenerationStep(self._model, num_trials=-1, model_kwargs=kwargs))
         self._strategy = GenerationStrategy(steps)
 
     def _setup_client(self):
@@ -326,10 +323,11 @@ class Ax(IOptimizer):
         return asked
 
     def _get_y(self, yin):
-        if self.algo != "MOO":
-            return next(iter(yin.values()))
-        else:
-            return {m: (yin[m], None) for m in yin}
+        return (
+            {m: (yin[m], None) for m in yin}
+            if self.algo in ALGOS_MOO
+            else next(iter(yin.values()))
+        )
 
     def _attach_trials(self, Xi, yi, x_has_meta=True):
         for n, obs in enumerate(Xi):
