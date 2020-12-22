@@ -705,9 +705,9 @@ def dont_buy_over_max_stake(
 ):
     n_trades = len(open_date)
     avl_stake = max_staked
-    amount_prc = amount / open_rate
-    open_price = amount_prc * open_rate + amount_prc * fee
-    close_price = amount_prc * close_rate - amount_prc * close_rate * fee
+    shares = amount / open_rate
+    open_price = amount + amount * fee
+    close_price = shares * close_rate - shares * close_rate * fee
 
     can_buy = np.full(n_trades, False)
     outstanding = []
@@ -726,9 +726,9 @@ def dont_buy_over_max_stake(
             # adjust amount if above avl_stake
             if min(open_price[i], avl_stake) != open_price[i]:
                 amount[i] = avl_stake
-                avl_prc = avl_stake / open_rate[i]
-                o_price = avl_prc * open_rate[i] + avl_prc * open_rate[i] * fee
-                c_price = avl_prc * close_rate[i] - avl_prc * close_rate[i] * fee
+                shares = avl_stake / open_rate[i]
+                o_price = avl_stake + avl_stake * fee
+                c_price = shares * close_rate[i] - shares * close_rate[i] * fee
                 profit_abs[i] = c_price - o_price
                 profit_percent[i] = c_price / o_price - 1
             else:

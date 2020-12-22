@@ -4,7 +4,7 @@ import os
 from joblib import dump, load
 from enum import Enum, IntEnum
 from types import SimpleNamespace
-from typing import Dict, Iterable, List, Tuple, Union
+from typing import Dict, Iterable, List, Sequence, Tuple, Union
 
 import pandas as pd
 from freqtrade.exceptions import OperationalException
@@ -41,7 +41,12 @@ from numpy import (
     zeros,
 )
 from pandas import DataFrame, Series, Timedelta, concat, to_datetime, to_timedelta
-from freqtrade.optimize.vbt import order_func_nb, IntSellType, StoplossConfigJit, SellContext
+from freqtrade.optimize.vbt import (
+    simulate_trades,
+    IntSellType,
+    StoplossConfigJit,
+    Context,
+)
 from vectorbt import Portfolio
 
 logger = logging.getLogger(__name__)
@@ -162,9 +167,9 @@ class HyperoptBacktesting(Backtesting):
         # after having loaded the strategy
         # null all config amounts for disabled ones (to compare against vanilla backtesting)
         if not self.roi_enabled:
-            self.strategy.minimal_roi = {0: 10}
-            config["minimal_roi"] = {"0": 10}
-            self.strategy.minimal_roi = {"0": 10}
+            self.strategy.minimal_roi = {0: 10.0}
+            config["minimal_roi"] = {"0": 10.0}
+            self.strategy.minimal_roi = {"0": 10.0}
         if not self.trailing_enabled:
             self.strategy.trailing_stop = False
             config["trailing_stop"] = False
@@ -202,13 +207,16 @@ class HyperoptBacktesting(Backtesting):
             # we must replace int numbers with selltype values
             self.sell_type_map[a.value] = b
 
-    def get_trade_duration(self, open_date, close_date) -> np.ndarray:
+    def get_trade_duration(
+        self, duration: Optional[Sequence] = None, open_date=None, close_date=None
+    ) -> np.ndarray:
         """ Convert difference from two datetime arrays into duration (minutes, float) """
-        trade_duration = to_timedelta(Series(close_date - open_date), unit="ns",)
+        if duration is not None:
+            trade_duration = to_timedelta(Series(duration), unit="ns")
+        else:
+            trade_duration = to_timedelta(Series(close_date - open_date), unit="ns",)
         # replace trade duration of same candle trades with half the timeframe reduce to minutes
-        trade_duration[trade_duration == self.td_zero].values[
-            :
-        ] = self.td_half_timeframe
+        trade_duration[trade_duration == self.td_zero] = self.td_half_timeframe
         return trade_duration.dt.total_seconds() / 60
 
     def get_results(
@@ -333,7 +341,8 @@ class HyperoptBacktesting(Backtesting):
         )
 
         trade_duration = self.get_trade_duration(
-            buy_vals[:, buy_cols["date"]], sell_vals[:, sell_cols["date"]]
+            open_date=buy_vals[:, buy_cols["date"]],
+            close_date=sell_vals[:, sell_cols["date"]],
         )
 
         results = DataFrame(
@@ -358,7 +367,7 @@ class HyperoptBacktesting(Backtesting):
                 # "close_index": sell_vals[:, sell_cols["ohlc"]].astype(int),
             }
         )
-        results.sort_values(by="open_date", inplace=True)
+        results.sort_values(by=["open_date", 'pair'], inplace=True)
         if self.max_staked and not self.position_stacking:
             # NOTE: updates the amount and profit_abs/percent inplace
             can_buy = dont_buy_over_max_stake(
@@ -1279,98 +1288,48 @@ class HyperoptBacktesting(Backtesting):
         amount = concat(amount, axis=1)
 
         assert all(tuple(pairs_map.values()) == ohlcv.pairs)
-        n_pairs = len(pairs_map)
         roi_timeouts, roi_values = self._filter_roi()
-        # dict to store the sell reason (IntSellReason), keys are entry_idx
-        sell_reason_map = nb.typed.Dict.empty(key_type=nb.int64, value_type=nb.float64)
         stp = self.strategy.get_stoploss().__dict__
         stp["stoploss"] = abs(stp["stoploss"])
         stp = StoplossConfigJit(**stp)
-        n_pairs_arr = lambda tp: np.empty(n_pairs, dtype=tp)
 
+        logger.debug("creating context")
         # initialize sell context to
-        seco = SellContext(
+        ctx = Context(
+            pairs=nb.typed.List(pairs_map.values()),
+            date=ohlcv.open.index.values,
             buys=buy_sigs.values,
             sells=sell_sigs.values,
-            buy_rate=n_pairs_arr(float),
-            buy_row=n_pairs_arr(int),
             op=ohlcv.open.values,
             hi=ohlcv.high.values,
             lo=ohlcv.low.values,
             cl=ohlcv.close.values,
             slippage=ohlcv.spread.values,
-            slip_window=self.timeframe_wnd,
+            slp_window=self.timeframe_wnd,
             fees=self.fee,
-            stop_rates=n_pairs_arr(float),
             stop_config=stp,
             amount=amount.values,
-            sell_reason=sell_reason_map,
             min_buy_value=self.min_stake,
             min_sell_value=self.min_stake / 2,
             # the keys are the rounded timeframes
-            inv_roi_timeouts=np.array(list(roi_timeouts.keys()))[::-1],
-            inv_roi_values=np.array(roi_values)[::-1]
+            inv_roi_timeouts=np.array(list(roi_timeouts.keys()), dtype=int)[::-1],
+            inv_roi_values=np.array(roi_values, dtype=float)[::-1],
+            cash_now=self.max_staked,
         )
 
-        logger.debug('generating portfolio')
-        portfolio = Portfolio.from_order_func(
-            ohlcv.close,
-            order_func_nb,
-            seco,
-            init_cash=self.max_staked,
-            cash_sharing=True,
-            group_by=True,
-        )
-        logger.debug('getting orders')
-        # split buy/sell orders
-        orders = portfolio.orders().records
-        buy_orders = orders[orders["side"] == 0]
-        trades_seq = buy_orders["idx"]
-        # this should not be needed as we ensure only executed orders are logged
-        # orders[~np.isnan[orders['size']]]
+        logger.debug("simulating trades")
+        trades = simulate_trades(ctx)
+        results = DataFrame.from_records(trades)
 
-        logger.debug('getting trades')
-        # sort trades by entry_idx from the logged index
-        trades = portfolio.trades().records
-        trades.set_index("entry_idx", inplace=True, drop=False)
-        trades = trades.loc[trades_seq]
-        # exclude trades that are still open, do this after sorting
-        # because the sorting index (from orders) includes open trades
-        # and can't .loc with missing labels
-        trades = trades[trades["status"] == 1]
+        logger.debug("casting tpes")
+        # upcast types
+        results["pair"].replace(pairs_map, inplace=True)
+        results["open_date"] = results["open_date"].astype("datetime64[ns, UTC]")
+        results["close_date"] = results["close_date"].astype("datetime64[ns, UTC]")
+        results["sell_reason"].replace(self.sell_type_map, inplace=True)
+        results["trade_duration"] = self.get_trade_duration(results["trade_duration"])
 
-        logger.debug('getting trade duration')
-        # shift dates backward by one since the buy is executed
-        # on the open of the next candle
-        dates = shift(ohlcv.close.index.values.astype(float), -1)
-        open_date = dates[trades["entry_idx"]]
-        close_date = dates[trades["exit_idx"]]
-        trade_duration = self.get_trade_duration(open_date, close_date)
-
-        logger.debug('returning results')
-        results = DataFrame(
-            {
-                "pair": trades["col"].replace(pairs_map).values,
-                "profit_percent": trades["return"].values,
-                "profit_abs": trades["pnl"].values,
-                "open_date": to_datetime(open_date),
-                "open_rate": trades["entry_price"].values,
-                "open_fee": trades["entry_fees"].values,
-                "close_date": to_datetime(close_date),
-                "close_rate": trades["exit_price"].values,
-                "close_fee": trades["exit_fees"].values,
-                "amount": trades["size"].values,
-                "trade_duration": trade_duration,
-                "open_at_end": False,
-                # first replace entries from the create sell reason map, then replace
-                # int with equivalent enum selltype,
-                # add one since sell reason tracks with buy row which is the open of the next candle
-                "sell_reason": trades["entry_idx"].add(1)
-                .replace(sell_reason_map)
-                .replace(self.sell_type_map).values,
-            },
-            index=np.arange(len(trades)),
-        )
+        logger.debug("returning results")
         # print(sell_reason_map)
         # print(trades["entry_idx"]
         #         .replace(sell_reason_map))
