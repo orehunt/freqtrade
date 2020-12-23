@@ -2,6 +2,7 @@ from enum import Enum
 from freqtrade.optimize.backtesting import BacktestResult
 from functools import partial
 from typing import (
+    Dict,
     List,
     Callable,
     MutableSequence,
@@ -37,6 +38,7 @@ class IntSellType(Enum):
     FORCE_SELL = 5
     EMERGENCY_SELL = 6
     NONE = 7
+
 
 @jitclass(BacktestResultTypeSig)
 class BacktestResultJit(object):
@@ -162,21 +164,27 @@ class TradeJit:
         open_idx: nb.int64,
         open_price: nb.float64,
         cash: nb.float64,
+        cash_now: nb.float64,
         min_cash: nb.float64,
         fees: nb.float64,
         slp: nb.float64,
         stoploss: nb.float64,
     ):
-        """ !!! both open_price and cash can't be 0 !!! """
-        # skip orders that don't meet minimum order size
-        if cash < min_cash:
-            return 0
+        """
+        !!! both open_price and cash can't be 0 !!!
+        The open function doesn't check for a minimum size
+        """
         self.open_idx = open_idx
         self.open_price = open_price
         self.buy_price = open_price + open_price * slp
 
-        self.shares_held = cash / self.buy_price
-        self.cash_spent = cash + cash * fees
+        # ensure the order size is at least min_cash
+        cash_sized = max(min_cash, cash)
+        self.shares_held = cash_sized / self.buy_price
+        self.cash_spent = cash_sized + cash_sized * fees
+        # skip orders where cash spent exceeds available cash
+        if self.cash_spent > cash_now:
+            return 0
         self.stoploss_price = open_price * (1.0 - stoploss)
         self.initial_stoploss_price = self.stoploss_price
 
@@ -191,15 +199,18 @@ class TradeJit:
         slp: nb.float64,
         sell_reason: nb.int64,
         min_cash: nb.float64,
+        # when trade is too low value to be closed, replace slippage with forfeit slippage
+        forfeit_slp: nb.float64 = 0.33,
     ):
-        sell_price = close_price - close_price * slp
-        cash_value = self.shares_held * sell_price
+        self.sell_price = close_price - close_price * slp
+        cash_value = self.shares_held * self.sell_price
         # don't sell if value is below minimum sell size
         if cash_value < min_cash:
-            return 0
+            # print("can't sell, settling trade with adjusted slippage: ", cash_value, min_cash)
+            self.sell_price = close_price - close_price * forfeit_slp
+            cash_value = self.shares_held * self.sell_price
 
         self.close_idx = close_idx
-        self.sell_price = sell_price
         self.sell_reason = sell_reason
         self.cash_returned = cash_value - cash_value * fees
 
@@ -284,33 +295,33 @@ def get_slippage(idx, col, slippage, slp_window):
 
 
 @njit(cache=True)
-def check_for_buy(i, c, ctx, trades):
+def check_for_buy(i, c, ctx, trades: Dict[int, TradeJit]):
     """ Should only be called when cash is available """
-    trade_is_closed = trades[c].status == 1
-    if (
-        trade_is_closed
+    if trades[c].status == 1:
         # buys and sell must not conflict
-        and ctx.buys[i, c]
-        and (not ctx.sells[i, c])
-        # cash at hand must be above minimum tradeable
-        and ctx.cash_now > ctx.min_bv
-    ):
-        # index of bought, which is at start of next candle
-        bi = i + 1
-        # create trade for column
-        ctx.cash_now -= trades[c].open(
-            open_idx=bi,
-            # price is open of next candle
-            open_price=ctx.open[bi, c],
-            # don't buy over available cash
-            cash=min(ctx.cash_now, ctx.amount[i, c]),
-            min_cash=ctx.min_bv,
-            fees=ctx.fees,
-            slp=get_slippage(bi, c, ctx.slippage, ctx.slp_window),
-            stoploss=ctx.stop_config.stoploss,
-        )
+        if ctx.buys[i, c] and (not ctx.sells[i, c]):
+            # index of bought, which is at start of next candle
+            bi = i + 1
+            # create trade for column
+            ctx.cash_now -= trades[c].open(
+                open_idx=bi,
+                # price is open of next candle
+                open_price=ctx.open[bi, c],
+                # respect the minimum order size, buy if min_bv > cash_now, the order will fail
+                cash=ctx.amount[i, c],
+                cash_now=ctx.cash_now,
+                min_cash=ctx.min_bv,
+                fees=ctx.fees,
+                slp=get_slippage(bi, c, ctx.slippage, ctx.slp_window),
+                stoploss=ctx.stop_config.stoploss,
+            )
+            # if trades[c].status == 0:
+            #     print("created trade: ", i, ctx.pairs[c])
+        # always return true even if trade fails, because:
+        # don't need to check sells if trade is closed (== there was no trade)
+        # the trade is opened on the next candle, not the one with the signal
         return True
-    return trade_is_closed
+    return False
 
 
 @njit(cache=True)
@@ -322,7 +333,8 @@ def check_roi_on_open(i, c, ctx, trades):
         )
         # sell with roi on open
         if triggered:
-            # print('open roi, size: ', trades[c].shares_held)
+            # assert i >= trades[c].open_idx
+            # print("roi on open: ", i, ctx.pairs[c], trades[c].status)
             ctx.cash_now += trades[c].close(
                 close_idx=i,
                 close_price=ctx.open_r,
@@ -331,17 +343,19 @@ def check_roi_on_open(i, c, ctx, trades):
                 sell_reason=IntSellType.ROI.value,
                 min_cash=ctx.min_sv,
             )
-            return True
+            return trades[c].status
     return False
 
 
 @njit(cache=True)
 def check_stop_on_open(i, c, ctx, trades):
-    if ctx.close_r <= ctx.open_r:
+    # if candle is green, likely sequence is low -> high
+    if ctx.close_r > ctx.open_r:
         # check previous stoploss
         stoploss_price = trades[c].stoploss_price
         if ctx.low_r <= stoploss_price:
-            # print('previous trailing: ', )
+            # print("stoploss on open: ", i, ctx.pairs[c])
+            # assert i >= trades[c].open_idx
             ctx.cash_now += trades[c].close(
                 close_idx=i,
                 close_price=stoploss_price,
@@ -354,7 +368,7 @@ def check_stop_on_open(i, c, ctx, trades):
                 ),
                 min_cash=ctx.min_sv,
             )
-            return True
+            return trades[c].status
     return False
 
 
@@ -362,7 +376,8 @@ def check_stop_on_open(i, c, ctx, trades):
 def check_roi_on_high(i, c, high_profit, ctx, trades):
     triggered, roi = weighted_roi_is_triggered(ctx.span, high_profit, ctx.irt, ctx.irv)
     if triggered:
-        # print("high roi: ", )
+        # print("roi on high: ", i, ctx.pairs[c])
+        # assert i >= trades[c].open_idx
         ctx.cash_now += trades[c].close(
             close_idx=i,
             # when roi is triggered on high, close_price depends on roi target
@@ -372,7 +387,7 @@ def check_roi_on_high(i, c, high_profit, ctx, trades):
             sell_reason=IntSellType.ROI.value,
             min_cash=ctx.min_sv,
         )
-        return True
+        return trades[c].status
     return False
 
 
@@ -380,7 +395,8 @@ def check_roi_on_high(i, c, high_profit, ctx, trades):
 def check_stop_on_high(i, c, high_profit, ctx, trades):
     stoploss_price = trades[c].update_stoploss(ctx.high_r, high_profit, ctx.stop_config)
     if ctx.low_r <= stoploss_price:
-        # print("updated trailing: ", )
+        # print("stoploss on high: ", i, ctx.pairs[c])
+        # assert i >= trades[c].open_idx
         ctx.cash_now += trades[c].close(
             close_idx=i,
             close_price=stoploss_price,
@@ -393,7 +409,7 @@ def check_stop_on_high(i, c, high_profit, ctx, trades):
             ),
             min_cash=ctx.min_sv,
         )
-        return True
+        return trades[c].status
     return False
 
 
@@ -410,7 +426,7 @@ def check_for_sell(i, c, ctx, trades):
             sell_reason=IntSellType.SELL_SIGNAL.value,
             min_cash=ctx.min_sv,
         )
-        return True
+        return trades[c].status
     return False
 
 
@@ -418,6 +434,10 @@ def check_for_sell(i, c, ctx, trades):
 def create_result(ctx, c, trade: TradeJit, results):
     open_date = ctx.date[trade.open_idx]
     close_date = ctx.date[trade.close_idx]
+    # if trade.close_idx < trade.open_idx:
+    #     print(ctx.pairs[c], trade.sell_reason)
+    # assert trade.close_idx >= trade.open_idx
+    # assert close_date > open_date
     res = BacktestResultJit()
     val = res.get(
         pair=c,
@@ -438,8 +458,10 @@ def create_result(ctx, c, trade: TradeJit, results):
 
 
 @njit(cache=False)
-def iterate(ctx, results, trades):
+def iterate(ctx: Context, results, trades):
+    # loop over dates
     for i, row in enumerate(ctx.close):
+        # loop over assets
         for c, clo in enumerate(row):
             # skip unavailable data
             if np.isnan(clo):
@@ -473,6 +495,7 @@ def iterate(ctx, results, trades):
 def init_trades(trades_dict, n_cols):
     for c in range(n_cols):
         trades_dict[c] = TradeJit()
+
 
 def simulate_trades(ctx) -> np.ndarray:
     results = nb.typed.List.empty_list(item_type=BacktestResultJitType)

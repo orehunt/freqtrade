@@ -1135,6 +1135,8 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         )
 
         dump(preprocessed, self.data_pickle_file)
+        if self.config['backtesting_engine'] == 'vbt':
+            self.backtesting._vbt_get_ohlcv(preprocessed)
 
     def start(self) -> None:
         """ Broom Broom """

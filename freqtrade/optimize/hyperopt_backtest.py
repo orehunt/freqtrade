@@ -1119,7 +1119,7 @@ class HyperoptBacktesting(Backtesting):
                     )
                 )
             ]
-            assert (events_buy[:, bts_loc["stake_amount"]] != 0).all()
+            # assert (events_buy[:, bts_loc["stake_amount"]] != 0).all()
             events_sell = bts_vals[
                 (
                     (bts_vals[:, bts_loc["bought_or_sold"]] == Candle.SOLD)
@@ -1232,7 +1232,7 @@ class HyperoptBacktesting(Backtesting):
             vol = []
             sp = []
             for df in processed.values():
-                df.set_index("date", inplace=True)
+                df.set_index("date", inplace=True, drop=False)
                 op.append(df["open"])
                 hi.append(df["high"])
                 lo.append(df["low"])
@@ -1276,11 +1276,13 @@ class HyperoptBacktesting(Backtesting):
                 assign = True
             df = self.strategy.advise_buy(df, meta)
             df = self.strategy.advise_sell(df, meta)
+            idx = df.index
             df.set_index("date", inplace=True, drop=False)
             pairs_map[n] = pair
             buys.append(df["buy"])
             sells.append(df["sell"])
             amount.append(df["stake_amount"])
+            df.set_index(idx, inplace=True)
 
         ohlcv = self._vbt_get_ohlcv(processed)
         buy_sigs = concat(buys, axis=1)
@@ -1298,8 +1300,8 @@ class HyperoptBacktesting(Backtesting):
         ctx = Context(
             pairs=nb.typed.List(pairs_map.values()),
             date=ohlcv.open.index.values,
-            buys=buy_sigs.values,
-            sells=sell_sigs.values,
+            buys=buy_sigs.values.astype(float),
+            sells=sell_sigs.values.astype(float),
             op=ohlcv.open.values,
             hi=ohlcv.high.values,
             lo=ohlcv.low.values,
