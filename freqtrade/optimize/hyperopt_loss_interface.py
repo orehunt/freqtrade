@@ -4,10 +4,16 @@ This module defines the interface for the loss-function for hyperopt
 """
 
 from abc import ABC, abstractmethod
-from datetime import datetime
-from typing import Dict, List
+from typing import Any, Callable, Dict, List, Tuple
 
 from pandas import DataFrame
+
+from freqtrade.optimize.vbt import BacktestResultTupleType
+
+
+Objective = Dict[str, float]
+ObjectiveTuple = Tuple[Tuple[str, float], ...]
+jittedLoss = Callable[[List[BacktestResultTupleType]], ObjectiveTuple]
 
 
 class IHyperOptLoss(ABC):
@@ -19,16 +25,16 @@ class IHyperOptLoss(ABC):
     timeframe: str
     metrics: List[str]
 
-    @staticmethod
     @abstractmethod
     def hyperopt_loss_function(
-        results: DataFrame,
-        trade_count: int,
-        min_date: datetime,
-        max_date: datetime,
-        *args,
-        **kwargs
-    ) -> Dict[str, float]:
+        self, results: DataFrame, results_metrics: Dict[str, Any], *args, **kwargs
+    ) -> Objective:
         """
         Objective function, returns smaller number for better results
+        """
+
+    @abstractmethod
+    def hyperopt_loss_function_nb(self) -> jittedLoss:
+        """
+        Called to generate the jitted loss function
         """

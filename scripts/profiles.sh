@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-export MX MT MODE EPOCHS JOBS LOSSF TIMEFRAME INST TDATE SPACES ALGO RES STACK POINTS RPT
+export MX MT MODE EPOCHS JOBS LOSSF TIMEFRAME INST TDATE SPACES ALGO RES STACK POINTS RPT AMT DBG RISK
 function multi {
     export MODE=multi EPOCHS=10000 RES="-res" TDATE="-g 20200101-20201001" INST=
     JOBS=${JOBS:-4}
@@ -7,6 +7,7 @@ function multi {
     TIMEFRAME=${TIMEFRAME:-5m}
     ALGO=${ALGO:-Ax:MOO}
     LOSSF=${LOSSF:-MC_tasp}
+    AMT=${AMT:-on\:roi,trailing,stoploss}
     STACK=1
 }
 

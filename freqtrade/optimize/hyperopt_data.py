@@ -97,12 +97,40 @@ class HyperoptData(backend.HyperoptBase):
     # loss
     custom_hyperoptloss = None
 
-    metrics = ("profit", "avg_profit", "duration", "trade_count")
+    metrics = (
+        "med_profit_mid",
+        "total_profit_mid",
+        "avg_profit_mid",
+        "trade_duration_mid",
+        "trade_count_mid",
+        "trade_ratio_mid",
+        "win_ratio_mid",
+    )
     min_date: datetime
     max_date: datetime
 
     _store: za.storage.DirectoryStore
     _group: za.hierarchy.Group
+    columns = {
+        "total_profit_bot": float64,
+        "total_profit_mid": float64,
+        "total_profit_top": float64,
+        "med_profit_bot": float64,
+        "med_profit_mid": float64,
+        "med_profit_top": float64,
+        "avg_profit_bot": float64,
+        "avg_profit_mid": float64,
+        "avg_profit_top": float64,
+        "win_ratio_bot": float64,
+        "win_ratio_mid": float64,
+        "win_ratio_top": float64,
+        "trade_ratio_bot": float64,
+        "trade_ratio_mid": float64,
+        "trade_ratio_top": float64,
+        "trade_duration_bot": float64,
+        "trade_duration_mid": float64,
+        "trade_duration_top": float64,
+    }
 
     def __init__(self, config):
         self.config = config
@@ -165,10 +193,7 @@ class HyperoptData(backend.HyperoptBase):
         """ Force types for ambiguous metrics """
         trials = trials.astype(
             dtype={
-                "total_profit": float64,
-                "total_profit": float64,
-                "avg_profit": float64,
-                "duration": float64,
+                k: v for k, v in HyperoptData.columns.items() if k in trials.columns
             },
             copy=False,
         ).fillna(0)
@@ -415,8 +440,14 @@ class HyperoptData(backend.HyperoptBase):
             "no_trades": config.get("hyperopt_list_keep_no_trades", False),
             "min_trades": config.get("hyperopt_list_min_trades", None),
             "max_trades": config.get("hyperopt_list_max_trades", None),
+            "min_trade_ratio": config.get("hyperopt_list_min_returns", None),
+            "max_trade_ratio": config.get("hyperopt_list_max_returns", None),
+            "min_win_ratio": config.get("hyperopt_list_min_win_ratio", None),
+            "max_win_ratio": config.get("hyperopt_list_max_win_ratio", None),
             "min_avg_time": config.get("hyperopt_list_min_avg_time", None),
             "max_avg_time": config.get("hyperopt_list_max_avg_time", None),
+            "min_med_profit": config.get("hyperopt_list_min_med_profit", None),
+            "max_med_profit": config.get("hyperopt_list_max_med_profit", None),
             "min_avg_profit": config.get("hyperopt_list_min_avg_profit", None),
             "max_avg_profit": config.get("hyperopt_list_max_avg_profit", None),
             "min_total_profit": config.get("hyperopt_list_min_total_profit", None),
@@ -507,22 +538,29 @@ class HyperoptData(backend.HyperoptBase):
         if not filters["enabled"] or len(trials) < 1:
             return hd.list_or_df(trials, return_list)
         if filters["no_trades"]:
-            no_trades = trials.loc[trials["trade_count"] < 1]
+            no_trades = trials.loc[trials["trade_count_mid"] < 1]
         else:
             no_trades = DataFrame()
 
-        trials = trials.loc[trials["trade_count"] > 0]
+        trials = trials.loc[trials["trade_count_mid"] > 0]
         filters_col = {
-            "trades": "trade_count",
-            "avg_time": "duration",
-            "avg_profit": "avg_profit",
-            "total_profit": "profit",
+            "trades": "trade_count_mid",
+            "avg_time": "trade_duration_mid",
+            "avg_profit": "avg_profit_mid",
+            "total_profit": "total_profit_mid",
+            "med_profit": "med_profit_mid",
+            "trade_ratio": "trade_ratio_mid",
+            "win_ratio": "win_ratio_mid",
         }
         for bound in ("min", "max"):
             for f, c in filters_col.items():
                 if filters[f"{bound}_{f}"] is not None:
                     trials = HyperoptData.trim_bounds(
-                        trials, filters["trail"], c, bound, filters[f"{bound}_{f}"],
+                        trials,
+                        filters["trail"],
+                        c,
+                        bound,
+                        filters[f"{bound}_{f}"],
                     )
 
         if len(trials) > 0:
@@ -600,12 +638,19 @@ class HyperoptData(backend.HyperoptBase):
         """ Normalize metrics and sort by sum or minimum score """
 
         # invert objectives values and duration to simplify
-        trials["duration"] = trials["duration"].mul(-1)
+        td_col = "trade_duration_mid"
+        trials[td_col] = trials[td_col].mul(-1)
         trials[objectives] = trials[objectives].mul(-1)
 
-        metrics = ("profit", "avg_profit", "duration", "trade_count") + tuple(
-            objectives
-        )
+        metrics = (
+            "total_profit_mid",
+            "med_profit_mid",
+            "avg_profit_mid",
+            "win_ratio_mid",
+            "trade_ratio_mid",
+            td_col,
+            # don't use trade count
+        ) + tuple(objectives)
 
         # calculate the normalized metrics as columns
         for m in metrics:
@@ -615,7 +660,7 @@ class HyperoptData(backend.HyperoptBase):
             trials[f"norm_{m}"] = (m_col - m_min) / ((m_max - m_min) or 1)
         # re-invert
         trials[objectives] = trials[objectives].mul(-1)
-        trials["duration"] = trials["duration"].mul(-1)
+        trials[td_col] = trials[td_col].mul(-1)
 
         # Calc cutoff percentage based on normalization
         types_best = filters["best"]
@@ -679,7 +724,8 @@ class HyperoptData(backend.HyperoptBase):
         or pick n == `range` trials for every `step_metric`...
         for every `step_metric`, sorted by `sort_metric` for every `sort_metric`...
         """
-        metrics = HyperoptData.metrics + tuple(objectives)
+        o_tuple = tuple(objectives)
+        metrics = HyperoptData.metrics + o_tuple
         if filters["step_keys"]:
             step_keys = (
                 metrics if filters["step_keys"] == ["all"] else filters["step_keys"]
@@ -693,7 +739,7 @@ class HyperoptData(backend.HyperoptBase):
                 for sort_k in sort_keys:
                     flt_trials.extend(
                         HyperoptData.step_over_trials(
-                            step_k, step_values, sort_k, trials, intensity
+                            step_k, step_values, sort_k, o_tuple, trials, intensity
                         )
                     )
         else:
@@ -747,11 +793,16 @@ class HyperoptData(backend.HyperoptBase):
 
     @staticmethod
     def step_over_trials(
-        step_k: str, step_values: Dict, sort_k: str, trials: DataFrame, intensity=1
+        step_k: str,
+        step_values: Dict,
+        sort_k: str,
+        objectives: Tuple[str, ...],
+        trials: DataFrame,
+        intensity=1,
     ) -> List:
         """ Apply the sampling of a metric_key:sort_key combination over the trials """
         # for duration and loss we sort by the minimum
-        ascending = sort_k in ("duration", "loss")
+        ascending = (sort_k == "trade_duration_mid") or (sort_k in objectives)
         flt_trials = []
         last_epoch = None
         steps, step_v = HyperoptData.find_steps(step_k, step_values, trials)
@@ -829,7 +880,10 @@ class HyperoptData(backend.HyperoptBase):
 
     @staticmethod
     def clear_instance(
-        trials_file: Path, instance_name: str, trials_state=None, backup=False,
+        trials_file: Path,
+        instance_name: str,
+        trials_state=None,
+        backup=False,
     ) -> bool:
         success = False
         locked = backend.acquire_lock(trials_state) if trials_state else False
@@ -944,7 +998,10 @@ class HyperoptData(backend.HyperoptBase):
                     # in shared or single mode
                     new_pars
                     # in multi mode when there are filtered trials
-                    or self.reduce_spaces(self.parameters.copy(), opt_trials,)
+                    or self.reduce_spaces(
+                        self.parameters.copy(),
+                        opt_trials,
+                    )
                 )
                 # don't update space if this optimizer didn't have filtered trials
                 if opt_pars:

@@ -4,6 +4,7 @@ set -euo pipefail
 [ -n "$INST" ] && inst="-inst $INST" || inst=
 [ -n "$RISK" ] && risk="-risk $RISK" || risk=
 [ -n "$STACK" ] && stack="-stack" || stack=
+[ -n "$DBG" ] && debug="-dbg 3" || debug=
 
 ho.py -i $TIMEFRAME \
     -b \
@@ -11,7 +12,7 @@ ho.py -i $TIMEFRAME \
     -alg $ALGO \
     -sgn $SPACES \
     $risk \
-    -amt on:roi,trailing,stoploss \
+    -amt $AMT \
     $stack \
     -mt ${MT:-1} \
     -mx ${MX:-1} \
@@ -21,4 +22,5 @@ ho.py -i $TIMEFRAME \
     -e $EPOCHS \
     -mode $MODE \
     $TDATE \
-    $inst $@
+    $inst \
+    $debug $@

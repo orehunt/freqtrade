@@ -181,6 +181,7 @@ class HyperoptOut(HyperoptData):
         tabulate.PRESERVE_WHITESPACE = True
 
         logger.debug("Formatting results...")
+        # pd.set_option('max_columns', 9)
 
         trials["Best"] = ""
         trials = trials.loc[
@@ -188,77 +189,116 @@ class HyperoptOut(HyperoptData):
             [
                 "Best",
                 "current_epoch",
-                "trade_count",
-                "avg_profit",
-                "total_profit",
-                "profit",
-                "duration",
+                "trade_count_mid",
+                "trade_ratio_mid",
+                "win_ratio_mid",
+                "avg_profit_mid",
+                "med_profit_mid",
+                "total_profit_mid",
+                "trade_duration_mid",
                 "is_initial_point",
                 "is_best",
+                "loss",
             ],
         ]
         trials.columns = [
-            "Best",
+            "B",
             "Epoch",
             "Trades",
-            "Avg profit",
-            "Total profit",
-            "Profit",
-            "Avg duration",
+            "Returns R.",
+            "Win R.",
+            "Avg. P.",
+            "Med. P.",
+            "Tot. P.",
+            "Avg. Dur.",
             "is_initial_point",
             "is_best",
+            "loss",
         ]
         trials["is_profit"] = False
-        trials.loc[trials["is_initial_point"], "Best"] = "*"
-        trials.loc[trials["is_best"], "Best"] = "Best"
-        trials.loc[trials["Total profit"] > 0, "is_profit"] = True
+        trials.loc[trials["is_initial_point"], "B"] = "*"
+        trials.loc[trials["is_best"], "B"] = "!"
+        trials.loc[trials["Tot. P."].values > 0, "is_profit"] = True
         trials["Trades"] = trials["Trades"].astype(str)
 
+        is_best = trials["is_best"].values
+        is_profit = trials["is_profit"].values
+
+        w = 10
         l = HyperoptOut.limit_num_len
+        c = config["stake_currency"]
+        # currency width
+        c_w = len(c)
+        # profit width
+        p_w = w + c_w + 2
+        # duration width
+        d_w = 5
+        # ratio width
+        r_w = 8
+
         trials["Epoch"] = trials["Epoch"].apply(
             lambda x: "{}/{}".format(
-                str(x).rjust(len(str(total_epochs)), " "), total_epochs
+                # for a maximum of 99999/99999 epochs
+                str(x).rjust(11, " "),
+                total_epochs,
             )
         )
-        trials["Avg profit"] = trials["Avg profit"].apply(
-            lambda x: l(x, "{:,.2f}%").rjust(7, " ")
+        trials["Avg. P."] = trials["Avg. P."].apply(
+            lambda x: l(x, "{:,.5g} {}".format(x, c)).rjust(p_w, " ")
             if not isna(x)
-            else "--".rjust(7, " ")
+            else "--".rjust(p_w, " ")
         )
-        trials["Avg duration"] = trials["Avg duration"].apply(
-            lambda x: l(x, "{:,.1f} m").rjust(7, " ")
+        trials["Med. P."] = trials["Med. P."].apply(
+            lambda x: l(x, "{:,.5g} {}".format(x, c)).rjust(p_w, " ")
             if not isna(x)
-            else "--".rjust(7, " ")
+            else "--".rjust(p_w, " ")
         )
-
-        trials["Profit"] = trials.apply(
-            lambda x: "{} {} {}".format(
-                l(x["Total profit"], "{:,.2f}"),
-                config["stake_currency"],
-                l(x["Profit"], "({:,.2f}%)").rjust(10, " "),
-            ).rjust(25 + len(config["stake_currency"]))
-            if x["Total profit"] != 0.0
-            else "--".rjust(25 + len(config["stake_currency"])),
+        trials["Tot. P."] = trials.apply(
+            lambda x: "{} {}".format(
+                l(x["Tot. P."], "{:.5g}"),
+                c,
+            ).rjust(p_w, " ")
+            if not isna(x["Tot. P."])
+            else "--".rjust(p_w, " "),
             axis=1,
         )
-        trials = trials.drop(columns=["Total profit"])
+        trials["Avg. Dur."] = trials["Avg. Dur."].apply(
+            lambda x: l(x, "{:,.1f} m").rjust(d_w, " ")
+            if not isna(x)
+            else "--".rjust(d_w, " ")
+        )
+        trials["Win R."] = trials["Win R."].apply(
+            lambda x: l(x, "{:.4g}").rjust(r_w, " ")
+            if not isna(x)
+            else "--".rjust(r_w, " ")
+        )
+        trials["Returns R."] = trials["Returns R."].apply(
+            lambda x: l(x, "{:.4g}").rjust(r_w, " ")
+            if not isna(x)
+            else "--".rjust(r_w, " ")
+        )
+
+        trials.drop(columns=["loss"], inplace=True)
+        for col in trials.columns.difference(
+            ["is_profit", "is_best", "is_initial_point"]
+        ):
+            trials[col] = trials[col].astype(str)
 
         n_cols = len(trials.columns)
-        n_trials = len(trials)
         if print_colorized:
-            for i in range(n_trials):
-                if trials["is_profit"].iat[i]:
-                    for j in range(n_cols - 3):
+            for i in range(len(trials)):
+                if is_profit[i]:
+                    for j in range(n_cols):
                         trials.iat[i, j] = "{}{}{}".format(
                             Fore.GREEN, trials.iat[i, j], Fore.RESET
                         )
-                if trials["is_best"].iat[i] and highlight_best:
+                if is_best[i] and highlight_best:
                     for j in range(n_cols - 3):
                         trials.iat[i, j] = "{}{}{}".format(
                             Style.BRIGHT, trials.iat[i, j], Style.RESET_ALL
                         )
 
-        trials = trials.drop(columns=["is_initial_point", "is_best", "is_profit"])
+        trials.drop(columns=["is_initial_point", "is_best", "is_profit"], inplace=True)
         if remove_header > 0:
             table = tabulate.tabulate(
                 trials.to_dict(orient="list"),
@@ -286,19 +326,17 @@ class HyperoptOut(HyperoptData):
         return table
 
     @staticmethod
-    def _format_results_explanation_string(
-        stake_cur: str, results_metrics: Dict
-    ) -> str:
+    def _format_results_explanation_string(stake_cur: str, r: Dict) -> str:
         """
         Return the formatted results explanation in a string
         """
         return (
             (
-                f"{results_metrics['trade_count']:6d} trades. "
-                f"Avg profit {results_metrics['avg_profit']:6.2e}%. "
-                f"Total profit {results_metrics['total_profit']:11.8e} {stake_cur} "
-                f"({results_metrics['profit']: 7.2f}%). "
-                f"Avg duration {results_metrics['duration']:5.1e} min."
+                f"trades: {r['trade_count_mid']} | "
+                f"profits ({stake_cur}): (tot) {r['total_profit_mid']:.2f} "
+                f"(rti) {r['trade_ratio_mid']:.2f} "
+                f"(med) {r['med_profit_mid']:.2f} | "
+                f"duration: {r['trade_duration_mid']:.1f}"
             )
             .encode(locale.getpreferredencoding(), "replace")
             .decode("utf-8")

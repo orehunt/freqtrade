@@ -1,25 +1,11 @@
-from collections import namedtuple
 import logging
 import os
-from joblib import dump, load
-from enum import Enum, IntEnum
+from enum import IntEnum
 from types import SimpleNamespace
 from typing import Dict, Iterable, List, Sequence, Tuple, Union
 
 import pandas as pd
-from freqtrade.exceptions import OperationalException
-from freqtrade.optimize.backtest_constants import *  # noqa ignore=F405
-from freqtrade.optimize.backtest_constants import Candle
-from freqtrade.optimize.backtest_engine_chunked import _chunked_select_triggers
-from freqtrade.optimize.backtest_engine_loop_candles import (
-    _loop_candles_select_triggers,
-)
-from freqtrade.optimize.backtest_engine_loop_ranges import _loop_ranges_select_triggers
-from freqtrade.optimize.backtest_nb import *  # noqa ignore=F405
-from freqtrade.optimize.backtest_utils import *  # noqa ignore=F405
-from freqtrade.optimize.backtesting import Backtesting, BacktestResult
-from freqtrade.optimize.debug import dbg  # noqa ignore=F405
-from freqtrade.strategy.interface import SellType, StoplossConfig
+from joblib import dump, load
 from numpy import (
     append,
     arange,
@@ -41,13 +27,29 @@ from numpy import (
     zeros,
 )
 from pandas import DataFrame, Series, Timedelta, concat, to_datetime, to_timedelta
+
+from freqtrade.exceptions import OperationalException
+from freqtrade.optimize.backtest_constants import *  # noqa ignore=F405
+from freqtrade.optimize.backtest_constants import Candle
+from freqtrade.optimize.backtest_engine_chunked import _chunked_select_triggers
+from freqtrade.optimize.backtest_engine_loop_candles import (
+    _loop_candles_select_triggers,
+)
+from freqtrade.optimize.backtest_engine_loop_ranges import _loop_ranges_select_triggers
+from freqtrade.optimize.backtest_nb import *  # noqa ignore=F405
+from freqtrade.optimize.backtest_utils import *  # noqa ignore=F405
+from freqtrade.optimize.backtesting import Backtesting, BacktestResult
+from freqtrade.optimize.debug import dbg  # noqa ignore=F405
+from freqtrade.optimize.hyperopt_loss_interface import IHyperOptLoss
 from freqtrade.optimize.vbt import (
-    simulate_trades,
+    Context,
     IntSellType,
     StoplossConfigJit,
-    Context,
+    sample_simulations,
+    simulate_trades,
 )
-from vectorbt import Portfolio
+from freqtrade.strategy.interface import SellType
+
 
 logger = logging.getLogger(__name__)
 
@@ -90,10 +92,13 @@ class HyperoptBacktesting(Backtesting):
 
     def __init__(self, config):
         self.bt_ng = config.get("backtesting_engine")
+        self.multisampling = config.get("multisampling")
         if self.bt_ng in ("chunked", "loop_ranges", "loop_candles", "vbt"):
             self.backtest_vanilla = self.backtest
             if self.bt_ng == "vbt":
-                self.vectorized_backtest = self.vbt_backtest
+                self.vectorized_backtest = (
+                    self.vbt_ms_backtest if self.multisampling else self.vbt_backtest
+                )
             if dbg:
                 dbg._debug_opts()
                 dbg.backtesting = self
@@ -182,8 +187,17 @@ class HyperoptBacktesting(Backtesting):
         self.position_stacking = self.config.get("position_stacking", False)
         if self.config.get("max_open_trades", 0) > 0:
             logger.warn("Ignoring max open trades...")
-        self.max_staked = self.config.get("max_staked", 0)
-        self.min_stake = self.config.get("min_stake", 1e-8)
+
+        if hasattr(self.strategy, "max_staked"):
+            self.max_staked = self.strategy.max_staked
+            self.min_stake = self.strategy.min_stake
+        else:
+            self.max_staked = self.config.get("max_staked", 0)
+            self.min_stake = self.config.get("min_stake", 1e-8)
+        if self.position_stacking:
+            logger.warning("using unlimited stake, (position stacking)")
+            self.max_staked = np.inf
+
         self.force_sell_max_duration = self.config.get("signals", {}).get(
             "force_sell_max_duration", False
         )
@@ -214,7 +228,10 @@ class HyperoptBacktesting(Backtesting):
         if duration is not None:
             trade_duration = to_timedelta(Series(duration), unit="ns")
         else:
-            trade_duration = to_timedelta(Series(close_date - open_date), unit="ns",)
+            trade_duration = to_timedelta(
+                Series(close_date - open_date),
+                unit="ns",
+            )
         # replace trade duration of same candle trades with half the timeframe reduce to minutes
         trade_duration[trade_duration == self.td_zero] = self.td_half_timeframe
         return trade_duration.dt.total_seconds() / 60
@@ -337,7 +354,9 @@ class HyperoptBacktesting(Backtesting):
             close_rate -= close_rate * sell_vals[:, sell_cols["spread"]]
 
         profits_abs, profits_prc = self._calc_profits(
-            open_rate, close_rate, calc_abs=True,
+            open_rate,
+            close_rate,
+            calc_abs=True,
         )
 
         trade_duration = self.get_trade_duration(
@@ -367,7 +386,7 @@ class HyperoptBacktesting(Backtesting):
                 # "close_index": sell_vals[:, sell_cols["ohlc"]].astype(int),
             }
         )
-        results.sort_values(by=["open_date", 'pair'], inplace=True)
+        results.sort_values(by=["open_date", "pair"], inplace=True)
         if self.max_staked and not self.position_stacking:
             # NOTE: updates the amount and profit_abs/percent inplace
             can_buy = dont_buy_over_max_stake(
@@ -387,7 +406,11 @@ class HyperoptBacktesting(Backtesting):
         return results
 
     def _calc_profits(
-        self, open_rate: ndarray, close_rate: ndarray, dec=False, calc_abs=False,
+        self,
+        open_rate: ndarray,
+        close_rate: ndarray,
+        dec=False,
+        calc_abs=False,
     ) -> ndarray:
 
         sa = self.strategy.stake
@@ -756,7 +779,11 @@ class HyperoptBacktesting(Backtesting):
             "stake_amount": self.strategy.stake,
             "fee": self.fee,
             # columns of the trigger array which stores all the calculations
-            "col_names": ["trigger_ofs", "trigger_date", "trigger_bought_ofs",],
+            "col_names": [
+                "trigger_ofs",
+                "trigger_date",
+                "trigger_bought_ofs",
+            ],
             # columns of the trg array which stores the calculation of each loop
             "trg_names": [],
             # the number of columns for the shape of the trigger range
@@ -892,11 +919,25 @@ class HyperoptBacktesting(Backtesting):
 
         it_dict = {
             k: v[k]
-            for k in ("bofs", "bsold", "ohlc_date", "bought_ranges", "trg_roi_idx",)
+            for k in (
+                "bofs",
+                "bsold",
+                "ohlc_date",
+                "bought_ranges",
+                "trg_roi_idx",
+            )
         }
         update_tpdict(it_dict.keys(), it_dict.values(), Int64Cols)
 
-        fl = {k: v[k] for k in ("fee", "stoploss", "sl_positive", "sl_offset",)}
+        fl = {
+            k: v[k]
+            for k in (
+                "fee",
+                "stoploss",
+                "sl_positive",
+                "sl_offset",
+            )
+        }
         update_tpdict(fl.keys(), fl.values(), Float64Vals)
 
         it = {
@@ -1009,7 +1050,7 @@ class HyperoptBacktesting(Backtesting):
     def _calc_pairs_offsets(
         self, df: DataFrame, group="pair", return_ofs=False
     ) -> ndarray:
-        """ The offset is calculated as the cumulative length of concatenated
+        """The offset is calculated as the cumulative length of concatenated
         pairs, minus the startup period, such that the first candle of the
         merged df is always 0
         """
@@ -1073,9 +1114,9 @@ class HyperoptBacktesting(Backtesting):
         return roi_timeouts, roi_values
 
     def _round_roi_timeouts(self, timeouts: List[float]) -> Dict[int, int]:
-        """ rounds the timeouts to timeframe count that includes them, when
+        """rounds the timeouts to timeframe count that includes them, when
         different timeouts are included in the same timeframe count, the latest is
-        used """
+        used"""
         return dict(
             zip(
                 floor(
@@ -1166,7 +1207,8 @@ class HyperoptBacktesting(Backtesting):
                 & ~(
                     isnan(bts_vals[:, bts_loc["trigger_ofs"]])
                     & isin(
-                        bts_vals[:, bts_loc["next_sold_ofs"]], self.pairs_ohlc_ofs_end,
+                        bts_vals[:, bts_loc["next_sold_ofs"]],
+                        self.pairs_ohlc_ofs_end,
                     )
                 )
             ]
@@ -1257,9 +1299,8 @@ class HyperoptBacktesting(Backtesting):
             dump(vbt_processed, self.vbt_processed_file)
         return vbt_processed
 
-    def vbt_backtest(self, processed: Dict[str, DataFrame], **kwargs,) -> DataFrame:
-        self.min_date = kwargs["start_date"]
-        self.max_date = kwargs["end_date"]
+    def vbt_context(self, processed: Dict[str, DataFrame]):
+        """ create vbt context """
         pairs_map = {}
         buys = []
         sells = []
@@ -1273,7 +1314,6 @@ class HyperoptBacktesting(Backtesting):
             except KeyError:
                 df["buy"] = 0
                 df["sell"] = 0
-                assign = True
             df = self.strategy.advise_buy(df, meta)
             df = self.strategy.advise_sell(df, meta)
             idx = df.index
@@ -1318,7 +1358,15 @@ class HyperoptBacktesting(Backtesting):
             inv_roi_values=np.array(roi_values, dtype=float)[::-1],
             cash_now=self.max_staked,
         )
+        return pairs_map, ctx
 
+    def vbt_backtest(
+        self,
+        processed: Dict[str, DataFrame],
+        **kwargs,
+    ) -> DataFrame:
+
+        pairs_map, ctx = self.vbt_context(processed)
         logger.debug("simulating trades")
         trades = simulate_trades(ctx)
         results = DataFrame.from_records(trades)
@@ -1339,11 +1387,46 @@ class HyperoptBacktesting(Backtesting):
         #     assert np.isfinite(results[k].values).all()
         return results
 
+    @staticmethod
+    def validate_loss(loss: IHyperOptLoss, is_ms: bool = False):
+        if not hasattr(loss, "metrics"):
+            raise AttributeError(
+                "Loss %s doesn't define metrics", loss.__class__.__name__
+            )
+        if is_ms:
+            try:
+                getattr(loss, "hyperopt_loss_function_nb")
+            except:
+                raise AttributeError(
+                    "Loss %s doesn't provide jitted function", loss.__class__.__name__
+                )
+
+    def vbt_ms_backtest(self, processed: Dict[str, DataFrame], **kwargs):
+
+        loss_metrics = kwargs["loss_metrics"]
+        loss_func = kwargs["loss_func"]
+        n_samples = kwargs.get('n_samples', self.config.get('n_samples', 10))
+        quantile = self.config.get("quantile", DEFAULT_QUANTILE)
+
+        pairs_map, ctx = self.vbt_context(processed)
+        red_obj, red_res = sample_simulations(
+            ctx, n_samples, loss_func, loss_metrics, quantile
+        )
+        # cast types
+        for q in ("bot", "top", "mid"):
+            tc = red_res[f"trade_count_{q}"]
+            red_res[f"trade_count_{q}"] = int(tc) if np.isfinite(tc) else 0
+            red_res[f"trade_duration_{q}"] = (
+                pd.to_timedelta(red_res[f"trade_duration_{q}"]).total_seconds() / 60
+            )
+        return red_obj, red_res
+
     def vectorized_backtest(
-        self, processed: Dict[str, DataFrame], **kwargs,
+        self,
+        processed: Dict[str, DataFrame],
+        **kwargs,
     ) -> DataFrame:
-        """ NOTE: can't have default values as arguments since it is an overridden function
-        """
+        """NOTE: can't have default values as arguments since it is an overridden function"""
         self.min_date = kwargs["start_date"]
         self.max_date = kwargs["end_date"]
 

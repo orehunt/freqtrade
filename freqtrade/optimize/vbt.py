@@ -1,10 +1,8 @@
 from enum import Enum
-from freqtrade.optimize.backtesting import BacktestResult
-from functools import partial
 from typing import (
+    Callable,
     Dict,
     List,
-    Callable,
     MutableSequence,
     NamedTuple,
     Optional,
@@ -23,10 +21,12 @@ from vectorbt.portfolio.enums import (
     SegmentContext,
     SizeType,
 )
-from vectorbt.portfolio.nb import create_order_nb
 
-from freqtrade.optimize.backtest_nb import calc_roi_close_rate, calc_roi_weight
+from freqtrade.optimize.backtest_nb import calc_roi_weight
 from freqtrade.optimize.vbt_types import *
+from logging import getLogger
+
+logger = getLogger(__name__)
 
 
 class IntSellType(Enum):
@@ -40,50 +40,60 @@ class IntSellType(Enum):
     NONE = 7
 
 
-@jitclass(BacktestResultTypeSig)
-class BacktestResultJit(object):
-    def __init__(self):
-        pass
-
-    def get(
-        self,
-        pair=0,
-        profit_percent=0.0,
-        profit_abs=0.0,
-        open_date=0,
-        open_rate=0.0,
-        open_fee=0.0,
-        close_date=0,
-        close_rate=0.0,
-        close_fee=0.0,
-        amount=0.0,
-        trade_duration=0,
-        open_at_end=False,
-        sell_reason=0,
-    ):
-        """ NOTE: this need to return the correct order """
-        return (
-            pair,
-            profit_percent,
-            profit_abs,
-            open_date,
-            open_rate,
-            open_fee,
-            close_date,
-            close_rate,
-            close_fee,
-            amount,
-            trade_duration,
-            open_at_end,
-            sell_reason,
-        )
+@njit()
+def BacktestResultTuple(
+    pair=0,
+    profit_percent=0.0,
+    profit_abs=0.0,
+    open_date=0,
+    open_rate=0.0,
+    open_fee=0.0,
+    close_date=0,
+    close_rate=0.0,
+    close_fee=0.0,
+    amount=0.0,
+    trade_duration=0,
+    open_at_end=False,
+    sell_reason=0,
+):
+    """ NOTE: this need to return the correct order """
+    return (
+        pair,
+        profit_percent,
+        profit_abs,
+        open_date,
+        open_rate,
+        open_fee,
+        close_date,
+        close_rate,
+        close_fee,
+        amount,
+        trade_duration,
+        open_at_end,
+        sell_reason,
+    )
 
 
-BacktestResultJitType = nb.typeof(BacktestResultJit().get())
+BacktestResultTupleType = nb.typeof(BacktestResultTuple())
+
+
+class resultsMetrics(NamedTuple):
+    win_ratio: nb.float64[:]
+    med_profit: nb.float64[:]
+    avg_profit: nb.float64[:]
+    total_profit: nb.float64[:]
+    trade_ratio: nb.float64[:]
+    trade_count: nb.int64[:]
+    trade_duration: nb.int64[:]
+
+
+resultsMetricsFields = tuple(resultsMetrics._fields)
 
 
 @jitclass(ContextTypeSig)
 class Context(object):
+    pairs_seq: np.ndarray
+
     def __init__(
         self,
         # pairs,
@@ -117,6 +127,8 @@ class Context(object):
         cash_now: nb.float64,
     ):
         self.pairs = pairs
+        self.pairs_seq = np.arange(len(pairs))
+        self.orig_seq = self.pairs_seq.copy()
 
         self.date = date
         self.buys = buys
@@ -140,6 +152,7 @@ class Context(object):
         self.min_bv = min_buy_value
         self.min_sv = min_sell_value
         self.cash_now = cash_now
+        self.cash_start = cash_now
 
     def update_context(self, i, c, trades):
         # duration in number of candles for the current open order
@@ -149,6 +162,45 @@ class Context(object):
         self.high_r = self.high[i, c]
         self.low_r = self.low[i, c]
         self.close_r = self.close[i, c]
+
+    def reset_context(self, trades):
+        self.cash_now = self.cash_start
+        self.span = 0
+
+        self.open_r = np.nan
+        self.high_r = np.nan
+        self.low_r = np.nan
+        self.close_r = np.nan
+
+        for t in trades.values():
+            t.status = 1
+
+    def shuffle_context(self, seq=np.array([], dtype=np.int64)):
+        """ Shuffle the order of columns """
+        if not len(seq):
+            # shuffle is inplace
+            np.random.shuffle(self.pairs_seq)
+            seq = self.pairs_seq
+        self.orig_seq = self.unshuffle_seq(seq)[self.orig_seq]
+
+        self.buys = self.buys[:, seq]
+        self.sells = self.sells[:, seq]
+
+        self.open = self.open[:, seq]
+        self.high = self.high[:, seq]
+        self.low = self.low[:, seq]
+        self.close = self.close[:, seq]
+
+        self.amount = self.amount[:, seq]
+        self.slippage = self.slippage[:, seq]
+
+    def unshuffle_seq(self, idx=None):
+        if idx is None:
+            idx = self.pairs_seq
+        seq = np.empty_like(idx)
+        for n, s in enumerate(idx):
+            seq[s] = n
+        return seq
 
 
 @jitclass(TradeJitTypeSig)
@@ -241,7 +293,7 @@ class TradeJit:
 TradeJitType = nb.typeof(TradeJit())
 
 
-@njit(cache=True)
+@njit()
 def weighted_roi_is_triggered(i, profit, inv_roi_timeouts, inv_roi_values):
     for t, tm in enumerate(inv_roi_timeouts):
         if tm <= i:
@@ -263,7 +315,7 @@ def weighted_roi_is_triggered(i, profit, inv_roi_timeouts, inv_roi_values):
     return False, np.nan
 
 
-@njit(cache=True)
+@njit()
 def calc_trailing_rate(stoploss_price, high_price, high_profit, stp):
     if stp.trailing_stop:
         if not (
@@ -284,17 +336,17 @@ def calc_trailing_rate(stoploss_price, high_price, high_profit, stp):
     return stoploss_price
 
 
-@njit(cache=True)
-def get_slippage(idx, col, slippage, slp_window):
+@njit()
+def get_slippage(idx, col, slippage, slp_window, base_slippage=0.01):
     slp = slippage[idx, col]
     if np.isfinite(slp):
         return slp
     else:
         slp = np.nanmean(slippage[idx - slp_window : idx])
-        return slp if np.isfinite(slp) else 0
+        return slp if np.isfinite(slp) else base_slippage
 
 
-@njit(cache=True)
+@njit()
 def check_for_buy(i, c, ctx, trades: Dict[int, TradeJit]):
     """ Should only be called when cash is available """
     if trades[c].status == 1:
@@ -324,7 +376,7 @@ def check_for_buy(i, c, ctx, trades: Dict[int, TradeJit]):
     return False
 
 
-@njit(cache=True)
+@njit()
 def check_roi_on_open(i, c, ctx, trades):
     if ctx.span > 0:
         open_profit = trades[c].profit_at(ctx.open_r, ctx.fees)
@@ -347,7 +399,7 @@ def check_roi_on_open(i, c, ctx, trades):
     return False
 
 
-@njit(cache=True)
+@njit()
 def check_stop_on_open(i, c, ctx, trades):
     # if candle is green, likely sequence is low -> high
     if ctx.close_r > ctx.open_r:
@@ -372,7 +424,7 @@ def check_stop_on_open(i, c, ctx, trades):
     return False
 
 
-@njit(cache=True)
+@njit()
 def check_roi_on_high(i, c, high_profit, ctx, trades):
     triggered, roi = weighted_roi_is_triggered(ctx.span, high_profit, ctx.irt, ctx.irv)
     if triggered:
@@ -391,7 +443,7 @@ def check_roi_on_high(i, c, high_profit, ctx, trades):
     return False
 
 
-@njit(cache=True)
+@njit()
 def check_stop_on_high(i, c, high_profit, ctx, trades):
     stoploss_price = trades[c].update_stoploss(ctx.high_r, high_profit, ctx.stop_config)
     if ctx.low_r <= stoploss_price:
@@ -413,7 +465,7 @@ def check_stop_on_high(i, c, high_profit, ctx, trades):
     return False
 
 
-@njit(cache=True)
+@njit()
 def check_for_sell(i, c, ctx, trades):
     if ctx.sells[i, c] and not ctx.buys[i, c]:
         # print("sell signal: ", )
@@ -430,7 +482,7 @@ def check_for_sell(i, c, ctx, trades):
     return False
 
 
-@njit(cache=False)
+@njit()
 def create_result(ctx, c, trade: TradeJit, results):
     open_date = ctx.date[trade.open_idx]
     close_date = ctx.date[trade.close_idx]
@@ -438,68 +490,276 @@ def create_result(ctx, c, trade: TradeJit, results):
     #     print(ctx.pairs[c], trade.sell_reason)
     # assert trade.close_idx >= trade.open_idx
     # assert close_date > open_date
-    res = BacktestResultJit()
-    val = res.get(
-        pair=c,
-        profit_percent=trade.profits,
-        profit_abs=trade.pnl,
-        open_date=open_date,
-        open_rate=trade.buy_price,
-        open_fee=ctx.fees,
-        close_date=close_date,
-        close_rate=trade.sell_price,
-        close_fee=ctx.fees,
-        amount=trade.shares_held,
-        trade_duration=close_date - open_date,
-        open_at_end=(not trade.status),
-        sell_reason=trade.sell_reason,
+    results.append(
+        BacktestResultTuple(
+            pair=c,
+            profit_percent=trade.profits,
+            profit_abs=trade.pnl,
+            open_date=open_date,
+            open_rate=trade.buy_price,
+            open_fee=ctx.fees,
+            close_date=close_date,
+            close_rate=trade.sell_price,
+            close_fee=ctx.fees,
+            amount=trade.shares_held,
+            trade_duration=close_date - open_date,
+            open_at_end=(not trade.status),
+            sell_reason=trade.sell_reason,
+        )
     )
-    results.append(val)
 
 
-@njit(cache=False)
+@njit()
+def shuffle_idx(idx: nb.int64[:], seq: nb.int64[:]):
+    """ , seq holds the index to revert to the previous order """
+    np.random.shuffle(idx)
+    for n, s in enumerate(idx):
+        seq[s] = n
+
+
+@njit()
 def iterate(ctx: Context, results, trades):
+    open_trades = 0
+    col_idx = np.arange(ctx.close.shape[1])
     # loop over dates
-    for i, row in enumerate(ctx.close):
+    for i, close in enumerate(ctx.close):
+        # shuffle col index
+        np.random.shuffle(col_idx)
         # loop over assets
-        for c, clo in enumerate(row):
+        for c in col_idx:
+            # terminate if out of cash with no trades open
+            if ctx.cash_now < ctx.min_bv and not open_trades:
+                break
             # skip unavailable data
-            if np.isnan(clo):
+            if np.isnan(close[c]):
                 continue
             # the buy check returns true if a new buy order
             # is executed, or no buy order is open for the current date/col
             if check_for_buy(i, c, ctx, trades):
+                open_trades += not trades[c].status
                 continue
             ctx.update_context(i, c, trades)
             # check roi against open if trade is open for more than one candle
             if check_roi_on_open(i, c, ctx, trades):
+                open_trades -= 1
                 create_result(ctx, c, trades[c], results)
                 continue
             if check_stop_on_open(i, c, ctx, trades):
+                open_trades -= 1
                 create_result(ctx, c, trades[c], results)
                 continue
             # check against roi on high
             high_profit = trades[c].profit_at(ctx.high_r, ctx.fees)
             if check_roi_on_high(i, c, high_profit, ctx, trades):
+                open_trades -= 1
                 create_result(ctx, c, trades[c], results)
                 continue
             if check_stop_on_high(i, c, high_profit, ctx, trades):
+                open_trades -= 1
                 create_result(ctx, c, trades[c], results)
                 continue
             # at last check for sell signals
             if check_for_sell(i, c, ctx, trades):
+                open_trades -= 1
                 create_result(ctx, c, trades[c], results)
 
 
-@njit(cache=True)
+@njit(cache=False)
+def sample_iterations(
+    n_samples: int,
+    ctx: Context,
+    results,
+    trades,
+    o_func: Callable[[List[BacktestResultTupleType]], Tuple[Tuple[str, float], ...]],
+    o_metrics: NamedTuple,
+    res_metrics: resultsMetrics,
+):
+    cash_start = ctx.cash_start
+    for n in range(n_samples):
+        # reset
+        del results[:]
+        # do sim
+        iterate(ctx, results, trades)
+
+        # skip empty results
+        if not len(results):
+            continue
+
+        # calc and store objective for current sim
+        obj = o_func(results)
+        for o_n, (_, v) in enumerate(obj):
+            o_metrics[o_n][n] = v
+
+        # calc and store metrics for current sim
+        calc_sim_metrics(n, res_metrics, results, cash_start)
+
+        # switch order
+        # ctx.shuffle_context()
+        ctx.reset_context(trades)
+
+
+profit_abs_idx = BacktestResultDType.names.index("profit_abs")
+profit_percent_idx = BacktestResultDType.names.index("profit_percent")
+trade_duration_idx = BacktestResultDType.names.index("trade_duration")
+
+
+@njit(cache=False)
+def calc_sim_metrics(
+    i, res_metrics, results: List[BacktestResultTupleType], cash_start
+):
+    # vars
+    profit_abs = np.empty(len(results), dtype=nb.float64)
+    profit_percent = np.empty(len(results), dtype=nb.float64)
+    w, l, duration_sum = 0, 0, 0
+
+    # process results
+    for n, r in enumerate(results):
+        if r[profit_abs_idx] > 0:
+            w += 1
+        else:
+            l += 1
+        profit_abs[n] = r[profit_abs_idx]
+        profit_percent[n] = r[profit_percent_idx]
+        duration_sum += r[trade_duration_idx]
+
+    res_metrics.win_ratio[i] = w / (l or 1)
+    # NOTE: median as trouble with 0d arrays, so results should be > 0
+    res_metrics.med_profit[i] = np.median(profit_abs)
+    res_metrics.avg_profit[i] = np.mean(profit_abs)
+    res_metrics.total_profit[i] = np.sum(profit_abs)
+    res_metrics.trade_ratio[i] = np.mean(profit_percent)
+    res_metrics.trade_count[i] = len(results)
+    res_metrics.trade_duration[i] = duration_sum / len(results)
+
+
+@njit()
+def float_dict():
+    return nb.typed.Dict.empty(key_type=nb.types.unicode_type, value_type=nb.float64)
+
+
+@njit()
+def get_quantile(arr, q=1 / 3):
+    """ The average of the bottom, top and middle sets """
+    arr = arr[np.isfinite(arr)]
+    if len(arr):
+        arr.sort()
+        ln = len(arr)
+        size = int(ln * q)
+        if size:
+            bot = np.mean(arr[:size])
+            top = np.mean(arr[-size:])
+            mid = np.mean(arr[size : ln - size])
+        else:
+            bot = np.mean(arr)
+            top = bot
+            mid = bot
+        return bot, top, mid
+    else:
+        return np.nan, np.nan, np.nan
+
+
+@njit()
+def obj_quantile(arr, q=1 / 3):
+    """ The average of the top set (since objective is minimized, the average worst) """
+    arr = arr[np.isfinite(arr)]
+    if len(arr):
+        arr.sort()
+        ln = len(arr)
+        size = int(ln * q)
+        # the end has the highest (worst) values
+        return np.mean(arr[-size:])
+    else:
+        return np.nan
+
+
+@njit(cache=False)
+def reduce_sims(o_names, o_metrics, res_metrics, qnt):
+    red_obj = float_dict()
+    red_res = float_dict()
+    for n, arr in enumerate(o_metrics):
+        red_obj[o_names[n]] = obj_quantile(arr, q=qnt)
+
+    bot, top, mid = get_quantile(res_metrics.win_ratio, q=qnt)
+    red_res["win_ratio_bot"] = bot
+    red_res["win_ratio_top"] = top
+    red_res["win_ratio_mid"] = mid
+
+    bot, top, mid = get_quantile(res_metrics.med_profit, q=qnt)
+    red_res["med_profit_bot"] = bot
+    red_res["med_profit_top"] = top
+    red_res["med_profit_mid"] = mid
+
+    bot, top, mid = get_quantile(res_metrics.avg_profit, q=qnt)
+    red_res["avg_profit_bot"] = bot
+    red_res["avg_profit_top"] = top
+    red_res["avg_profit_mid"] = mid
+
+    bot, top, mid = get_quantile(res_metrics.total_profit, q=qnt)
+    red_res["total_profit_bot"] = bot
+    red_res["total_profit_top"] = top
+    red_res["total_profit_mid"] = mid
+
+    bot, top, mid = get_quantile(res_metrics.trade_ratio, q=qnt)
+    red_res["trade_ratio_bot"] = bot
+    red_res["trade_ratio_top"] = top
+    red_res["trade_ratio_mid"] = mid
+
+    bot, top, mid = get_quantile(res_metrics.trade_count, q=qnt)
+    red_res["trade_count_bot"] = bot
+    red_res["trade_count_top"] = top
+    red_res["trade_count_mid"] = mid
+
+    bot, top, mid = get_quantile(res_metrics.trade_duration, q=qnt)
+    red_res["trade_duration_bot"] = bot
+    red_res["trade_duration_top"] = top
+    red_res["trade_duration_mid"] = mid
+    return red_obj, red_res
+
+
+@njit()
 def init_trades(trades_dict, n_cols):
     for c in range(n_cols):
         trades_dict[c] = TradeJit()
 
 
-def simulate_trades(ctx) -> np.ndarray:
-    results = nb.typed.List.empty_list(item_type=BacktestResultJitType)
+def init_containers(ctx):
+    # init containers
+    results = nb.typed.List.empty_list(item_type=BacktestResultTupleType)
     trades = nb.typed.Dict.empty(key_type=nb.int64, value_type=TradeJitType)
     init_trades(trades, ctx.close.shape[1])
+    return results, trades
+
+
+def sample_simulations(
+    ctx: Context,
+    n_samples: int,
+    o_func: Callable,
+    o_names: Tuple[str, ...],
+    quantile: float,
+):
+    o_metrics = NamedTuple(
+        typename="o_metrics", fields=((name, nb.float64[:]) for name in o_names)
+    )(**{name: np.full(n_samples, np.nan, dtype=float) for name in o_names})
+    res_metrics = resultsMetrics(
+        **{name: np.full(n_samples, np.nan, dtype=float) for name in resultsMetricsFields}
+    )
+
+    results, trades = init_containers(ctx)
+    logger.debug("running iterations...")
+    sample_iterations(n_samples, ctx, results, trades, o_func, o_metrics, res_metrics)
+
+    logger.debug("reducing simulation metrics...")
+    red_obj, red_res = reduce_sims(o_names, o_metrics, res_metrics, quantile)
+
+    logger.debug("converting to dict and returning...")
+    # convert typed dicts to python dicts
+    return dict(red_obj), dict(red_res)
+
+
+def simulate_trades(
+    ctx,
+) -> np.ndarray:
+    results, trades = init_containers(ctx)
     iterate(ctx, results, trades)
+
     return np.array(results, dtype=BacktestResultDType)

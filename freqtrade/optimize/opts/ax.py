@@ -65,8 +65,16 @@ class yi(Xi):
         del self._client.experiment._trials[item]
 
 
-ALGOS = cycle(("BOTORCH", "GPEI", "GPKG", "GPMES",))
-ALGOS_MOO = cycle(("get_MOO_EHVI", "get_MOO_PAREGO", "get_MOO_RS"))
+ALGOS = cycle(
+    (
+        "BOTORCH",
+        "GPEI",
+        "GPKG",
+        "GPMES",
+    )
+)
+MOO_POOL = ("get_MOO_EHVI", "get_MOO_PAREGO", "get_MOO_RS")
+ALGOS_MOO = cycle(MOO_POOL)
 
 
 class Ax(IOptimizer):
@@ -205,8 +213,14 @@ class Ax(IOptimizer):
         return getattr(Models, next(self._random_sampling))
 
     def _setup_experiment(self):
-        if self.algo in ALGOS_MOO:
-            metrics = [Metric(m, lower_is_better=True,) for m in self._metrics]
+        if self.algo in MOO_POOL or self.algo == "MOO":
+            metrics = [
+                Metric(
+                    m,
+                    lower_is_better=True,
+                )
+                for m in self._metrics
+            ]
             objective = ScalarizedObjective(metrics, minimize=True)
             OptCfg = MultiObjectiveOptimizationConfig
             cfg_kwargs = {
@@ -217,7 +231,10 @@ class Ax(IOptimizer):
         else:
             OptCfg = OptimizationConfig
             objective = Objective(
-                metric=Metric(name="objective", lower_is_better=True,),
+                metric=Metric(
+                    name="objective",
+                    lower_is_better=True,
+                ),
             )
             cfg_kwargs = {}
         self._experiment = ax.Experiment(
@@ -274,6 +291,7 @@ class Ax(IOptimizer):
             random_seed=self.rs,
             verbose_logging=False,
         )
+        print("BEFORE EXP")
         self._setup_experiment()
         self._client._experiment = self._experiment
         self._Xi = Xi(self._client)

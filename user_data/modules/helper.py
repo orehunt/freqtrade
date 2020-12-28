@@ -56,25 +56,6 @@ def get_all_signals(
     except KeyError:
         return {pair: target(*args) for pair, args in pairs_args.items()}
 
-
-def resample_sum(
-    series: pd.DataFrame,
-    min_date: datetime,
-    max_date: datetime,
-    freq: str,
-    value_col="profit_percent",
-    date_col="close_date",
-    fill_value=0,
-):
-    t_index = date_range(start=min_date, end=max_date, freq=freq, normalize=True)
-    return (
-        series.resample(freq, on=date_col)
-        .agg({value_col: sum})
-        .reindex(t_index)
-        .fillna(fill_value)
-    )
-
-
 def read_json_file(file_path: Union[Path, str], key=""):
     if not os.path.exists(file_path):
         raise OperationalException(f"path: {file_path} does not exist")

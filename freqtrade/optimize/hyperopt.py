@@ -9,7 +9,6 @@ import random
 from collections import deque
 from datetime import datetime
 from functools import partial
-from itertools import cycle
 from time import sleep
 from time import time as now
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -39,7 +38,10 @@ from freqtrade.optimize.backtest_utils import check_data_startup
 from freqtrade.optimize.hyperopt_backend import Epochs, TrialsState
 from freqtrade.optimize.hyperopt_backtest import HyperoptBacktesting
 from freqtrade.optimize.hyperopt_cv import HyperoptCV
-from freqtrade.optimize.hyperopt_loss_interface import IHyperOptLoss  # noqa: F401
+from freqtrade.optimize.hyperopt_loss_interface import (
+    IHyperOptLoss,
+    Objective,
+)  # noqa: F401
 from freqtrade.optimize.hyperopt_multi import HyperoptMulti
 from freqtrade.optimize.hyperopt_out import HyperoptOut
 from freqtrade.optimize.optimizer import (
@@ -142,6 +144,9 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                 self.config["ask_strategy"] = {}
             self.config["ask_strategy"]["use_sell_signal"] = True
 
+        if self.backtesting.multisampling:
+            setattr(self, "_get_result", self._get_ms_result)
+
     @staticmethod
     def get_lock_filename(config: Dict[str, Any]) -> str:
         return str(config["user_data_dir"] / "hyperopt.lock")
@@ -238,17 +243,17 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
 
     def _set_params(self, params_dict: Dict[str, Any]):
         if self.has_space("roi"):
-            self.backtesting.strategy.minimal_roi = self.custom_hyperopt.generate_roi_table(
-                params_dict
+            self.backtesting.strategy.minimal_roi = (
+                self.custom_hyperopt.generate_roi_table(params_dict)
             )
         if self.has_space("buy"):
-            self.backtesting.strategy.advise_buy = self.custom_hyperopt.buy_strategy_generator(
-                params_dict
+            self.backtesting.strategy.advise_buy = (
+                self.custom_hyperopt.buy_strategy_generator(params_dict)
             )
 
         if self.has_space("sell"):
-            self.backtesting.strategy.advise_sell = self.custom_hyperopt.sell_strategy_generator(
-                params_dict
+            self.backtesting.strategy.advise_sell = (
+                self.custom_hyperopt.sell_strategy_generator(params_dict)
             )
 
         if self.has_space("stoploss"):
@@ -298,18 +303,23 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             min_date, max_date = get_timerange(processed)
             backend.min_date, backend.max_date = min_date, max_date
 
-        backtesting_results = self.backtesting.backtest(
-            processed=processed,
-            start_date=min_date.datetime,
-            end_date=max_date.datetime,
-            max_open_trades=self.max_open_trades,
-            position_stacking=self.position_stacking,
-            enable_protections=self.config.get("enable_protections", False),
-        )
+        bt_kwargs = {
+            "processed": processed,
+            "start_date": min_date.datetime,
+            "end_date": max_date.datetime,
+            "max_open_trades": self.max_open_trades,
+            "position_stacking": self.position_stacking,
+            "enable_protections": self.config.get("enable_protections", False),
+            "loss_metrics": self.custom_hyperoptloss.metrics,
+            "loss_func": self.calculate_loss_dict[rs]
+            if self.multi and self.multi_loss
+            else self.calculate_loss,
+        }
+
+        backtesting_results = self.backtesting.backtest(**bt_kwargs)
+
         return self._get_result(
             backtesting_results,
-            min_date,
-            max_date,
             params_dict,
             params_meta,
             self._get_params_details(params_dict),
@@ -338,6 +348,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         """ Map a (cycled) list of loss functions to the optimizers random states """
         config = self.config.copy()
         metrics = None
+        multisampling = self.backtesting.multisampling
         if self.multi and self.multi_loss:
             if not self.calculate_loss_dict:
                 self.calculate_loss_dict = {}
@@ -350,10 +361,17 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                 % len(loss_func_list)
             ]
             hyperoptloss = HyperOptLossResolver.load_hyperoptloss(config)
+
             self._set_hyperoptloss_attrs(
                 hyperoptloss, config, self.min_date, self.max_date
             )
-            self.calculate_loss_dict[rs] = hyperoptloss.hyperopt_loss_function
+            self.backtesting.validate_loss(hyperoptloss, multisampling)
+
+            self.calculate_loss_dict[rs] = (
+                hyperoptloss.hyperopt_loss_function_nb()
+                if multisampling
+                else hyperoptloss.hyperopt_loss_function
+            )
             metrics = hyperoptloss.metrics
         elif not self.custom_hyperoptloss:
             self.custom_hyperoptloss = HyperOptLossResolver.load_hyperoptloss(
@@ -362,14 +380,20 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             self._set_hyperoptloss_attrs(
                 self.custom_hyperoptloss, config, self.min_date, self.max_date
             )
-            self.calculate_loss = self.custom_hyperoptloss.hyperopt_loss_function
+            self.backtesting.validate_loss(
+                self.custom_hyperoptloss, self.backtesting.multisampling
+            )
+            self.calculate_loss = (
+                self.custom_hyperoptloss.hyperopt_loss_function_nb()
+                if multisampling
+                else self.custom_hyperoptloss.hyperopt_loss_function
+            )
+
         return metrics or self.custom_hyperoptloss.metrics
 
     def _get_result(
         self,
         backtesting_results,
-        min_date,
-        max_date,
         params_dict,
         params_meta,
         params_details,
@@ -381,28 +405,59 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             self.config["stake_currency"], results_metrics
         )
 
-        trade_count = results_metrics["trade_count"]
-        total_profit = results_metrics["total_profit"]
+        return {
+            "loss": self._calculate_results_loss(backtesting_results, rs, processed),
+            "params_dict": params_dict,
+            "params_meta": params_meta,
+            "params_details": params_details,
+            "results_metrics": results_metrics,
+            "results_explanation": results_explanation,
+            "total_profit": results_metrics["total_profit_mid"],
+        }
 
-        # If this evaluation contains too short amount of trades to be
-        # interesting -- consider it as 'bad' (assigned max. loss value)
-        # in order to cast this hyperspace point away from optimization
-        # path. We do not want to optimize 'hodl' strategies.
-        loss = {m: VOID_LOSS for m in self.custom_hyperoptloss.metrics}
-        if trade_count >= self.config["hyperopt_min_trades"]:
-            loss_func = (
-                self.calculate_loss_dict[rs]
-                if rs is not None and self.multi_loss
-                else self.calculate_loss
-            )
-            loss = loss_func(
-                results=backtesting_results,
-                trade_count=trade_count,
-                min_date=min_date.datetime,
-                max_date=max_date.datetime,
-                processed=processed,
-            )
-            loss = self.filter_loss_vals(loss)
+    def _calculate_results_loss(self, backtesting_results: DataFrame, rs, processed):
+        loss_func = (
+            self.calculate_loss_dict[rs]
+            if rs is not None and self.multi_loss
+            else self.calculate_loss
+        )
+        loss = loss_func(
+            results=backtesting_results,
+            processed=processed,
+        )
+        return self.filter_loss_vals(loss)
+
+    def _calculate_results_metrics(self, backtesting_results: DataFrame) -> Dict:
+        btr = backtesting_results
+        wins = len(btr[btr.profit_percent > 0])
+        losses = len(btr[btr.profit_percent <= 0]) or 1
+        rel_profit = btr.profit_abs / self.config.get(
+            "max_staked", self.config["stake_amount"]
+        )
+        return {
+            "win_ratio_mid": wins / losses,
+            "med_profit_mid": btr.profit_abs.median(),
+            "avg_profit_mid": np.mean(rel_profit),
+            "total_profit_mid": btr.profit_abs.sum(),
+            "comp_profit_mid": np.exp(np.log1p(rel_profit).sum()) - 1,
+            "trade_ratio_mid": btr.profit_percent.mean(),
+            "trade_duration_mid": btr.trade_duration.mean(),
+            "trade_count_mid": len(btr.index),
+        }
+
+    def _get_ms_result(
+        self,
+        backtesting_results,
+        params_dict,
+        params_meta,
+        params_details,
+        *args,
+        **kwargs,
+    ):
+        loss, results_metrics = backtesting_results
+        results_explanation = HyperoptOut._format_results_explanation_string(
+            self.config["stake_currency"], results_metrics
+        )
         return {
             "loss": loss,
             "params_dict": params_dict,
@@ -410,24 +465,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             "params_details": params_details,
             "results_metrics": results_metrics,
             "results_explanation": results_explanation,
-            "total_profit": total_profit,
-        }
-
-    def _calculate_results_metrics(self, backtesting_results: DataFrame) -> Dict:
-        # wins = len(backtesting_results[backtesting_results.profit_percent > 0])
-        # draws = len(backtesting_results[backtesting_results.profit_percent == 0])
-        # losses = len(backtesting_results[backtesting_results.profit_percent < 0])
-        return {
-            "trade_count": len(backtesting_results.index),
-            # "wins": wins,
-            # "draws": draws,
-            # "losses": losses,
-            # "winsdrawslosses": f"{wins}/{draws}/{losses}",
-            "avg_profit": backtesting_results.profit_percent.mean() * 100.0,
-            # "median_profit": backtesting_results.profit_percent.median() * 100.0,
-            "total_profit": backtesting_results.profit_abs.sum(),
-            "profit": backtesting_results.profit_percent.sum() * 100.0,
-            "duration": backtesting_results.trade_duration.mean(),
+            "total_profit": results_metrics["total_profit_mid"],
         }
 
     def get_optimizer(
@@ -526,8 +564,8 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             self.points_checked = False
 
     def _tell_points(self, t, opt: IOptimizer):
-        """ This is blocking. Assumes there are buffered points, flushes them
-        and tells the optimizer. """
+        """This is blocking. Assumes there are buffered points, flushes them
+        and tells the optimizer."""
         Xi = []
         yi = []
         t_points = len(opt.Xi)
@@ -536,7 +574,12 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         logger.debug("telling points from %s to %s", t_points + len(Xi), t)
         while t > t_points + len(Xi):
             for n_res, res in backend.trials.results.items():
-                Xi.append((list(res["params_dict"].values()), res["params_meta"],))
+                Xi.append(
+                    (
+                        list(res["params_dict"].values()),
+                        res["params_meta"],
+                    )
+                )
                 yi.append(res["loss"])
                 del backend.trials.results[n_res]
             # the tail list can have trials if workers crashed mid run
@@ -649,7 +692,10 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         if cls.cv:
             # if t not in backend.params_Xi:
             X = cls._from_storage(
-                cls.Xi_path, key="X", fields=["params_dict"], indexer=t,
+                cls.Xi_path,
+                key="X",
+                fields=["params_dict"],
+                indexer=t,
             ).values[0, 0]
 
             v = cls.backtest_params(params_dict=X)
@@ -726,7 +772,9 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         trials = DataFrame(backend.trials_list)
         # expand results metrics into columns
         trials.drop(columns=["results_metrics", "total_profit"], inplace=True)
-        metrics = json_normalize([v["results_metrics"] for v in backend.trials_list],)
+        metrics = json_normalize(
+            [v["results_metrics"] for v in backend.trials_list],
+        )
         trials = concat([trials, metrics], copy=False, axis=1)
 
         # make a copy since print results modifies cols
@@ -969,7 +1017,11 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         Calc starting points, based on parameters, given epochs, mode
         """
         self.search_space_size = (
-            guess_search_space(self.parameters,) if not self.cv else 0
+            guess_search_space(
+                self.parameters,
+            )
+            if not self.cv
+            else 0
         )
         if not self.cv:
             logger.debug("Initial points: ~%s", self.n_rand)
@@ -1099,7 +1151,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                     )
 
     def _setup_data(self):
-        """ Load ohlcv data, and check that:
+        """Load ohlcv data, and check that:
         - startup period is removed
         - there is a global minimum amount of data to test
         """
@@ -1135,7 +1187,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         )
 
         dump(preprocessed, self.data_pickle_file)
-        if self.config['backtesting_engine'] == 'vbt':
+        if self.config["backtesting_engine"] == "vbt":
             self.backtesting._vbt_get_ohlcv(preprocessed)
 
     def start(self) -> None:
@@ -1195,7 +1247,9 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         print_best = self.config.get("print_best_at_end")
         if backend.trials.num_saved and print_best:
             trials = self.load_trials(
-                self.trials_file, self.trials_instance, backend.trials,
+                self.trials_file,
+                self.trials_instance,
+                backend.trials,
             )
             best_trial = self.get_best_trial(trials)
 
