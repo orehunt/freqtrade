@@ -1405,12 +1405,17 @@ class HyperoptBacktesting(Backtesting):
 
         loss_metrics = kwargs["loss_metrics"]
         loss_func = kwargs["loss_func"]
-        n_samples = kwargs.get('n_samples', self.config.get('n_samples', 10))
+        n_samples = kwargs.get("n_samples", self.config.get("n_samples", 10))
         quantile = self.config.get("quantile", DEFAULT_QUANTILE)
 
         pairs_map, ctx = self.vbt_context(processed)
         red_obj, red_res, agg = sample_simulations(
-            ctx, n_samples, loss_func, loss_metrics, quantile
+            ctx,
+            n_samples,
+            loss_func,
+            loss_metrics,
+            quantile,
+            aggregate=kwargs.get("aggregate", False),
         )
         # cast types
         for q in ("bot", "top", "mid"):

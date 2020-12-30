@@ -77,6 +77,10 @@ def BacktestResultTuple(
 
 
 BacktestResultTupleType = nb.typeof(BacktestResultTuple())
+BacktestResultArrType = nb.typeof(
+    nb.types.Array(dtype=BacktestResultTupleType, ndim=1, layout="A")
+)
+ResultsListType = nb.typeof(nb.typed.List.empty_list(item_type=BacktestResultTupleType))
 
 
 class resultsMetrics(NamedTuple):
@@ -600,10 +604,12 @@ def run_iterations(
 ):
     # NOTE: This function can be trivially parallelized
     cash_start = ctx.cash_start
-    results, trades, agg = init_containers(ctx)
+    trades = init_trades(ctx.close.shape[1])
+    agg = init_agg()
+
     for n in range(n_samples):
         # reset
-        del results[:]
+        results = init_results()
         # do sim
         iterate(ctx, results, trades)
 
@@ -745,20 +751,21 @@ def reduce_sims(o_names, o_metrics, res_metrics, qnt):
 
 
 @njit()
-def init_trades(trades_dict, n_cols):
+def init_trades(n_cols):
+    trades = nb.typed.Dict.empty(key_type=nb.int64, value_type=TradeJitType)
     for c in range(n_cols):
-        trades_dict[c] = TradeJit()
+        trades[c] = TradeJit()
+    return trades
 
 
 @njit()
-def init_containers(ctx):
-    results = nb.typed.List.empty_list(item_type=BacktestResultTupleType)
+def init_results():
+    return nb.typed.List.empty_list(item_type=BacktestResultTupleType)
 
-    trades = nb.typed.Dict.empty(key_type=nb.int64, value_type=TradeJitType)
-    init_trades(trades, ctx.close.shape[1])
 
-    agg = nb.typed.List.empty_list(item_type=BacktestResultArr)
-    return results, trades, agg
+@njit()
+def init_agg():
+    return nb.typed.List.empty_list(item_type=ResultsListType)
 
 
 @njit()
@@ -770,8 +777,10 @@ def enable_aggregation():
     global append_results
 
     @njit()
-    def append_results(agg: nb.typed.List, res: nb.types.Array):
-        agg.append(np.asarray([v for v in res]))
+    def append_results(
+        agg: List[BacktestResultTupleType], res: List[BacktestResultTupleType]
+    ):
+        agg.append(res)
 
 
 def sample_simulations(
@@ -810,7 +819,9 @@ def sample_simulations(
 def simulate_trades(
     ctx,
 ) -> np.ndarray:
-    results, trades, _ = init_containers(ctx)
+    results = init_results()
+    trades = init_trades(ctx.close.shape[1])
+
     iterate(ctx, results, trades)
 
     return np.array(results, dtype=BacktestResultDType)
