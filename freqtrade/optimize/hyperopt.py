@@ -454,7 +454,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         *args,
         **kwargs,
     ):
-        loss, results_metrics = backtesting_results
+        loss, results_metrics, _ = backtesting_results
         results_explanation = HyperoptOut._format_results_explanation_string(
             self.config["stake_currency"], results_metrics
         )

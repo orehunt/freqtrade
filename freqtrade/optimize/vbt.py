@@ -591,7 +591,7 @@ def iterate(ctx: Context, results, trades):
 
 
 @njit(cache=False)
-def sample_iterations(
+def run_iterations(
     n_samples: int,
     ctx: Context,
     o_func: Callable[[List[BacktestResultTupleType]], Tuple[Tuple[str, float], ...]],
@@ -600,7 +600,7 @@ def sample_iterations(
 ):
     # NOTE: This function can be trivially parallelized
     cash_start = ctx.cash_start
-    results, trades = init_containers(ctx)
+    results, trades, agg = init_containers(ctx)
     for n in range(n_samples):
         # reset
         del results[:]
@@ -622,11 +622,14 @@ def sample_iterations(
         # switch order
         # ctx.shuffle_context()
         ctx.reset_context(trades)
+        append_results(agg, results)
+    return agg
 
 
 profit_abs_idx = BacktestResultDType.names.index("profit_abs")
 profit_percent_idx = BacktestResultDType.names.index("profit_percent")
 trade_duration_idx = BacktestResultDType.names.index("trade_duration")
+
 
 @njit(cache=False)
 def calc_sim_metrics(
@@ -750,9 +753,25 @@ def init_trades(trades_dict, n_cols):
 @njit()
 def init_containers(ctx):
     results = nb.typed.List.empty_list(item_type=BacktestResultTupleType)
+
     trades = nb.typed.Dict.empty(key_type=nb.int64, value_type=TradeJitType)
     init_trades(trades, ctx.close.shape[1])
-    return results, trades
+
+    agg = nb.typed.List.empty_list(item_type=BacktestResultArr)
+    return results, trades, agg
+
+
+@njit()
+def append_results(*args):
+    return
+
+
+def enable_aggregation():
+    global append_results
+
+    @njit()
+    def append_results(agg: nb.typed.List, res: nb.types.Array):
+        agg.append(np.asarray([v for v in res]))
 
 
 def sample_simulations(
@@ -761,6 +780,7 @@ def sample_simulations(
     o_func: Callable,
     o_names: Tuple[str, ...],
     quantile: float,
+    aggregate=False,
 ):
     o_metrics = NamedTuple(
         typename="o_metrics", fields=((name, nb.float64[:]) for name in o_names)
@@ -772,21 +792,25 @@ def sample_simulations(
         }
     )
 
+    if aggregate:
+        logger.debug("enabling aggregation")
+        enable_aggregation()
+
     logger.debug("running iterations...")
-    sample_iterations(n_samples, ctx, o_func, o_metrics, res_metrics)
+    agg = run_iterations(n_samples, ctx, o_func, o_metrics, res_metrics)
 
     logger.debug("reducing simulation metrics...")
     red_obj, red_res = reduce_sims(o_names, o_metrics, res_metrics, quantile)
 
     logger.debug("converting to dict and returning...")
     # convert typed dicts to python dicts
-    return dict(red_obj), dict(red_res)
+    return dict(red_obj), dict(red_res), agg
 
 
 def simulate_trades(
     ctx,
 ) -> np.ndarray:
-    results, trades = init_containers(ctx)
+    results, trades, _ = init_containers(ctx)
     iterate(ctx, results, trades)
 
     return np.array(results, dtype=BacktestResultDType)

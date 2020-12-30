@@ -1409,7 +1409,7 @@ class HyperoptBacktesting(Backtesting):
         quantile = self.config.get("quantile", DEFAULT_QUANTILE)
 
         pairs_map, ctx = self.vbt_context(processed)
-        red_obj, red_res = sample_simulations(
+        red_obj, red_res, agg = sample_simulations(
             ctx, n_samples, loss_func, loss_metrics, quantile
         )
         # cast types
@@ -1419,7 +1419,7 @@ class HyperoptBacktesting(Backtesting):
             red_res[f"trade_duration_{q}"] = (
                 pd.to_timedelta(red_res[f"trade_duration_{q}"]).total_seconds() / 60
             )
-        return red_obj, red_res
+        return red_obj, red_res, agg
 
     def vectorized_backtest(
         self,

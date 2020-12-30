@@ -61,6 +61,10 @@ BacktestResultTypeSig = [
     ("sell_reason", nb.int64),
 ]
 BacktestResultDType = np.dtype([(name, str(t)) for name, t in BacktestResultTypeSig])
+BacktestResultArr = nb.typeof(
+    nb.types.Array(dtype=nb.from_dtype(BacktestResultDType), ndim=1, layout="A")
+)
+
 # make sure backtest results parameters order match
 assert all(
     a == b
