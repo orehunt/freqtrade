@@ -21,6 +21,7 @@ from ax.modelbridge.generation_strategy import GenerationStep, GenerationStrateg
 from ax.modelbridge.registry import Models
 from ax.runners.synthetic import SyntheticRunner
 from ax.service.ax_client import AxClient
+from ax.utils.common.typeutils import not_none
 
 from freqtrade.optimize.optimizer import CAT, RANGE, IOptimizer
 from user_data.modules.helper import read_json_file
@@ -87,6 +88,7 @@ class Ax(IOptimizer):
     _seed_Xi: List
     _is_init = True
     _metrics: List[str]
+    _counter: int = 0
     is_blocking = False
 
     logging.getLogger("ax.modelbridge.transforms.int_to_float").setLevel(logging.ERROR)
@@ -291,7 +293,6 @@ class Ax(IOptimizer):
             random_seed=self.rs,
             verbose_logging=False,
         )
-        print("BEFORE EXP")
         self._setup_experiment()
         self._client._experiment = self._experiment
         self._Xi = Xi(self._client)
@@ -338,12 +339,13 @@ class Ax(IOptimizer):
             import traceback
 
             traceback.print_exc()
+        self._counter += len(asked)
         return asked
 
     def _get_y(self, yin):
         return (
             {m: (yin[m], None) for m in yin}
-            if self.algo in ALGOS_MOO
+            if self.algo == "MOO" or self.algo in MOO_POOL or self.algo == "MOO"
             else next(iter(yin.values()))
         )
 
@@ -366,7 +368,7 @@ class Ax(IOptimizer):
         **kwargs,
     ):
         # at the start attach trials
-        if len(self.Xi) == 0:
+        if len(self.Xi) == 0 and self._counter == 0:
             self._attach_trials(Xi, yi)
         else:
             for n, obs in enumerate(Xi):

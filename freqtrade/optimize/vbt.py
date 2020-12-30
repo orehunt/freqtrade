@@ -1,4 +1,5 @@
 from enum import Enum
+from os import getpid
 from typing import (
     Callable,
     Dict,
@@ -27,6 +28,7 @@ from freqtrade.optimize.vbt_types import *
 from logging import getLogger
 
 logger = getLogger(__name__)
+logger.name += f".{getpid()}"
 
 
 class IntSellType(Enum):
@@ -172,8 +174,8 @@ class Context(object):
         self.low_r = np.nan
         self.close_r = np.nan
 
-        for t in trades.values():
-            t.status = 1
+        for t in trades:
+            trades[t].status = 1
 
     def shuffle_context(self, seq=np.array([], dtype=np.int64)):
         """ Shuffle the order of columns """
@@ -203,13 +205,37 @@ class Context(object):
         return seq
 
 
+@njit()
+def clone_context(ctx):
+    # NOTE: creating jitclasses from njitted code doesn't support named args
+    return Context(
+        ctx.pairs,
+        ctx.date,
+        ctx.buys,
+        ctx.sells,
+        ctx.open,
+        ctx.high,
+        ctx.low,
+        ctx.close,
+        ctx.slippage,
+        ctx.slp_window,
+        ctx.fees,
+        ctx.stop_config,
+        ctx.amount,
+        ctx.irt,
+        ctx.irv,
+        ctx.min_bv,
+        ctx.min_sv,
+        ctx.cash_start,
+    )
+
+
 @jitclass(TradeJitTypeSig)
 class TradeJit:
     """ A single trade instance """
 
     def __init__(self):
         self.status = 1
-        pass
 
     def open(
         self,
@@ -337,7 +363,7 @@ def calc_trailing_rate(stoploss_price, high_price, high_profit, stp):
 
 
 @njit()
-def get_slippage(idx, col, slippage, slp_window, base_slippage=0.01):
+def get_slippage(idx, col, slippage, slp_window, base_slippage=0.033):
     slp = slippage[idx, col]
     if np.isfinite(slp):
         return slp
@@ -568,13 +594,13 @@ def iterate(ctx: Context, results, trades):
 def sample_iterations(
     n_samples: int,
     ctx: Context,
-    results,
-    trades,
     o_func: Callable[[List[BacktestResultTupleType]], Tuple[Tuple[str, float], ...]],
     o_metrics: NamedTuple,
     res_metrics: resultsMetrics,
 ):
+    # NOTE: This function can be trivially parallelized
     cash_start = ctx.cash_start
+    results, trades = init_containers(ctx)
     for n in range(n_samples):
         # reset
         del results[:]
@@ -601,7 +627,6 @@ def sample_iterations(
 profit_abs_idx = BacktestResultDType.names.index("profit_abs")
 profit_percent_idx = BacktestResultDType.names.index("profit_percent")
 trade_duration_idx = BacktestResultDType.names.index("trade_duration")
-
 
 @njit(cache=False)
 def calc_sim_metrics(
@@ -722,8 +747,8 @@ def init_trades(trades_dict, n_cols):
         trades_dict[c] = TradeJit()
 
 
+@njit()
 def init_containers(ctx):
-    # init containers
     results = nb.typed.List.empty_list(item_type=BacktestResultTupleType)
     trades = nb.typed.Dict.empty(key_type=nb.int64, value_type=TradeJitType)
     init_trades(trades, ctx.close.shape[1])
@@ -741,12 +766,14 @@ def sample_simulations(
         typename="o_metrics", fields=((name, nb.float64[:]) for name in o_names)
     )(**{name: np.full(n_samples, np.nan, dtype=float) for name in o_names})
     res_metrics = resultsMetrics(
-        **{name: np.full(n_samples, np.nan, dtype=float) for name in resultsMetricsFields}
+        **{
+            name: np.full(n_samples, np.nan, dtype=float)
+            for name in resultsMetricsFields
+        }
     )
 
-    results, trades = init_containers(ctx)
     logger.debug("running iterations...")
-    sample_iterations(n_samples, ctx, results, trades, o_func, o_metrics, res_metrics)
+    sample_iterations(n_samples, ctx, o_func, o_metrics, res_metrics)
 
     logger.debug("reducing simulation metrics...")
     red_obj, red_res = reduce_sims(o_names, o_metrics, res_metrics, quantile)

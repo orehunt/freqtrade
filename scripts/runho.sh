@@ -16,7 +16,7 @@ ho.py -i $TIMEFRAME \
     $stack \
     -mt ${MT:-1} \
     -mx ${MX:-1} \
-    -pts ${POINTS:-1} \
+    -pts ${PTS:-1} \
     -rpt ${RPT:-10} \
     -j $JOBS -res \
     -e $EPOCHS \

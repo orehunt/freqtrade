@@ -459,7 +459,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             self.config["stake_currency"], results_metrics
         )
         return {
-            "loss": loss,
+            "loss": self.filter_loss_vals(loss),
             "params_dict": params_dict,
             "params_meta": params_meta,
             "params_details": params_details,

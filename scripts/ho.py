@@ -1188,7 +1188,7 @@ class Main:
                 data = self.handle_data(params, n_path, idx)
                 self.delete_amounts_keys(data)
                 self.write_json_file(data, n_path, update=False)
-                save_map[(t["current_epoch"], t["profit"])] = str(n_path.resolve())
+                save_map[(t["current_epoch"], t["total_profit_mid"])] = str(n_path.resolve())
         from pprint import PrettyPrinter as pp
 
         pp(indent=1).pprint(("saved trials (epoch, profits):", save_map))
