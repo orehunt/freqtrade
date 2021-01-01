@@ -6,9 +6,6 @@ ho.py -i 1h     -j 14 -b      -lo OmegaLoss -mode multi -g 20180101-  -e 800 -mt
 
 """
 
-import numpy as np
-from numba.core.types.scalars import Boolean
-from freqtrade.exceptions import OperationalException
 import glob
 import json
 import logging
@@ -23,20 +20,23 @@ from pathlib import Path
 from shutil import copy
 from statistics import mean
 from time import mktime, sleep
-from typing import Any, Dict, MutableMapping, MutableSequence, Tuple
+from types import SimpleNamespace
+from typing import Any, Dict, MutableMapping, MutableSequence, Optional, Tuple
 
 from colorama import Fore, Style
 from joblib.externals.loky import get_reusable_executor
-from numpy import float64, int64, bool_
+from numpy import bool_, float64, int64
 from pandas import DataFrame, Timedelta
 
 from freqtrade.configuration.configuration import Configuration, RunMode
 from freqtrade.data.btanalysis import load_trades
+from freqtrade.exceptions import OperationalException
 from freqtrade.loggers import setup_logging, setup_logging_pre
 from freqtrade.optimize.hyperopt import Hyperopt
 from scripts.hopt.args import parse_hopt_args, update
 from scripts.hopt.env import set_environment
 from user_data.modules import sequencer as ts
+
 
 try:
     from user_data.modules.time import CV_TR, OPT_TR
@@ -76,97 +76,94 @@ ho: Hyperopt
 
 
 class Main:
+    def apply_config(self, args: Optional[SimpleNamespace] = None):
+        setup_logging_pre()
+        if args is None:
+            args = parse_hopt_args()
+        self.args = args
 
-    setup_logging_pre()
-    args: Any = parse_hopt_args()
+        self.timeframe = args.i
+        self.days = args.d
+        self.pairlist_name = "10e-4_spread_10e4_vol"
 
-    timeframe = args.i
-    days = args.d
-    pairlist_name = "10e-4_spread_10e4_vol"
+        self.config_dir = config_dir = "cfg/"
+        self.hyperopt_config = f"{config_dir}/hyperopt.json"
+        self.exchange_config = f"{config_dir}/{args.exc}.json"
+        self.amounts_tuned_config = f"{config_dir}/amounts_backtesting_tuned.json"
+        exchange_overrides = []
+        for f in ["amounts_backtesting"]:
+            if os.path.exists(f"{config_dir}/{args.exc}/{f}.json"):
+                exchange_overrides.append(f"{config_dir}/{args.exc}/{f}.json")
+            else:
+                exchange_overrides.append(f"{config_dir}/{f}.json")
 
-    config_dir = "cfg/"
-    hyperopt_config = f"{config_dir}/hyperopt.json"
-    exchange_config = f"{config_dir}/{args.exc}.json"
-    amounts_tuned_config = f"{config_dir}/amounts_backtesting_tuned.json"
-    exchange_overrides = []
-    for f in ["amounts_backtesting"]:
-        if os.path.exists(f"{config_dir}/{args.exc}/{f}.json"):
-            exchange_overrides.append(f"{config_dir}/{args.exc}/{f}.json")
+        if not args.risk:
+            risk_dir = "risk"
+            self.risk_config = f"{config_dir}/{risk_dir}/{self.timeframe}.json"
         else:
-            exchange_overrides.append(f"{config_dir}/{f}.json")
+            self.risk_config = args.risk
+        self.config_files = [
+            self.hyperopt_config,
+            self.exchange_config,
+            *exchange_overrides,
+            f"{config_dir}/pairlists_static.json",
+            f"{config_dir}/amounts/default.json",
+            f"{config_dir}/live.json",
+            f"{config_dir}/askbid.json",
+            f"{config_dir}/paths.json",
+            f"{config_dir}/protections.json",
+        ]
 
-    if not args.risk:
-        risk_dir = "risk"
-        risk_config = f"{config_dir}/{risk_dir}/{timeframe}.json"
-    else:
-        risk_config = args.risk
-    config_files = [
-        hyperopt_config,
-        exchange_config,
-        *exchange_overrides,
-        f"{config_dir}/pairlists_static.json",
-        f"{config_dir}/amounts/default.json",
-        f"{config_dir}/live.json",
-        f"{config_dir}/askbid.json",
-        f"{config_dir}/paths.json",
-        f"{config_dir}/protections.json",
-    ]
+        config = {}
 
-    config = {}
+        # state
+        config["user_data_dir"] = Path(paths["user"])
+        config["hyperopt_clear"] = args.clr
+        config["hyperopt_reset"] = args.res
+        config["hyperopt_jobs"] = args.j
+        config["hyperopt_trials_maxout"] = args.mx or int(args.j)
+        config["hyperopt_trials_timeout"] = args.tm or 60
+        config["hyperopt_trials_instance"] = args.inst or (
+            "cv" if (args.cv and not args.kn) else None
+        )
+        # optimizer
+        config["hyperopt_epochs"] = args.e
+        config["hyperopt_mode"] = args.mode
+        opt, alg = args.alg.split(":")
+        self.opt_config = {
+            "lie_strat": args.lie,
+            "type": opt,
+            "algo": alg,
+            "meta_tag_conflict": args.mtc,
+        }
+        config["hyperopt_ask_points"] = args.pts
+        config["hyperopt_max_convergence_ratio"] = args.cvg
+        config["hyperopt_initial_points"] = args.rpt or (32 // max(1, args.j))
+        config["hyperopt_random_state"] = args.rand if args.rand else None
+        config["hyperopt_loss"] = "DecideCoreLoss" if not args.lo else args.lo
 
-    # state
-    config["user_data_dir"] = Path(paths["user"])
-    config["hyperopt_clear"] = args.clr
-    config["hyperopt_reset"] = args.res
-    config["hyperopt_jobs"] = args.j
-    config["hyperopt_trials_maxout"] = args.mx or int(args.j)
-    config["hyperopt_trials_timeout"] = args.tm or 60
-    config["hyperopt_trials_instance"] = args.inst or (
-        "cv" if (args.cv and not args.kn) else None
-    )
-    # optimizer
-    config["hyperopt_epochs"] = args.e
-    config["hyperopt_mode"] = args.mode
-    opt, alg = args.alg.split(":")
-    opt_config = {
-        "lie_strat": args.lie,
-        "type": opt,
-        "algo": alg,
-        "meta_tag_conflict": args.mtc,
-    }
-    config["hyperopt_ask_points"] = args.pts
-    config["hyperopt_max_convergence_ratio"] = args.cvg
-    config["hyperopt_initial_points"] = args.rpt or (32 // max(1, args.j))
-    config["hyperopt_random_state"] = args.rand if args.rand else None
-    config["hyperopt_loss"] = "DecideCoreLoss" if not args.lo else args.lo
+        # output
+        config["print_json"] = args.nojson
+        config["print_best_at_end"] = args.nobest
+        config["print_all"] = not args.noprint
+        config["print_colorized"] = True
+        config["verbosity"] = args.dbg
+        config["logfile"] = "hyperopt.log" if args.log else ""
 
-    # output
-    config["print_json"] = args.nojson
-    config["print_best_at_end"] = args.nobest
-    config["print_all"] = not args.noprint
-    config["print_colorized"] = True
-    config["verbosity"] = args.dbg
-    config["logfile"] = "hyperopt.log" if args.log else ""
+        # trades
+        config["position_stacking"] = args.stack
+        config["use_max_market_positions"] = args.mp
+        config["timeframe"] = self.timeframe
+        config["fee"] = args.fee
 
-    # trades
-    config["position_stacking"] = args.stack
-    config["use_max_market_positions"] = args.mp
-    config["timeframe"] = timeframe
-    config["fee"] = args.fee
+        self.config = config
 
-    base_config = config
-
-    # spaces config
-    sgn = args.sgn.split(",")
-    if sgn[0] == "":
-        sgn = []
-    spaces = set()
-    amounts_groups = [("roi",), ("stoploss",)]
-    amounts_names = ("roi", "trailing", "stoploss")
-
-    # make a stub lock to save trials from outside hyperopt
-    # stub = lambda: None
-    # stub.lock = Lock()
+        # spaces config
+        self.sgn = args.sgn.split(",")
+        if self.sgn[0] == "":
+            self.sgn = []
+        self.spaces = set()
+        self.amounts_names = ("roi", "trailing", "stoploss")
 
     def calc_trades(self):
         self.calc_days()
@@ -218,7 +215,8 @@ class Main:
             self.timerange = CV_TR[0]
         self.config["timerange"] = self.timerange
 
-    def __init__(self):
+    def __init__(self, args=None):
+        self.apply_config(args)
         self.n_tickers = self.get_tickers_number()
         self.setup_timerange()
         self.calc_trades()
@@ -276,7 +274,9 @@ class Main:
             self.config["signals"]["force_sell_max_duration"] = False
         self.update_evals()
 
-    def parse_pairs(self, pa=args.pa):
+    def parse_pairs(self, pa=None):
+        if pa is None:
+            pa = self.args.pa
         tp = ""
         if type(pa) == str:
             pas = pa.split(":")
@@ -318,8 +318,10 @@ class Main:
         else:
             return pa
 
-    def update_pairs(self, pa=args.pa, config=False):
+    def update_pairs(self, pa=None, config=False):
         """ returns the previous pairs """
+        if pa is None:
+            pa = self.args.pa
         if config:
             prev_pairs = self.config["exchange"]["pair_whitelist"]
             self.config["exchange"]["pair_whitelist"] = self.parse_pairs(pa)
@@ -352,11 +354,7 @@ class Main:
             config["hyperopt_loss"] = "SharpeLoss"
             amt = self.args.amt.split(":")
             amt_mode = amt[0]
-            prefs = (
-                amt[1].split(",")
-                if len(amt) > 1
-                else self.amounts_names
-            )
+            prefs = amt[1].split(",") if len(amt) > 1 else self.amounts_names
             if amt_mode == "test":
                 config.update(self.read_json_file(self.amounts_tuned_config))
                 if amounts_group == "roi":
@@ -375,7 +373,8 @@ class Main:
                     assert p in self.amounts_names
                     bta[p] = enabled
                 update(
-                    config, {"backtesting_amounts": bta},
+                    config,
+                    {"backtesting_amounts": bta},
                 )
             # make sure something is in the space
             if not self.sgn:
@@ -687,8 +686,8 @@ class Main:
         return sha1(bytes(f"{cond}", "UTF-8")).hexdigest()
 
     def process_last_condition(self, c: int, prev_params: list, skipor: True) -> list:
-        """ decide if the last full evald condition should be kept, and save
-        indicator score """
+        """decide if the last full evald condition should be kept, and save
+        indicator score"""
         # it's worse so reset condition because not good
         if self.cond_best > self.run_best and not skipor:
             if self.wrap or self.args.w != -1 and self.prev_cond:
@@ -721,8 +720,8 @@ class Main:
         return prev_params
 
     def match_condition_at_index(self, c: int, last_params: dict):
-        """ loop over the keys in the parameters to make sure the paramters
-        are of the condition at the current index """
+        """loop over the keys in the parameters to make sure the paramters
+        are of the condition at the current index"""
         for k in last_params:
             for part in k.split(":"):
                 for s in self.spaces:
@@ -921,7 +920,9 @@ class Main:
         else:
             return False
 
-    def opt_conditions(self, prev_params: dict, w: int = args.w) -> list:
+    def opt_conditions(self, prev_params: dict, w: Optional[int] = None) -> list:
+        if w is None:
+            w = self.args.w
         # recall last best loss if we are resuming
         if os.path.exists(paths["best"]):
             saved_best = self.read_json_file(paths["best"])
@@ -999,10 +1000,14 @@ class Main:
             prev_params = self.process_last_condition(c, prev_params, skipand)
         return prev_params
 
-    def opt_amounts(self, amounts=args.amt):
+    def opt_amounts(self, amounts=None):
+        if amounts is None:
+            amounts = self.args.amt
         # disable ignore roi
         if "roi" in self.spaces or "all" in self.spaces:
-            logger.warning("disabling ignore_roi_if_buy_signal since ROI is being optimized")
+            logger.warning(
+                "disabling ignore_roi_if_buy_signal since ROI is being optimized"
+            )
             self.config["ask_strategy"]["ignore_roi_if_buy_signal"] = False
         # reset best
         self.write_json_file({"run_best": None}, paths["best"], update=False)
@@ -1048,7 +1053,11 @@ class Main:
             p_path = f"{self.config_dir}/amounts/pairs/{p_name}.json"
             self.write_json_file(amounts, p_path, update=False)
 
-    def update_amounts(self, ua=args.ua, amounts_path=amounts_tuned_config):
+    def update_amounts(self, ua=None, amounts_path=None):
+        if ua is None:
+            ua = self.args.ua
+        if amounts_path is None:
+            amounts_path = self.amounts_tuned_config
         ua = ua.split(":")
         # cv:123
         if ua[0] == "cv":
@@ -1111,24 +1120,24 @@ class Main:
 
     def delete_amounts_keys(self, di):
         for key in [
-                "stoploss",
-                "trailing_stop",
-                "trailing_stop_positive",
-                "trailing_stop_offset_p1",
-                "trailing_stop_positive_offset_p1",
-                "trailing_only_offset_is_reached",
-                "roi_t1",
-                "roi_t2",
-                "roi_t3",
-                "roi_t4",
-                "roi_t5",
-                "roi_t6",
-                "roi_p1",
-                "roi_p2",
-                "roi_p3",
-                "roi_l1",
-                "roi_l2",
-                "roi_l3",
+            "stoploss",
+            "trailing_stop",
+            "trailing_stop_positive",
+            "trailing_stop_offset_p1",
+            "trailing_stop_positive_offset_p1",
+            "trailing_only_offset_is_reached",
+            "roi_t1",
+            "roi_t2",
+            "roi_t3",
+            "roi_t4",
+            "roi_t5",
+            "roi_t6",
+            "roi_p1",
+            "roi_p2",
+            "roi_p3",
+            "roi_l1",
+            "roi_l2",
+            "roi_l3",
         ]:
             try:
                 del di[key]
@@ -1157,9 +1166,15 @@ class Main:
             data.update(params)
         return data
 
-    def update_params(
-        self, epoch_arg=args.upp, path=args.path, instance=args.inst, merge=args.merge
-    ):
+    def update_params(self, epoch_arg=None, path=None, instance=None, merge=None):
+        if epoch_arg is None:
+            epoch_arg = self.args.upp
+        if path is None:
+            path = self.args.path
+        if instance is None:
+            instance = self.args.inst
+        if merge is None:
+            merge = self.args.merge
         results, _, _ = self.get_trials(instance=(instance or "last"))
         epoch_arg = epoch_arg.split(":")
         cv = epoch_arg[0] == "cv"  #
@@ -1188,7 +1203,9 @@ class Main:
                 data = self.handle_data(params, n_path, idx)
                 self.delete_amounts_keys(data)
                 self.write_json_file(data, n_path, update=False)
-                save_map[(t["current_epoch"], t["total_profit_mid"])] = str(n_path.resolve())
+                save_map[(t["current_epoch"], t["total_profit_mid"])] = str(
+                    n_path.resolve()
+                )
         from pprint import PrettyPrinter as pp
 
         pp(indent=1).pprint(("saved trials (epoch, profits):", save_map))
@@ -1364,9 +1381,13 @@ class Main:
             self.run_hyperopt()
 
 
-if __name__ == "__main__":
-    main = Main()
+def run(args=None):
+    main = Main(args)
     try:
         main.start()
     except (KeyboardInterrupt, ConnectionError):
         pass
+
+
+if __name__ == "__main__":
+    run()

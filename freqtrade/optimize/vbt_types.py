@@ -85,6 +85,7 @@ ContextTypeSig = [
     ("low", nb.float64[:, :]),
     ("close", nb.float64[:, :]),
     ("slp_window", nb.int64),
+    ("probs", nb.types.UniTuple(nb.float64, 2)),
     ("fees", nb.float64),
     ("stop_config", nb.typeof(StoplossConfigJit(0))),
     ("amount", nb.float64[:, :]),

@@ -117,6 +117,8 @@ class Context(object):
         slippage: nb.float64[:, :],
         # lookback of slippage mean in case of nan slippage
         slp_window: nb.int64,
+        # probability of trade entry and exit
+        probs: Tuple[float, float],
         # scalar fees to apply for each order
         fees: nb.float64,
         stop_config: StoplossConfigJit,
@@ -147,6 +149,7 @@ class Context(object):
 
         self.slippage = slippage
         self.slp_window = slp_window
+        self.probs = probs
         self.fees = fees
 
         self.stop_config = stop_config
@@ -250,20 +253,24 @@ class TradeJit:
         min_cash: nb.float64,
         fees: nb.float64,
         slp: nb.float64,
+        prob: nb.float64,
         stoploss: nb.float64,
     ):
         """
         !!! both open_price and cash can't be 0 !!!
-        The open function doesn't check for a minimum size
         """
+        # skip trades that don't meet probability
+        if np.random.uniform(0, 1) > prob:
+            return 0
         self.open_idx = open_idx
         self.open_price = open_price
         self.buy_price = open_price + open_price * slp
 
         # ensure the order size is at least min_cash
-        cash_sized = max(min_cash, cash)
-        self.shares_held = cash_sized / self.buy_price
-        self.cash_spent = cash_sized + cash_sized * fees
+        if cash < min_cash:
+            return 0
+        self.shares_held = cash / self.buy_price
+        self.cash_spent = cash + cash * fees
         # skip orders where cash spent exceeds available cash
         if self.cash_spent > cash_now:
             return 0
@@ -279,24 +286,28 @@ class TradeJit:
         close_price: nb.float64,
         fees,
         slp: nb.float64,
+        prob: nb.float64,
         sell_reason: nb.int64,
         min_cash: nb.float64,
         # when trade is too low value to be closed, replace slippage with forfeit slippage
         forfeit_slp: nb.float64 = 0.33,
     ):
+        # skip trades that don't meet probability
+        if np.random.uniform(0, 1) > prob:
+            return 0
         self.sell_price = close_price - close_price * slp
-        cash_value = self.shares_held * self.sell_price
+        value_held = self.shares_held * self.sell_price
         # don't sell if value is below minimum sell size
-        if cash_value < min_cash:
+        if value_held < min_cash:
             # print("can't sell, settling trade with adjusted slippage: ", cash_value, min_cash)
             self.sell_price = close_price - close_price * forfeit_slp
-            cash_value = self.shares_held * self.sell_price
+            value_held = self.shares_held * self.sell_price
 
         self.close_idx = close_idx
         self.sell_reason = sell_reason
-        self.cash_returned = cash_value - cash_value * fees
+        self.cash_returned = value_held - value_held * fees
 
-        self.profits = self.cash_returned / self.cash_spent - 1
+        self.profits = self.cash_returned / self.cash_spent - 1.0
         self.pnl = self.cash_returned - self.cash_spent
 
         self.status = 1
@@ -395,6 +406,7 @@ def check_for_buy(i, c, ctx, trades: Dict[int, TradeJit]):
                 min_cash=ctx.min_bv,
                 fees=ctx.fees,
                 slp=get_slippage(bi, c, ctx.slippage, ctx.slp_window),
+                prob=ctx.probs[0],
                 stoploss=ctx.stop_config.stoploss,
             )
             # if trades[c].status == 0:
@@ -422,6 +434,7 @@ def check_roi_on_open(i, c, ctx, trades):
                 close_price=ctx.open_r,
                 fees=ctx.fees,
                 slp=get_slippage(i, c, ctx.slippage, ctx.slp_window),
+                prob=ctx.probs[1],
                 sell_reason=IntSellType.ROI.value,
                 min_cash=ctx.min_sv,
             )
@@ -443,6 +456,7 @@ def check_stop_on_open(i, c, ctx, trades):
                 close_price=stoploss_price,
                 fees=ctx.fees,
                 slp=get_slippage(i, c, ctx.slippage, ctx.slp_window),
+                prob=ctx.probs[1],
                 sell_reason=(
                     IntSellType.STOP_LOSS.value
                     if stoploss_price == trades[c].initial_stoploss_price
@@ -466,6 +480,7 @@ def check_roi_on_high(i, c, high_profit, ctx, trades):
             close_price=trades[c].price_at(roi, ctx.low_r, ctx.fees),
             fees=ctx.fees,
             slp=get_slippage(i, c, ctx.slippage, ctx.slp_window),
+            prob=ctx.probs[1],
             sell_reason=IntSellType.ROI.value,
             min_cash=ctx.min_sv,
         )
@@ -484,6 +499,7 @@ def check_stop_on_high(i, c, high_profit, ctx, trades):
             close_price=stoploss_price,
             fees=ctx.fees,
             slp=get_slippage(i, c, ctx.slippage, ctx.slp_window),
+            prob=ctx.probs[1],
             sell_reason=(
                 IntSellType.STOP_LOSS.value
                 if stoploss_price == trades[c].initial_stoploss_price
@@ -505,6 +521,7 @@ def check_for_sell(i, c, ctx, trades):
             close_price=ctx.open[next_i, c],
             fees=ctx.fees,
             slp=get_slippage(next_i, c, ctx.slippage, ctx.slp_window),
+            prob=ctx.probs[1],
             sell_reason=IntSellType.SELL_SIGNAL.value,
             min_cash=ctx.min_sv,
         )

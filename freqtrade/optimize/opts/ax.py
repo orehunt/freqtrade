@@ -349,14 +349,13 @@ class Ax(IOptimizer):
             else next(iter(yin.values()))
         )
 
+    def _get_X(self, X):
+        return dict(zip(self._params_names, X))
+
     def _attach_trials(self, Xi, yi, x_has_meta=True):
         for n, obs in enumerate(Xi):
-            if x_has_meta:
-                X, _ = obs[0], obs[1]
-            else:
-                X = list(obs.values())
-            params = {k: v for k, v in zip(self._params_names, X)}
-            _, idx = self._client.attach_trial(params)
+            X = obs[0] if x_has_meta else obs.values()
+            _, idx = self._client.attach_trial(self._get_X(X))
             self._client.complete_trial(trial_index=idx, raw_data=self._get_y(yi[n]))
 
     def tell(
@@ -372,7 +371,13 @@ class Ax(IOptimizer):
             self._attach_trials(Xi, yi)
         else:
             for n, obs in enumerate(Xi):
-                _, meta = obs[0], obs[1]
-                self._client.complete_trial(
-                    trial_index=meta["idx"], raw_data=self._get_y(yi[n])
-                )
+                X, meta = obs[0], obs[1]
+                if self._client._get_trial(meta["idx"]).status.is_completed:
+                    _, new_idx = self._client.attach_trial(self._get_X(X))
+                    self._client.complete_trial(
+                        trial_index=new_idx, raw_data=self._get_y(yi[n])
+                    )
+                else:
+                    self._client.complete_trial(
+                        trial_index=meta["idx"], raw_data=self._get_y(yi[n])
+                    )

@@ -1,8 +1,9 @@
 import os
+from typing import Any
 import glob
 
 
-def set_environment(args: dict, paths: list, config) -> None:
+def set_environment(args: Any, paths: dict, config) -> None:
     if not args.r:
         list(map(os.remove, glob.glob(f"{paths['pickle']}/*")))
     if args.b:

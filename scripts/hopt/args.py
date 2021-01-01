@@ -1,8 +1,9 @@
 import argparse
 from collections.abc import Mapping
+from typing import Any
 
 
-def parse_hopt_args() -> dict:
+def parse_hopt_args() -> Any:
     parser = argparse.ArgumentParser()
 
     parser.add_argument("-prf", help="run freqtrade with profiler", default="")
@@ -33,9 +34,7 @@ def parse_hopt_args() -> dict:
     parser.add_argument(
         "-amt", help="spaces for amounts", default="on:roi,stoploss,trailing", type=str
     )
-    parser.add_argument(
-        "-risk", help="amounts config", default="", type=str
-    )
+    parser.add_argument("-risk", help="amounts config", default="", type=str)
     parser.add_argument("-pp", help="path for pairlist for profits tuning", default="")
     parser.add_argument("-ne", help="optimize evals number", type=str, default="")
     parser.add_argument(
@@ -65,9 +64,7 @@ def parse_hopt_args() -> dict:
         type=int,
         default=None,
     )
-    parser.add_argument(
-        "-stack", help="position stacking", action="store_true"
-    )
+    parser.add_argument("-stack", help="position stacking", action="store_true")
     parser.add_argument("-d", help="number of days", type=int, default=0)
     parser.add_argument("-g", help="timerange", type=str, default="")
     parser.add_argument("-i", help="timeframe", type=str, default="1h")

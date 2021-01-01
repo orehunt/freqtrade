@@ -1,4 +1,5 @@
 import logging
+from freqtrade.configuration.configuration import RunMode
 import os
 from enum import IntEnum
 from types import SimpleNamespace
@@ -97,7 +98,9 @@ class HyperoptBacktesting(Backtesting):
             self.backtest_vanilla = self.backtest
             if self.bt_ng == "vbt":
                 self.vectorized_backtest = (
-                    self.vbt_ms_backtest if self.multisampling else self.vbt_backtest
+                    self.vbt_ms_backtest
+                    if self.multisampling and config["runmode"] != RunMode.BACKTEST
+                    else self.vbt_backtest
                 )
             if dbg:
                 dbg._debug_opts()
@@ -1348,6 +1351,7 @@ class HyperoptBacktesting(Backtesting):
             cl=ohlcv.close.values,
             slippage=ohlcv.spread.values,
             slp_window=self.timeframe_wnd,
+            probs=tuple(self.config.get("backtesting_probs", DEFAULT_PROBS)),
             fees=self.fee,
             stop_config=stp,
             amount=amount.values,

@@ -816,11 +816,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         except KeyError:
             pass
 
-    def _setup_trials(self, load_trials=True, backup=False):
-        """ The trials instance is the key used to identify the hdf table """
-        # If the Hyperopt class has been previously initialized
-        if self.config.get("hyperopt_skip_trials_setup", False):
-            return
+    def _set_trial_instance(self):
         self.parameters: List[Any]
         self.parameters = self.hyperopt_space()
         self.trials_instance = "{}-{}/{}/{}".format(
@@ -830,6 +826,13 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             # truncate hash to 4 digits
             str(hash([d.name for d in self.parameters]))[:4],
         )
+
+    def _setup_trials(self, load_trials=True, backup=False):
+        """ The trials instance is the key used to identify the hdf table """
+        # If the Hyperopt class has been previously initialized
+        if self.config.get("hyperopt_skip_trials_setup", False):
+            return
+        self._set_trial_instance()
         cv_tail = "_cv" if self.cv else ""
         logger.info(
             f"Hyperopt state will be saved to " f"key {self.trials_instance}{cv_tail}"
@@ -1080,6 +1083,9 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         # dump the object state which will be loaded by every worker
         # instead of pickling functions around
         logger.debug("dumping pickled hyperopt object to path: %s", self.cls_file)
+        # from numba.core.serialize import FastNumbaPickler
+        # with open(self.cls_file, 'wb') as f:
+        #     FastNumbaPickler(f).dump(wrap_non_picklable_objects(self))
         dump(wrap_non_picklable_objects(self), self.cls_file)
         logger.debug("starting workers pool")
         # in single mode dispatching is synchronized such that
