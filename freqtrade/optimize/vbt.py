@@ -571,7 +571,7 @@ def iterate(ctx: Context, results, trades):
     # loop over dates
     for i, close in enumerate(ctx.close):
         # shuffle col index
-        np.random.shuffle(col_idx)
+        # np.random.shuffle(col_idx)
         # loop over assets
         for c in col_idx:
             # terminate if out of cash with no trades open
