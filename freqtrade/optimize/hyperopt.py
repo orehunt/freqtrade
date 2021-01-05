@@ -55,7 +55,7 @@ from freqtrade.strategy.interface import IStrategy
 
 
 logger = logging.getLogger(__name__)
-hash = partial(hash, hash_name="sha1")
+hasha1 = partial(hash, hash_name="sha1")
 
 
 class Hyperopt(HyperoptMulti, HyperoptCV):
@@ -85,7 +85,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
 
     def _setup_workers(self):
         # runtime
-        self.n_jobs = self.config.get("hyperopt_jobs", -1)
+        self.n_jobs = self.config.get("jobs", -1)
         if self.n_jobs < 0:
             self.n_jobs = cpu_count() // 2 or 1
 
@@ -276,9 +276,9 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
 
     def backtest_params(
         self,
-        raw_params: Tuple[Tuple, Dict] = None,
+        raw_params: Optional[Tuple[Tuple, Dict]] = None,
         iteration=None,
-        params_dict: Dict[str, Any] = None,
+        params_dict: Optional[Dict[str, Any]] = None,
         rs: Union[None, int] = None,
     ) -> Dict:
         if not params_dict:
@@ -476,7 +476,8 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         config["mode"] = self.mode
         config["n_rand"] = self.n_rand
         config["ask_points"] = self.ask_points
-        config["n_jobs"] = self.config.get("hyperopt_jobs", -1)
+        if "n_jobs" not in config:
+            config["n_jobs"] = (cpu_count() // 2) or 1
         config["n_epochs"] = self.config.get("hyperopt_epochs", 10)
         config["constraints"] = self.custom_hyperopt.constraints()
         config["metrics"] = self._setup_loss_func(random_state)
@@ -521,7 +522,9 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             for t, asked in self.ask_and_tell(jobs)
         )
 
-    def point_func(self, opt: IOptimizer, to_ask: deque) -> Tuple:
+    def point_func(
+        self, opt: IOptimizer, to_ask: deque
+    ) -> Optional[Tuple[Tuple[Any, ...]]]:
         """
         this is needed because when we ask None points, the optimizer doesn't return a list
         """
@@ -617,6 +620,16 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                 np.nanmean(opt.yi[-self.n_jobs :]) + backend.epochs.average
             ) / 2
 
+    def _resume_trials(self, opt: IOptimizer):
+        # tell previous points if any
+        params_df = self._from_group()
+        params_df = self.progressive_filtering(params_df, self.n_rand, self.config)
+        params_df.drop_duplicates(subset="Xi_h", inplace=True)
+        logger.warning("resuming optimization from %s trials", len(params_df))
+        if len(params_df):
+            Xi, yi = self.zip_points(params_df)
+            opt.tell(Xi, yi, fit=True)
+
     def ask_and_tell(self, jobs: int):
         """
         loop to manage optimizer state in single optimizer mode, everytime a job is
@@ -631,14 +644,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         t = 0
         sri = self.space_reduction_interval
         opt = self.opt
-        # tell previous points if any
-        params_df = self._from_group()
-        params_df = self.progressive_filtering(params_df, self.n_rand, self.config)
-        params_df.drop_duplicates(subset="Xi_h", inplace=True)
-        logger.warning("resuming optimization from %s trials", len(params_df))
-        if len(params_df):
-            Xi, yi = self.zip_points(params_df)
-            opt.tell(Xi, yi, fit=True)
+        self._resume_trials(opt)
 
         # loop indefinitely
         for _ in iter(lambda: 0, 1):
@@ -647,8 +653,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
                 opt, jobs, backend.epochs, backend.trials, is_shared=True
             )
             if sri and sri // (t or 1) < 1:
-                if self.apply_space_reduction(jobs, backend.trials, backend.epochs):
-                    read_index = 0
+                self.apply_space_reduction(jobs, backend.trials, backend.epochs)
 
             self._check_points(t, to_ask, opt)
 
@@ -706,7 +711,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         if v:
             v["is_initial_point"] = t < cls.n_rand if cls.cv else False
             v["random_state"] = cls.random_state  # this is 0 in CV
-            v["Xi_h"] = hash(cls.params_Xi(v))
+            v["Xi_h"] = hasha1(cls.params_Xi(v))
             v["loss"] = HyperoptMulti.filter_loss_vals(v["loss"])
             backend.trials_list.append(v)
             trials_state.num_done += 1
@@ -824,7 +829,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             len(self.parameters),
             "_".join(sorted(self.config["spaces"])),
             # truncate hash to 4 digits
-            str(hash([d.name for d in self.parameters]))[:4],
+            str(hasha1([d.name for d in self.parameters]))[:4],
         )
 
     def _setup_trials(self, load_trials=True, backup=False):
@@ -1079,6 +1084,36 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
         return trials_state.exit
 
     def main_loop(self, jobs_scheduler):
+        if self.n_jobs == 1 and not self.async_sched:
+            self.sequential_loop()
+        else:
+            self.parallel_loop(jobs_scheduler)
+
+    def sequential_loop(self):
+        self.trials_maxout = 1
+        jobs = self.n_jobs
+
+        epochs = backend.epochs
+        trials_state = backend.trials
+        trials_list = backend.trials_list
+
+        for t, params in self.ask_and_tell(jobs):
+            epochs.dispatched += 1
+            backend.timer = now()
+            v = self.backtest_params(raw_params=params)
+            # set flag and params for indexing
+            if v:
+                v["is_initial_point"] = t < self.n_rand
+                v["random_state"] = self.random_state  # this is 0 in CV
+                v["Xi_h"] = hasha1(self.params_Xi(v))
+                v["loss"] = self.filter_loss_vals(v["loss"])
+                trials_list.append(v)
+                trials_state.num_done += 1
+                self.maybe_log_trials(trials_state, epochs, None)
+            else:
+                trials_state.n_void += 1
+
+    def parallel_loop(self, jobs_scheduler):
         """ main parallel loop """
         # dump the object state which will be loaded by every worker
         # instead of pickling functions around
@@ -1095,7 +1130,7 @@ class Hyperopt(HyperoptMulti, HyperoptCV):
             if (not self.async_sched and not self.cv) and self.opt.is_blocking
             else "2*n_jobs"
         )
-        with parallel_backend("loky", inner_max_num_threads=2):
+        with parallel_backend("loky"):
             with Parallel(
                 n_jobs=self.n_jobs,
                 verbose=0,
