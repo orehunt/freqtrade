@@ -123,13 +123,14 @@ class Ax(IOptimizer):
                 if dist == "uni":
                     log_scale = False
                 elif dist == "log":
-                    log_scape = True
+                    log_scale = True
                 else:
                     self.handle_missing_tag(("dist", dist))
                 kwargs = {
                     "name": par.name,
                     "lower": par.low,
                     "upper": par.high,
+                    "log_scale": log_scale,
                     "parameter_type": ax.ParameterType.INT
                     if "int" in m
                     else ax.ParameterType.FLOAT,
