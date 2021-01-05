@@ -102,7 +102,7 @@ def concat_pairs(
         pairs_tf = parse_pairs_timeframes(cc_pairs, cc_tf, sort=True)
         # construct the dict according to the ref, but WITHOUT it
         cc_dict = construct_cc_dict(
-            pairs_tf, ref, get_data=get_data, date_index=False, trim=trim_to_ref
+            pairs_tf, ref, get_data=get_data, date_index=False, trim_bounds=trim_to_ref
         )
         cache[key] = cc_dict
         # after having saved the dict insert the reference;
@@ -114,8 +114,8 @@ def concat_pairs(
 
 
 def _concat_pairs_nb(ref: RefPair, df_dict: PairsDict):
-    """ NOTE: dict is supposed to be sorted (lowest tf to highest tf)
-    and the reference is the first (the lowest) """
+    """NOTE: dict is supposed to be sorted (lowest tf to highest tf)
+    and the reference is the first (the lowest)"""
     # use lists because data doesn't have same shape
     ref_pair, ref_tf, ref_df = ref
     indexes = []
@@ -144,7 +144,10 @@ def _concat_pairs_nb(ref: RefPair, df_dict: PairsDict):
 
     # the index of the reference pair has
     df = pd.DataFrame(
-        out, columns=columns, index=pd.to_datetime(idx, utc=True), copy=False,
+        out,
+        columns=columns,
+        index=pd.to_datetime(idx, utc=True),
+        copy=False,
     )
     # restore the reference df column names as they were
     ref_keys = ((ref_pair, ref_tf, c) for c in ref_columns)
@@ -157,7 +160,9 @@ def _concat_pairs_nb(ref: RefPair, df_dict: PairsDict):
 
 @njit(cache=True)
 def _concat_arrays_axis1(
-    ref_tf: float, date_indexes: nb.typed.List, data: nb.typed.List,
+    ref_tf: float,
+    date_indexes: nb.typed.List,
+    data: nb.typed.List,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     outer concatenate on date_indexes with trimmed bounds
@@ -316,7 +321,7 @@ def concat_pairs_pd(
 def insert_cc_dict(
     ins_dict: PairsDict, pairs_tf: Optional[np.ndarray], cc_dict: PairsDict
 ):
-    """ Expects:
+    """Expects:
     - a dataframe to insert into an ordered dict
     - an ndarray with 3 columns (pair, timeframe, timedelta)
     - the dict to update
@@ -342,7 +347,7 @@ def trim_by_date(
     df: pd.DataFrame, start: pd.Timestamp, stop: pd.Timestamp
 ) -> Optional[pd.DataFrame]:
     date = df["date"]
-    sstart = date.searchsorted(start) or None
+    sstart = date.searchsorted(start) or 0
     # not enough data
     if date.iloc[sstart] > stop:
         return None
@@ -398,7 +403,7 @@ def construct_cc_dict(
     get_data: Optional[Callable] = None,
     date_index=True,
     verify_bounds=False,
-    trim=True,
+    trim_bounds=True,
 ) -> PairsDict:
     """
     Construct a dictionary of dataframes from a list of (pair, timeframe)
@@ -409,7 +414,7 @@ def construct_cc_dict(
     # NOTE: the reference timeframe should be ALREADY included
     # in the `pairs_tf` array
     pair, tf, ref_df = ref
-    if trim:
+    if trim_bounds:
         first_date = ref_df["date"].iloc[0]
         last_date = ref_df["date"].iloc[-1]
     else:
@@ -422,7 +427,7 @@ def construct_cc_dict(
 
     cc_dict = {}
     for pair, tf, td in pairs_tf:
-        if trim:
+        if trim_bounds:
             pair_df = trim(
                 get_data(pair=pair, timeframe=tf, last_date=last_date),
                 first_date,
