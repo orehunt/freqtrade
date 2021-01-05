@@ -697,13 +697,14 @@ class HyperoptData(backend.HyperoptBase):
         if n_best < n_types:
             n_best = max(1, n_types)
 
+        best_concat = []
         if "ratio" in types_best:
             # filter the trials to the ones that meet the min_ratio for all the metrics
-            cutoff_best = trials.sort_values("norm_ratio").iloc[-n_best:]
+            best_concat.append(trials.sort_values("norm_ratio").iloc[-n_best:])
         if "sum" in types_best:
-            sum_best = trials.sort_values("norm_sum").iloc[-n_best:]
+            best_concat.append(trials.sort_values("norm_sum").iloc[-n_best:])
 
-        return concat([cutoff_best, sum_best]).drop_duplicates(subset="current_epoch")
+        return concat(best_concat).drop_duplicates(subset="current_epoch")
 
     @staticmethod
     def dedup_trials(trials: DataFrame) -> Optional[DataFrame]:
@@ -743,7 +744,7 @@ class HyperoptData(backend.HyperoptBase):
                         )
                     )
         else:
-            flt_trials = [trials]
+            flt_trials = []
         if flt_trials:
             # stepping can overlap, dedup
             return concat(flt_trials).drop_duplicates(subset="current_epoch")
