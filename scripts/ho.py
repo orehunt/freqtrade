@@ -120,7 +120,6 @@ class Main:
         config["user_data_dir"] = Path(paths["user"])
         config["hyperopt_clear"] = args.clr
         config["hyperopt_reset"] = args.res
-        config["hyperopt_jobs"] = args.j
         config["hyperopt_trials_maxout"] = args.mx or int(args.j)
         config["hyperopt_trials_timeout"] = args.tm or 60
         config["hyperopt_trials_instance"] = args.inst or (
@@ -136,6 +135,8 @@ class Main:
             "algo": alg,
             "meta_tag_conflict": args.mtc,
         }
+        config["jobs"] = args.j
+        config['n_samples'] = args.smp
         config["hyperopt_ask_points"] = args.pts
         config["hyperopt_max_convergence_ratio"] = args.cvg
         config["hyperopt_initial_points"] = args.rpt or (32 // max(1, args.j))

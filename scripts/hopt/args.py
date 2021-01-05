@@ -71,6 +71,7 @@ def parse_hopt_args() -> Any:
     parser.add_argument("-cvg", help="max convergence ratio", type=float, default=0.5)
     parser.add_argument("-rand", help="random state", type=int)
     parser.add_argument("-alg", help="optimizer algo", type=str, default="skopt:rand")
+    parser.add_argument("-smp", help="set number of samples", type=int, default=1000)
     parser.add_argument("-psco", help="print scores", action="store_true")
     parser.add_argument("-inst", help="trials instance name", type=str, default="")
     parser.add_argument(
