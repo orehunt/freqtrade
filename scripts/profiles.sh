@@ -1,39 +1,32 @@
 #!/usr/bin/env bash
-export MX MT MODE EPOCHS JOBS LOSSF TIMEFRAME INST TDATE SPACES ALGO RES STACK POINTS RPT AMT DBG RISK PTS
+export MX MT MODE EPOCHS JOBS LOSSF TIMEFRAME INST TDATE SPACES ALGO RES STACK POINTS RPT AMT DBG= RISK= PTS SMP
 
-function multi {
-	export MODE=multi EPOCHS=10000 RES="-res" TDATE="-g 20200101-20201201" INST=
-    JOBS=${JOBS:-4}
-    SPACES=${SPACES:-buy}
-    TIMEFRAME=${TIMEFRAME:-5m}
-    ALGO=${ALGO:-Ax:BOTORCH}
-    LOSSF=${LOSSF:-MCCalmarRatio}
-    AMT=${AMT:-on\:roi,trailing,stoploss}
-    STACK=1
-}
-
-function cv {
-    export MODE=cv EPOCHS=0 JOBS=10 LOSSF=MCCalmarRatio RES="" TDATE="-g 20201001-20201201" INST=last STACK=
-}
-
-function tdate {
+function tr0 {
    export TDATE="-g 20200101-20201201"
 }
 
-function tdate2 {
+function tr1 {
    export TDATE="-g 20201201-"
 }
 
-function tdate0 {
-   export TDATE="-g 20200101-20201001"
-}
-
-function tdate1 {
-   export TDATE="-g 20201001-20201201"
-}
-
-function tdatef {
+function trf {
    export TDATE="-g 20200101-"
+}
+
+function defopt {
+   JOBS=4 EPOCHS=1000 RES="-res"
+   TDATE="$(trf)" INST= TIMEFRAME="5m"
+   ALGO=Ax:BOTORCH LOSSF=MCCalmarRatio
+   AMT="on:roi,trailing,stoploss"
+   STACK= SPACES="buy,roi,trailing,stoploss" PTS=1 SMP=1000
+}
+
+function multi {
+	MODE=multi JOBS=4 STACK= EPOCHS=10000 RES="-res" TDATE="$(trf)" INST=
+}
+
+function cv {
+    export MODE=cv EPOCHS=0 JOBS=10 LOSSF=MCCalmarRatio RES="" TDATE="$(tr1)" INST=last STACK=
 }
 
 function asha {
