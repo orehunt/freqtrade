@@ -1,5 +1,6 @@
 from enum import Enum
 from os import getpid
+import multiprocessing
 from typing import (
     Callable,
     Dict,
@@ -77,9 +78,6 @@ def BacktestResultTuple(
 
 
 BacktestResultTupleType = nb.typeof(BacktestResultTuple())
-BacktestResultArrType = nb.typeof(
-    nb.types.Array(dtype=BacktestResultTupleType, ndim=1, layout="A")
-)
 ResultsListType = nb.typeof(nb.typed.List.empty_list(item_type=BacktestResultTupleType))
 
 
@@ -213,7 +211,7 @@ class Context(object):
 
 
 @njit()
-def clone_context(ctx):
+def clone_context(ctx) -> Context:
     # NOTE: creating jitclasses from njitted code doesn't support named args
     return Context(
         ctx.pairs,
@@ -226,6 +224,7 @@ def clone_context(ctx):
         ctx.close,
         ctx.slippage,
         ctx.slp_window,
+        ctx.probs,
         ctx.fees,
         ctx.stop_config,
         ctx.amount,
@@ -262,18 +261,19 @@ class TradeJit:
         # skip trades that don't meet probability
         if np.random.uniform(0, 1) > prob:
             return 0
-        self.open_idx = open_idx
-        self.open_price = open_price
-        self.buy_price = open_price + open_price * slp
-
         # ensure the order size is at least min_cash
         if cash < min_cash:
             return 0
-        self.shares_held = cash / self.buy_price
         self.cash_spent = cash + cash * fees
         # skip orders where cash spent exceeds available cash
         if self.cash_spent > cash_now:
             return 0
+
+        self.open_idx = open_idx
+        self.open_price = open_price
+        self.buy_price = open_price + open_price * slp
+
+        self.shares_held = cash / self.buy_price
         self.stoploss_price = open_price * (1.0 - stoploss)
         self.initial_stoploss_price = self.stoploss_price
 
@@ -576,7 +576,7 @@ def iterate(ctx: Context, results, trades):
         for c in col_idx:
             # terminate if out of cash with no trades open
             if ctx.cash_now < ctx.min_bv and not open_trades:
-                break
+                return
             # skip unavailable data
             if np.isnan(close[c]):
                 continue
@@ -611,8 +611,8 @@ def iterate(ctx: Context, results, trades):
                 create_result(ctx, c, trades[c], results)
 
 
-@njit(cache=False)
-def run_iterations(
+@njit(cache=False, parallel=True)
+def run_iterations_parallel(
     n_samples: int,
     ctx: Context,
     o_func: Callable[[List[BacktestResultTupleType]], Tuple[Tuple[str, float], ...]],
@@ -620,9 +620,50 @@ def run_iterations(
     res_metrics: resultsMetrics,
 ):
     # NOTE: This function can be trivially parallelized
+    # perf results for 1k samples (cores, seconds) on AMD Ryzen 1700
+    # [(2, 59.7), (4, 33.3), (8, 21.4), (12, 19.4), (16, 17.9)]
+    # conclusions: logical cores don't help much here
+    # non parallel version (with reset_context): 103.9 seconds
     cash_start = ctx.cash_start
+    samples = init_samples()
+
+    for n in nb.prange(n_samples):
+        # reset
+        results = init_results()
+        trades = init_trades(ctx.close.shape[1])
+        # do sim
+        iterate(clone_context(ctx), results, trades)
+
+        # skip empty results
+        if not len(results):
+            continue
+
+        # calc and store objective for current sim
+        obj = o_func(results)
+        for o_n, (_, v) in enumerate(obj):
+            o_metrics[o_n][n] = v
+
+        # calc and store metrics for current sim
+        calc_sim_metrics(n, res_metrics, results, cash_start)
+
+        # switch order
+        # ctx.shuffle_context()
+        # ctx.reset_context(trades)
+        append_results(samples, results)
+    return samples
+
+
+@njit(cache=False, parallel=False)
+def run_iterations(
+    n_samples: int,
+    ctx: Context,
+    o_func: Callable[[List[BacktestResultTupleType]], Tuple[Tuple[str, float], ...]],
+    o_metrics: NamedTuple,
+    res_metrics: resultsMetrics,
+):
+    cash_start = ctx.cash_start
+    samples = init_samples()
     trades = init_trades(ctx.close.shape[1])
-    agg = init_agg()
 
     for n in range(n_samples):
         # reset
@@ -645,8 +686,8 @@ def run_iterations(
         # switch order
         # ctx.shuffle_context()
         ctx.reset_context(trades)
-        append_results(agg, results)
-    return agg
+        append_results(samples, results)
+    return samples
 
 
 profit_abs_idx = BacktestResultDType.names.index("profit_abs")
@@ -659,21 +700,20 @@ def calc_sim_metrics(
     i, res_metrics, results: List[BacktestResultTupleType], cash_start
 ):
     # vars
-    profit_abs = np.empty(len(results), dtype=nb.float64)
-    profit_percent = np.empty(len(results), dtype=nb.float64)
-    w, l, duration_sum = 0, 0, 0
+    n_trades = len(results)
+    profit_abs = np.empty(n_trades, dtype=nb.float64)
+    profit_percent = np.empty(n_trades, dtype=nb.float64)
+    w, duration_sum = 0, 0
 
     # process results
     for n, r in enumerate(results):
         if r[profit_abs_idx] > 0:
             w += 1
-        else:
-            l += 1
         profit_abs[n] = r[profit_abs_idx]
         profit_percent[n] = r[profit_percent_idx]
         duration_sum += r[trade_duration_idx]
 
-    res_metrics.win_ratio[i] = w / (l or 1)
+    res_metrics.win_ratio[i] = w / (n_trades or 1)
     # NOTE: median as trouble with 0d arrays, so results should be > 0
     res_metrics.med_profit[i] = np.median(profit_abs)
     res_metrics.avg_profit[i] = np.mean(profit_abs)
@@ -689,8 +729,8 @@ def float_dict():
 
 
 @njit()
-def get_quantile(arr, q=1 / 3):
-    """ The average of the bottom, top and middle sets """
+def get_quantile(arr, q=0.2):
+    """ The average of the bottom, top and middle sets, 0.0 < q < 0.5 """
     arr = arr[np.isfinite(arr)]
     if len(arr):
         arr.sort()
@@ -699,7 +739,7 @@ def get_quantile(arr, q=1 / 3):
         if size:
             bot = np.mean(arr[:size])
             top = np.mean(arr[-size:])
-            mid = np.mean(arr[size : ln - size])
+            mid = np.mean(arr[size:-size])
         else:
             bot = np.mean(arr)
             top = bot
@@ -710,17 +750,15 @@ def get_quantile(arr, q=1 / 3):
 
 
 @njit()
-def obj_quantile(arr, q=1 / 3):
-    """ The average of the top set (since objective is minimized, the average worst) """
-    arr = arr[np.isfinite(arr)]
-    if len(arr):
-        arr.sort()
-        ln = len(arr)
-        size = int(ln * q)
-        # the end has the highest (worst) values
-        return np.mean(arr[-size:])
-    else:
-        return np.nan
+def quantile_ratio(bot, top, mid):
+    tpm = top + mid
+    return np.sign(tpm) * tpm ** 2 / ((top - bot) or np.nan)
+
+
+@njit()
+def reduce_objective(arr, q=0.2):
+    bot, top, mid = get_quantile(arr, q=q)
+    return quantile_ratio(bot, top, mid)
 
 
 @njit(cache=False)
@@ -728,7 +766,7 @@ def reduce_sims(o_names, o_metrics, res_metrics, qnt):
     red_obj = float_dict()
     red_res = float_dict()
     for n, arr in enumerate(o_metrics):
-        red_obj[o_names[n]] = obj_quantile(arr, q=qnt)
+        red_obj[o_names[n]] = reduce_objective(arr, q=qnt)
 
     bot, top, mid = get_quantile(res_metrics.win_ratio, q=qnt)
     red_res["win_ratio_bot"] = bot
@@ -781,7 +819,7 @@ def init_results():
 
 
 @njit()
-def init_agg():
+def init_samples():
     return nb.typed.List.empty_list(item_type=ResultsListType)
 
 
@@ -790,7 +828,7 @@ def append_results(*args):
     return
 
 
-def enable_aggregation():
+def enable_samples_results():
     global append_results
 
     @njit()
@@ -806,8 +844,10 @@ def sample_simulations(
     o_func: Callable,
     o_names: Tuple[str, ...],
     quantile: float,
-    aggregate=False,
+    keep_samples=False,
+    parallel=1,
 ):
+
     o_metrics = NamedTuple(
         typename="o_metrics", fields=((name, nb.float64[:]) for name in o_names)
     )(**{name: np.full(n_samples, np.nan, dtype=float) for name in o_names})
@@ -818,19 +858,25 @@ def sample_simulations(
         }
     )
 
-    if aggregate:
-        logger.debug("enabling aggregation")
-        enable_aggregation()
+    if keep_samples:
+        logger.debug("keeping samples results")
+        enable_samples_results()
 
-    logger.debug("running iterations...")
-    agg = run_iterations(n_samples, ctx, o_func, o_metrics, res_metrics)
+    iter_args = [n_samples, ctx, o_func, o_metrics, res_metrics]
+    logger.debug("running iterations... for %s samples", n_samples)
+    if parallel > 1:
+        logger.debug("parallelizing iterations with %s jobs", parallel)
+        nb.set_num_threads(parallel)
+        samples = run_iterations_parallel(*iter_args)
+    else:
+        samples = run_iterations(*iter_args)
 
     logger.debug("reducing simulation metrics...")
     red_obj, red_res = reduce_sims(o_names, o_metrics, res_metrics, quantile)
 
     logger.debug("converting to dict and returning...")
     # convert typed dicts to python dicts
-    return dict(red_obj), dict(red_res), agg
+    return dict(red_obj), dict(red_res), samples
 
 
 def simulate_trades(
