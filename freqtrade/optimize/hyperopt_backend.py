@@ -1,9 +1,7 @@
 import logging
-from freqtrade.exceptions import OperationalException
 import signal
 from abc import abstractmethod
 from functools import partial
-from hashlib import sha1
 from logging import Logger, getLogger
 from multiprocessing.managers import Namespace, SharedMemoryManager, SyncManager
 from pathlib import Path
@@ -14,6 +12,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from arrow import Arrow
 from pandas import DataFrame
 
+from freqtrade.exceptions import OperationalException
 from freqtrade.optimize.optimizer import IOptimizer, Parameter
 
 

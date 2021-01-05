@@ -7,6 +7,7 @@ from typing import Dict, Iterable, List, Sequence, Tuple, Union
 
 import pandas as pd
 from joblib import dump, load
+from multiprocessing import cpu_count
 from numpy import (
     append,
     arange,
@@ -93,7 +94,7 @@ class HyperoptBacktesting(Backtesting):
 
     def __init__(self, config):
         self.bt_ng = config.get("backtesting_engine")
-        self.multisampling = config.get("multisampling")
+        self.multisampling = config.get("n_samples", 1) > 1
         if self.bt_ng in ("chunked", "loop_ranges", "loop_candles", "vbt"):
             self.backtest_vanilla = self.backtest
             if self.bt_ng == "vbt":
@@ -207,6 +208,8 @@ class HyperoptBacktesting(Backtesting):
         self.spaces = self.config.get("spaces", {})
 
         # VBT
+        # set numba threads to half the cores count
+        nb.set_num_threads((cpu_count() // 2) or 1)
         self.vbt_processed_file = (
             self.config["user_data_dir"] / "hyperopt_data" / "vbt_processed.pkl"
         )
@@ -1354,7 +1357,7 @@ class HyperoptBacktesting(Backtesting):
             probs=tuple(self.config.get("backtesting_probs", DEFAULT_PROBS)),
             fees=self.fee,
             stop_config=stp,
-            amount=amount.values,
+            amount=amount.values.astype(float),
             min_buy_value=self.min_stake,
             min_sell_value=self.min_stake / 2,
             # the keys are the rounded timeframes
@@ -1409,17 +1412,20 @@ class HyperoptBacktesting(Backtesting):
 
         loss_metrics = kwargs["loss_metrics"]
         loss_func = kwargs["loss_func"]
-        n_samples = kwargs.get("n_samples", self.config.get("n_samples", 10))
-        quantile = self.config.get("quantile", DEFAULT_QUANTILE)
+        n_samples = kwargs.get("n_samples", self.config.get("n_samples", 1000))
+        quantile = self.config.get("quantile")
+        if quantile is None:
+            quantile = DEFAULT_QUANTILE
 
         pairs_map, ctx = self.vbt_context(processed)
-        red_obj, red_res, agg = sample_simulations(
+        red_obj, red_res, samples = sample_simulations(
             ctx,
             n_samples,
             loss_func,
             loss_metrics,
             quantile,
-            aggregate=kwargs.get("aggregate", False),
+            keep_samples=kwargs.get("keep_samples", False),
+            parallel=((cpu_count() // self.config.get('jobs', 1)) or 1),
         )
         # cast types
         for q in ("bot", "top", "mid"):
@@ -1428,7 +1434,7 @@ class HyperoptBacktesting(Backtesting):
             red_res[f"trade_duration_{q}"] = (
                 pd.to_timedelta(red_res[f"trade_duration_{q}"]).total_seconds() / 60
             )
-        return red_obj, red_res, agg
+        return red_obj, red_res, samples
 
     def vectorized_backtest(
         self,
