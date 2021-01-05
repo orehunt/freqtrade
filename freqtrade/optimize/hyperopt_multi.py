@@ -15,7 +15,7 @@ from typing import Dict, Iterable, List, Optional, Tuple, Union
 
 import numpy as np
 from joblib import Parallel, delayed, hash
-from numpy import array, fromiter, isin, nanmean
+from numpy import array, isin, nanmean
 from numpy.core.numeric import flatnonzero
 from pandas import DataFrame
 
@@ -183,9 +183,9 @@ class HyperoptMulti(HyperoptOut):
         )
 
     def run_multi_backtest_parallel(self, parallel: Parallel, jobs: int):
-        """ Launch parallel in multi opt mode,
+        """Launch parallel in multi opt mode,
         scheduling the specified number of trials,
-        passing the needed objects handled by the manager """
+        passing the needed objects handled by the manager"""
         parallel(
             delayed(backend.parallel_sig_handler)(
                 self.parallel_opt_objective,
@@ -323,7 +323,12 @@ class HyperoptMulti(HyperoptOut):
                         )
                     params_df.drop_duplicates(subset="Xi_h", inplace=True)
                     backend.release_lock(trials_state)
-            except (KeyError, FileNotFoundError, IOError, OSError,) as e:
+            except (
+                KeyError,
+                FileNotFoundError,
+                IOError,
+                OSError,
+            ) as e:
                 # only happens when df is empty and empty df is not saved
                 # on disk by pytables or is being written
                 if locked:
@@ -490,7 +495,11 @@ class HyperoptMulti(HyperoptOut):
 
     @staticmethod
     def parallel_opt_objective(
-        t: int, jobs: int, optimizers: Queue, epochs: Epochs, trials_state: TrialsState,
+        t: int,
+        jobs: int,
+        optimizers: Queue,
+        epochs: Epochs,
+        trials_state: TrialsState,
     ):
         """
         An objective run in multi opt mode;
@@ -520,7 +529,10 @@ class HyperoptMulti(HyperoptOut):
                 backend.Xi.append(r[0])
                 backend.yi.append(r[1])
             # delete from the managed list, the whole list, since copy is not a reference
-            del trials_state.last_results[opt.rs], last_results,
+            del (
+                trials_state.last_results[opt.rs],
+                last_results,
+            )
             # assert opt.rs not in trials_state.last_results
 
         # at startup always fetch previous points from storage,
