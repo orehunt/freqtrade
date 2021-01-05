@@ -135,7 +135,7 @@ def pct_change(arr, period, window=None):
 
 # https://stackoverflow.com/a/62841583/2229761
 @njit(cache=True, nogil=True)
-def shift_nb(arr, num=1, fill_value=np.nan, ofs=Optional[ndarray]):
+def shift_nb(arr, num=1, fill_value=np.nan, ofs: Optional[ndarray] = None):
     if num >= 0:
         if arr.ndim > 1:
             shifted_shape = (num, arr.shape[1])
@@ -225,6 +225,7 @@ def null_ofs_ranges(rolled, window, ofs, null_v):
 @njit(cache=True, nogil=True)
 def rolling_sum(arr, window, ofs=None, null_v=np.nan):
     rsum = np.empty_like(arr)
+    rsum[:window] = np.nan
     c = 0
     for n in range(window - 1, arr.shape[0]):
         rsum[n] = 0
