@@ -26,7 +26,7 @@ SOLD_COLS = [
     "pair",
 ]
 
-DEFAULT_QUANTILE = 1 / 3
+DEFAULT_QUANTILE = 0.2
 DEFAULT_PROBS = (0.8, 0.8)
 
 float_array = float64[:]
