@@ -1,12 +1,10 @@
-import numpy as np
-import pandas as pd
 import numba as nb
+import numpy as np
 import vectorbt as vbt
-
-from vectorbt.utils.datetime import freq_delta
 from vectorbt.returns import nb as rnb
 
-from freqtrade.optimize.backtest_nb import rolling_norm, calc_illiquidity
+from freqtrade.optimize.backtest_nb import calc_illiquidity, calc_liquidity, rolling_norm
+
 
 i32mx = np.iinfo(np.int32).max
 lmx = np.log10(i32mx)
@@ -138,19 +136,59 @@ def best_metric(pf):
     return norm_sum.argmax(), norm_sum
 
 
-def get_ilq(roll_wnd, wnd, close, volume):
+@nb.njit(cache=True)
+def get_ilq(rw, iw, clo, vol):
     return rolling_norm(
-        calc_illiquidity(close.values, volume.values, window=wnd, ofs=None,), roll_wnd
+        calc_illiquidity(
+            clo,
+            vol,
+            window=iw,
+            ofs=None,
+        ),
+        rw,
     )
 
 
-def cmp_ilq(prefix, sig, df, ilq, params):
-    if params[f"{prefix}_{sig}_limit_direction"] == "above":
-        return ilq > params[f"{prefix}_{sig}_limit"]
-    else:
-        return ilq < params[f"{prefix}_{sig}_limit"]
+@nb.njit(cache=True)
+def get_lix(rw, vol, clo, hi, lo):
+    return rolling_norm(
+        calc_liquidity(vol, clo, hi, lo),
+        rw,
+    )
+
 
 @nb.njit(cache=True)
-def upside_volatility(pnl: np.ndarray):
-    """ The deviation of profits """
-    return pnl.sum() / (pnl[pnl > 0].std() or np.nan)
+def rolling_mean(arr, window):
+    mu = np.empty(arr.shape[0], dtype=arr.dtype)
+    mu[:window] = np.nan
+    for n in range(window, arr.shape[0]):
+        mu[n - 1] = np.mean(arr[n - window : n])
+    return mu
+
+
+@nb.njit(cache=True)
+def mean_x1(arr):
+    mu = np.empty(arr.shape[0])
+    c = arr.shape[1]
+    for n in range(arr.shape[0]):
+        mu[n] = arr[n].sum() / c
+    return mu
+
+
+@nb.njit(cache=True)
+def vprice(ohlcv, pw=240, vw=120):
+    rol_v = rolling_mean(ohlcv[:, 4], window=vw)
+    rol_v_1 = np.empty_like(rol_v)
+    rol_v_1[0] = 0
+    rol_v_1[1:] = rol_v[:-1]
+    v_change = rol_v / rol_v_1
+    mu_price = mean_x1(ohlcv[:, 0:4])
+    rol_mu = rolling_mean(mu_price, window=pw)
+    v = rol_mu * np.log(v_change)
+    v[~np.isfinite(v)] = 0
+    return v.cumsum()
+
+
+@nb.njit(cache=True)
+def get_vp(ohlcv, rw, pw, vw):
+    return rolling_norm(vprice(ohlcv, pw, vw), rw)
