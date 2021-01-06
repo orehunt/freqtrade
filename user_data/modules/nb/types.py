@@ -1,4 +1,8 @@
+from functools import partial
+from typing import Callable
+
 import numba as nb
+
 
 nb_opt = nb.types.Optional
 nb_str = nb.types.unicode_type
@@ -10,3 +14,12 @@ nb_str_list = nb.typeof(nb.typed.List.empty_list(item_type=nb_str))
 dates_dict_type = nb.typeof(
     nb.typed.Dict.empty(key_type=nb_str, value_type=nb.int64[:])
 )
+
+
+def njit(cache: bool = True, **kwargs) -> Callable:
+    kwargs["cache"] = cache
+    return partial(nb.njit, **kwargs)
+
+
+def jitclass(spec) -> Callable:
+    return partial(nb.experimental.jitclass, spec=spec)

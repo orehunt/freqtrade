@@ -13,7 +13,7 @@ import numpy as np
 import talib
 from freqtrade.state import RunMode
 
-from user_data.modules.sequencer import replay
+from user_data.modules.seqop.sequencer import replay
 from pandas import DataFrame, Series, Timedelta, date_range
 from typing import Dict
 
