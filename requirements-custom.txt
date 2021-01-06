@@ -12,3 +12,6 @@ parameter-sherpa
 -e git+https://github.com/SheffieldML/GPyOpt#egg=gpyopt
 pyDOE
 emukit
+statsmodels
+pyitlib
+arch
