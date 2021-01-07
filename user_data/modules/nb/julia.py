@@ -4,8 +4,9 @@ import numpy as np
 
 
 from julia.api import LibJulia
-from ctypes import c_char_p, c_void_p, c_double
-from ctypes import *
+from ctypes import c_char_p, c_double, c_int64, c_void_p
+
+# from ctypes import *
 
 
 def set_ctypes(api):
@@ -35,20 +36,7 @@ def set_ctypes(api):
     api.jl_string_ptr.restype = c_char_p
 
 
-# def get_julia_fn_ptr(fn: str, lib: str, api=None):
-#     if api is None:
-#         api = LibJulia.load()
-#         api.init_julia(["--compiled-modules=no"])
-#         api.jl_eval_string(bytes(f"using {lib}", "utf8"))
-#         set_ctypes(api)
-
-#     lib = api.jl_eval_string(bytes(lib, "utf8"))
-#     fn_sym = api.jl_symbol(bytes(fn, "utf8"))
-#     fn_ptr = api.jl_get_global(lib, fn_sym)
-#     return fn_ptr, api
-
-
-def get_julia(jl_args={"compiled_modules": False}):
+def get_julia(jl_args={}):
     from julia.api import Julia
 
     jl = Julia(**jl_args)
