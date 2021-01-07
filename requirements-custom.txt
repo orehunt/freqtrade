@@ -15,3 +15,5 @@ emukit
 statsmodels
 pyitlib
 arch
+julia
+zarr

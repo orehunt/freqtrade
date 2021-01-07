@@ -1,5 +1,5 @@
 {
   "reportUnboundVariable": false,
-  "venvPath": ".venv/miniconda3/envs",
-  "venv": "freqtradej"
+  "venvPath": ".venvs",
+  "venv": "freqtrade-d2YUair0-py3.9/"
 }

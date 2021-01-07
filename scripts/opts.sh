@@ -1,7 +1,7 @@
 #!/bin/bash
 #conda activate freqtradej
-. .env/miniconda3/etc/profile.d/conda.sh
-conda activate freqtradej
+. ~/.poetry/env
+poetry shell -n -q
 
 while getopts "ta:d:q:e:i:p:f:xm:ctd:s:n:g:u:l:r:y:o:v:b:j:w" o; do
 	case "$o" in
