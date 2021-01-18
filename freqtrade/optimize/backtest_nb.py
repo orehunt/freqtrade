@@ -221,21 +221,19 @@ def null_ofs_ranges(rolled, window, ofs, null_v):
     for start in ofs:
         rolled[start : start + window] = null_v
 
-
 @njit(cache=True, nogil=True)
 def rolling_sum(arr, window, ofs=None, null_v=np.nan):
     rsum = np.empty_like(arr)
     rsum[:window] = np.nan
-    c = 0
-    for n in range(window - 1, arr.shape[0]):
-        rsum[n] = 0
-        for v in arr[c : c + window]:
-            rsum[n] += v
-        c += 1
-    if ofs is not None:
-        null_ofs_ranges(rsum, window, ofs, null_v)
+    rol = np.sum(arr[: window])
+    rsum[window-1] = rol
+    for n in range(window, arr.shape[0]):
+        rol -= arr[n - window]
+        rol += arr[n]
+        rsum[n] = rol
+    # if ofs is not None:
+    #     null_ofs_ranges(rsum, window, ofs, null_v)
     return rsum
-
 
 @njit(cache=True, nogil=True)
 def rolling_norm(arr, window, ofs=None, null_v=np.nan, static=0):
