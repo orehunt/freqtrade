@@ -268,10 +268,11 @@ class TradeJit:
         # skip orders where cash spent exceeds available cash
         if self.cash_spent > cash_now:
             return 0
-
         self.open_idx = open_idx
         self.open_price = open_price
+        # open_price can't be 0
         self.buy_price = open_price + open_price * slp
+        # assert open_price > 0
 
         self.shares_held = cash / self.buy_price
         self.stoploss_price = open_price * (1.0 - stoploss)
@@ -307,6 +308,7 @@ class TradeJit:
         self.sell_reason = sell_reason
         self.cash_returned = value_held - value_held * fees
 
+        # assert self.cash_spent != 0
         self.profits = self.cash_returned / self.cash_spent - 1.0
         self.pnl = self.cash_returned - self.cash_spent
 
@@ -384,7 +386,7 @@ def get_slippage(idx, col, slippage, slp_window, base_slippage=0.033):
         return slp
     else:
         slp = np.nanmean(slippage[idx - slp_window : idx])
-        return slp if np.isfinite(slp) else base_slippage
+        return slp if (slp and np.isfinite(slp)) else base_slippage
 
 
 @njit()
@@ -569,7 +571,7 @@ def iterate(ctx: Context, results, trades):
     open_trades = 0
     col_idx = np.arange(ctx.close.shape[1])
     # loop over dates
-    for i, close in enumerate(ctx.close):
+    for i, close in enumerate(ctx.close[:-1]):
         # shuffle col index
         # np.random.shuffle(col_idx)
         # loop over assets

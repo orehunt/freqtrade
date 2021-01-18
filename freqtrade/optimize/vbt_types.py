@@ -1,6 +1,6 @@
 from functools import partial
 from enum import IntEnum
-from typing import Callable, Optional
+from typing import Callable, List, Optional, Tuple
 import inspect
 from freqtrade.optimize.backtesting import BacktestResult
 
