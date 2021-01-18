@@ -1,5 +1,5 @@
 {
   "reportUnboundVariable": false,
   "venvPath": ".venvs",
-  "venv": "freqtrade-d2YUair0-py3.9/"
+  "venv": "freqtrade-d2YUair0-py3.8/"
 }

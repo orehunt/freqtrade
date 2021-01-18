@@ -1,13 +1,13 @@
 #!/bin/bash -li
-
-OPTS="$(realpath $(dirname $_))"
-. ${OPTS}/scripts/opts.sh
+# NOTE: Need interactive session for proper repl out format
+. scripts/opts.sh
 
 # cleanup previous connection files
 # rm user_data/jupyter/runtime/*
-
-exec jupyter notebook \
-     --ConnectionFileMixin.connection_fileUnicode='user_data/jupyter/kernel.json' \
+     #--ServerApp.iopub_data_rate_limit=2000 \
+export JULIA_NUM_THREADS=$(nproc)
+exec jupyter lab \
+     --ConnectionFileMixin.connection_file='user_data/jupyter/kernel.json' \
      --notebook-dir=user_data/notebooks/ \
-     --no-browser  \
+     --no-browser \
      --allow-root $@

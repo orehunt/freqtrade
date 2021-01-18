@@ -35,7 +35,7 @@ from freqtrade.loggers import setup_logging, setup_logging_pre
 from freqtrade.optimize.hyperopt import Hyperopt
 from scripts.hopt.args import parse_hopt_args, update
 from scripts.hopt.env import set_environment
-from user_data.modules import sequencer as ts
+from user_data.modules.seqop import sequencer as ts
 
 
 try:

@@ -17,3 +17,5 @@ pyitlib
 arch
 julia
 zarr
+tsfresh
+pingouin
