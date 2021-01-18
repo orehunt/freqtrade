@@ -34,7 +34,8 @@ The easiest way to install and run Freqtrade is to clone the bot Github reposito
     When cloning the repository the default working branch has the name `develop`. This branch contains all last features (can be considered as relatively stable, thanks to automated tests). The `stable` branch contains the code of the last release (done usually once per month on an approximately one week old snapshot of the `develop` branch to prevent packaging bugs, so potentially it's more stable).
 
 !!! Note
-    Python3.7 or higher and the corresponding `pip` are assumed to be available. The install-script will warn you and stop if that's not the case. `git` is also needed to clone the Freqtrade repository.
+    Python3.7 or higher and the corresponding `pip` are assumed to be available. The install-script will warn you and stop if that's not the case. `git` is also needed to clone the Freqtrade repository.  
+    Also, python headers (`python<yourversion>-dev` / `python<yourversion>-devel`) must be available for the installation to complete successfully.
 
 This can be achieved with the following commands:
 
@@ -243,6 +244,19 @@ open /Library/Developer/CommandLineTools/Packages/macOS_SDK_headers_for_macOS_10
 ```
 
 If this file is inexistent, then you're probably on a different version of MacOS, so you may need to consult the internet for specific resolution details.
+
+### MacOS installation error with python 3.9
+
+When using python 3.9 on macOS, it's currently necessary to install some os-level modules to allow dependencies to compile.
+The errors you'll see happen during installation and are related to the installation of `tables` or `blosc`.
+
+You can install the necessary libraries with the following command:
+
+``` bash
+brew install hdf5 c-blosc
+```
+
+After this, please run the installation (script) again.
 
 -----
 

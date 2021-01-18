@@ -147,7 +147,7 @@ Let's try to backtest 1 month (January 2019) of 5m candles using an example stra
 freqtrade backtesting --timerange 20190101-20190201 --timeframe 5m
 ```
 
-Assuming `startup_candle_count` is set to 100, backtesting knows it needs 100 candles to generate valid buy signals. It will load data from `20190101 - (100 * 5m)` - which is ~2019-12-31 15:30:00.
+Assuming `startup_candle_count` is set to 100, backtesting knows it needs 100 candles to generate valid buy signals. It will load data from `20190101 - (100 * 5m)` - which is ~2018-12-31 15:30:00.
 If this data is available, indicators will be calculated with this extended timerange. The instable startup period (up to 2019-01-01 00:00:00) will then be removed before starting backtesting.
 
 !!! Note
@@ -309,7 +309,7 @@ Storing information can be accomplished by creating a new dictionary within the 
 The name of the variable can be chosen at will, but should be prefixed with `cust_` to avoid naming collisions with predefined strategy variables.
 
 ```python
-class Awesomestrategy(IStrategy):
+class AwesomeStrategy(IStrategy):
     # Create custom dictionary
     cust_info = {}
 

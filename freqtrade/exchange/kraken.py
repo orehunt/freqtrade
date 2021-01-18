@@ -18,6 +18,7 @@ class Kraken(Exchange):
     _params: Dict = {"trading_agreement": "agree"}
     _ft_has: Dict = {
         "stoploss_on_exchange": True,
+        "ohlcv_candle_limit": 720,
         "trades_pagination": "id",
         "trades_pagination_arg": "since",
     }
@@ -46,15 +47,11 @@ class Kraken(Exchange):
             balances.pop("used", None)
 
             orders = self._api.fetch_open_orders()
-            order_list = [
-                (
-                    x["symbol"].split("/")[0 if x["side"] == "sell" else 1],
-                    x["remaining"],
-                    # Don't remove the below comment, this can be important for debuggung
-                    # x["side"], x["amount"],
-                )
-                for x in orders
-            ]
+            order_list = [(x["symbol"].split("/")[0 if x["side"] == "sell" else 1],
+                           x["remaining"] if x["side"] == "sell" else x["remaining"] * x["price"],
+                           # Don't remove the below comment, this can be important for debuggung
+                           # x["side"], x["amount"],
+                           ) for x in orders]
             for bal in balances:
                 balances[bal]["used"] = sum(order[1] for order in order_list if order[0] == bal)
                 balances[bal]["free"] = balances[bal]["total"] - balances[bal]["used"]

@@ -22,8 +22,8 @@ from freqtrade.exceptions import (DependencyException, ExchangeError, Insufficie
 from freqtrade.exchange import timeframe_to_minutes, timeframe_to_seconds
 from freqtrade.misc import safe_value_fallback, safe_value_fallback2
 from freqtrade.mixins import LoggingMixin
-from freqtrade.pairlist.pairlistmanager import PairListManager
 from freqtrade.persistence import Order, PairLocks, Trade, cleanup_db, init_db
+from freqtrade.plugins.pairlistmanager import PairListManager
 from freqtrade.plugins.protectionmanager import ProtectionManager
 from freqtrade.resolvers import ExchangeResolver, StrategyResolver
 from freqtrade.rpc import RPCManager, RPCMessageType
@@ -246,6 +246,10 @@ class FreqtradeBot(LoggingMixin):
         Updates open orders based on order list kept in the database.
         Mainly updates the state of orders - but may also close trades
         """
+        if self.config['dry_run']:
+            # Updating open orders in dry-run does not make sense and will fail.
+            return
+
         orders = Order.get_open_orders()
         logger.info(f"Updating {len(orders)} open orders.")
         for order in orders:
@@ -256,6 +260,7 @@ class FreqtradeBot(LoggingMixin):
                 self.update_trade_state(order.trade, order.order_id, fo)
 
             except ExchangeError as e:
+
                 logger.warning(f"Error updating Order {order.order_id} due to {e}")
 
     def update_closed_trades_without_assigned_fees(self):
@@ -263,6 +268,10 @@ class FreqtradeBot(LoggingMixin):
         Update closed trades without close fees assigned.
         Only acts when Orders are in the database, otherwise the last orderid is unknown.
         """
+        if self.config['dry_run']:
+            # Updating open orders in dry-run does not make sense and will fail.
+            return
+
         trades: List[Trade] = Trade.get_sold_trades_without_assigned_fees()
         for trade in trades:
 

@@ -25,6 +25,7 @@ from freqtrade.exceptions import (DDosProtection, ExchangeError, InsufficientFun
 from freqtrade.exchange.common import (API_FETCH_ORDER_RETRY_COUNT, BAD_EXCHANGES, retrier,
                                        retrier_async)
 from freqtrade.misc import deep_merge_dicts, safe_value_fallback2
+from freqtrade.plugins.pairlist.pairlist_helpers import expand_pairlist
 
 
 CcxtModuleType = Any
@@ -212,7 +213,7 @@ class Exchange:
         return self._api.precisionMode
 
     def get_markets(self, base_currencies: List[str] = None, quote_currencies: List[str] = None,
-                    pairs_only: bool = False, active_only: bool = False) -> Dict:
+                    pairs_only: bool = False, active_only: bool = False) -> Dict[str, Any]:
         """
         Return exchange ccxt markets, filtered out by base currency and quote currency
         if this was requested in parameters.
@@ -339,8 +340,9 @@ class Exchange:
         if not self.markets:
             logger.warning('Unable to validate pairs (assuming they are correct).')
             return
+        extended_pairs = expand_pairlist(pairs, list(self.markets), keep_invalid=True)
         invalid_pairs = []
-        for pair in pairs:
+        for pair in extended_pairs:
             # Note: ccxt has BaseCurrency/QuoteCurrency format for pairs
             # TODO: add a support for having coins in BTC/USDT format
             if self.markets and pair not in self.markets:
@@ -811,7 +813,8 @@ class Exchange:
             )
 
             data = await self._api_async.fetch_ohlcv(pair, timeframe=timeframe,
-                                                     since=since_ms)
+                                                     since=since_ms,
+                                                     limit=self._ohlcv_candle_limit)
 
             # Some exchanges sort OHLCV in ASC order and others in DESC.
             # Ex: Bittrex returns the list of OHLCV in ASC order (oldest first, newest last)
@@ -939,7 +942,7 @@ class Exchange:
         while True:
             t = await self._async_fetch_trades(pair, since=since)
             if len(t):
-                since = t[-1][1]
+                since = t[-1][0]
                 trades.extend(t)
                 # Reached the end of the defined-download period
                 if until and t[-1][0] > until:

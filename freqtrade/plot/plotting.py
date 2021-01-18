@@ -13,6 +13,7 @@ from freqtrade.data.history import get_timerange, load_data
 from freqtrade.exceptions import OperationalException
 from freqtrade.exchange import timeframe_to_prev_date, timeframe_to_seconds
 from freqtrade.misc import pair_to_filename
+from freqtrade.plugins.pairlist.pairlist_helpers import expand_pairlist
 from freqtrade.resolvers import ExchangeResolver, StrategyResolver
 from freqtrade.strategy import IStrategy
 
@@ -29,16 +30,16 @@ except ImportError:
     exit(1)
 
 
-def init_plotscript(config, startup_candles: int = 0):
+def init_plotscript(config, markets: List, startup_candles: int = 0):
     """
     Initialize objects needed for plotting
     :return: Dict with candle (OHLCV) data, trades and pairs
     """
 
     if "pairs" in config:
-        pairs = config['pairs']
+        pairs = expand_pairlist(config['pairs'], markets)
     else:
-        pairs = config['exchange']['pair_whitelist']
+        pairs = expand_pairlist(config['exchange']['pair_whitelist'], markets)
 
     # Set timerange to use
     timerange = TimeRange.parse_timerange(config.get('timerange'))
@@ -170,7 +171,7 @@ def plot_trades(fig, trades: pd.DataFrame) -> make_subplots:
         trades['desc'] = trades.apply(lambda row: f"{round(row['profit_percent'] * 100, 1)}%, "
                                                   f"{row['sell_reason']}, "
                                                   f"{row['trade_duration']} min",
-                                                  axis=1)
+                                      axis=1)
         trade_buys = go.Scatter(
             x=trades["open_date"],
             y=trades["open_rate"],
@@ -251,15 +252,70 @@ def create_plotconfig(
     return plot_config
 
 
-def generate_candlestick_graph(
-    pair: str,
-    data: pd.DataFrame,
-    trades: pd.DataFrame = None,
-    *,
-    indicators1: List[str] = [],
-    indicators2: List[str] = [],
-    plot_config: Dict[str, Dict] = {},
-) -> go.Figure:
+def plot_area(fig, row: int, data: pd.DataFrame, indicator_a: str,
+              indicator_b: str, label: str = "",
+              fill_color: str = "rgba(0,176,246,0.2)") -> make_subplots:
+    """ Creates a plot for the area between two traces and adds it to fig.
+    :param fig: Plot figure to append to
+    :param row: row number for this plot
+    :param data: candlestick DataFrame
+    :param indicator_a: indicator name as populated in stragetie
+    :param indicator_b: indicator name as populated in stragetie
+    :param label: label for the filled area
+    :param fill_color: color to be used for the filled area
+    :return: fig with added  filled_traces plot
+    """
+    if indicator_a in data and indicator_b in data:
+        # make lines invisible to get the area plotted, only.
+        line = {'color': 'rgba(255,255,255,0)'}
+        # TODO: Figure out why scattergl causes problems plotly/plotly.js#2284
+        trace_a = go.Scatter(x=data.date, y=data[indicator_a],
+                             showlegend=False,
+                             line=line)
+        trace_b = go.Scatter(x=data.date, y=data[indicator_b], name=label,
+                             fill="tonexty", fillcolor=fill_color,
+                             line=line)
+        fig.add_trace(trace_a, row, 1)
+        fig.add_trace(trace_b, row, 1)
+    return fig
+
+
+def add_areas(fig, row: int, data: pd.DataFrame, indicators) -> make_subplots:
+    """ Adds all area plots (specified in plot_config) to fig.
+    :param fig: Plot figure to append to
+    :param row: row number for this plot
+    :param data: candlestick DataFrame
+    :param indicators: dict with indicators. ie.: plot_config['main_plot'] or
+                            plot_config['subplots'][subplot_label]
+    :return: fig with added  filled_traces plot
+    """
+    for indicator, ind_conf in indicators.items():
+        if 'fill_to' in ind_conf:
+            indicator_b = ind_conf['fill_to']
+            if indicator in data and indicator_b in data:
+                label = ind_conf.get('fill_label',
+                                     f'{indicator}<>{indicator_b}')
+                fill_color = ind_conf.get('fill_color', 'rgba(0,176,246,0.2)')
+                fig = plot_area(fig, row, data, indicator, indicator_b,
+                                label=label, fill_color=fill_color)
+            elif indicator not in data:
+                logger.info(
+                    'Indicator "%s" ignored. Reason: This indicator is not '
+                    'found in your strategy.', indicator
+                )
+            elif indicator_b not in data:
+                logger.info(
+                        'fill_to: "%s" ignored. Reason: This indicator is not '
+                        'in your strategy.', indicator_b
+                )
+    return fig
+
+
+def generate_candlestick_graph(pair: str, data: pd.DataFrame, trades: pd.DataFrame = None, *,
+                               indicators1: List[str] = [],
+                               indicators2: List[str] = [],
+                               plot_config: Dict[str, Dict] = {},
+                               ) -> go.Figure:
     """
     Generate the graph from the data generated by Backtesting or from DB
     Volume will always be ploted in row2, so Row 1 and 3 are to our disposal for custom indicators
@@ -272,13 +328,8 @@ def generate_candlestick_graph(
     :return: Plotly figure
     """
     plot_config = create_plotconfig(indicators1, indicators2, plot_config)
-    plot_pair_profits = int(bool(plot_config["pair_profits"]))
-
-    rows = 2 + len(plot_config["subplots"]) + plot_pair_profits
-    row_widths = [1 for _ in plot_config["subplots"]]
-    if plot_pair_profits:
-        row_widths.append(1)
-
+    rows = 2 + len(plot_config['subplots'])
+    row_widths = [1 for _ in plot_config['subplots']]
     # Define the graph
     fig = make_subplots(
         rows=rows,
@@ -327,38 +378,20 @@ def generate_candlestick_graph(
             fig.add_trace(sells, 1, 1)
         else:
             logger.warning("No sell-signals found.")
-
-    # TODO: Figure out why scattergl causes problems plotly/plotly.js#2284
-    if "bb_lowerband" in data and "bb_upperband" in data:
-        bb_lower = go.Scatter(
-            x=data.date,
-            y=data.bb_lowerband,
-            showlegend=False,
-            line={"color": "rgba(255,255,255,0)"},
-        )
-        bb_upper = go.Scatter(
-            x=data.date,
-            y=data.bb_upperband,
-            name="Bollinger Band",
-            fill="tonexty",
-            fillcolor="rgba(0,176,246,0.2)",
-            line={"color": "rgba(255,255,255,0)"},
-        )
-        fig.add_trace(bb_lower, 1, 1)
-        fig.add_trace(bb_upper, 1, 1)
-        if (
-            "bb_upperband" in plot_config["main_plot"]
-            and "bb_lowerband" in plot_config["main_plot"]
-        ):
-            del plot_config["main_plot"]["bb_upperband"]
-            del plot_config["main_plot"]["bb_lowerband"]
-
-    # Add indicators to main plot
-    fig = add_indicators(fig=fig, row=1, indicators=plot_config["main_plot"], data=data)
-
+    # Add Bollinger Bands
+    fig = plot_area(fig, 1, data, 'bb_lowerband', 'bb_upperband',
+                    label="Bollinger Band")
+    # prevent bb_lower and bb_upper from plotting
+    try:
+        del plot_config['main_plot']['bb_lowerband']
+        del plot_config['main_plot']['bb_upperband']
+    except KeyError:
+        pass
+    # main plot goes to row 1
+    fig = add_indicators(fig=fig, row=1, indicators=plot_config['main_plot'], data=data)
+    fig = add_areas(fig, 1, data, plot_config['main_plot'])
     fig = plot_trades(fig, trades)
-
-    # Volume goes to row 2
+    # sub plot: Volume goes to row 2
     volume = go.Bar(
         x=data["date"],
         y=data["volume"],
@@ -367,26 +400,14 @@ def generate_candlestick_graph(
         marker_line_color="DarkSlateGrey",
     )
     fig.add_trace(volume, 2, 1)
-
-    # Add indicators to separate row
-    for i, name in enumerate(plot_config["subplots"]):
-        fig = add_indicators(
-            fig=fig, row=3 + i, indicators=plot_config["subplots"][name], data=data
-        )
-    if plot_config.get("pair_profits", True):
-        timeframe = plot_config["timeframe"]
-        profit_col = f"cum_profit_{pair}"
-        pair_trades = trades[trades["pair"] == pair]
-        data.set_index('date', inplace=True, drop=False)
-        if len(pair_trades) > 0:
-            data = create_cum_profit(data, pair_trades, profit_col, timeframe,
-                                        profit_col='profit_abs')
-        else:
-            data[profit_col] = 0
-
-        profit = go.Scatter(x=data.index, y=data[profit_col], name=f"Profits {pair}")
-        fig = add_profit(fig, 4 + i, data, profit_col, f"Profit {pair}")
-
+    # add each sub plot to a separate row
+    for i, label in enumerate(plot_config['subplots']):
+        sub_config = plot_config['subplots'][label]
+        row = 3 + i
+        fig = add_indicators(fig=fig, row=row, indicators=sub_config,
+                             data=data)
+        # fill area between indicators ( 'fill_to': 'other_indicator')
+        fig = add_areas(fig, row, data, sub_config)
     return fig
 
 
@@ -399,6 +420,8 @@ def generate_profit_graph(
 
     # Trim trades to available OHLCV data
     trades = extract_trades_of_period(df_comb, trades, date_index=True)
+    if len(trades) == 0:
+        raise OperationalException('No trades found in selected timerange.')
 
     # Add combined cumulative profit
     df_comb = create_cum_profit(df_comb, trades, "cum_profit", timeframe,
@@ -487,7 +510,7 @@ def load_and_plot_trades(config: Dict[str, Any]):
 
     exchange = ExchangeResolver.load_exchange(config['exchange']['name'], config)
     IStrategy.dp = DataProvider(config, exchange)
-    plot_elements = init_plotscript(config, strategy.startup_candle_count)
+    plot_elements = init_plotscript(config, list(exchange.markets), strategy.startup_candle_count)
     timerange = plot_elements['timerange']
     trades = plot_elements['trades']
     pair_counter = 0
@@ -522,8 +545,9 @@ def plot_profit(config: Dict[str, Any]) -> None:
     But should be somewhat proportional, and therefor useful
     in helping out to find a good algorithm.
     """
-    plot_elements = init_plotscript(config)
-    trades = plot_elements["trades"]
+    exchange = ExchangeResolver.load_exchange(config['exchange']['name'], config)
+    plot_elements = init_plotscript(config, list(exchange.markets))
+    trades = plot_elements['trades']
     # Filter trades to relevant pairs
     # Remove open pairs - we don't know the profit yet so can't calculate profit for these.
     # Also, If only one open pair is left, then the profit-generation would fail.

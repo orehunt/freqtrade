@@ -341,7 +341,7 @@ def test_backtesting_start(default_conf, mocker, testdatadir, caplog) -> None:
     mocker.patch('freqtrade.optimize.backtesting.Backtesting.backtest')
     mocker.patch('freqtrade.optimize.backtesting.generate_backtest_stats')
     mocker.patch('freqtrade.optimize.backtesting.show_backtest_results')
-    mocker.patch('freqtrade.pairlist.pairlistmanager.PairListManager.whitelist',
+    mocker.patch('freqtrade.plugins.pairlistmanager.PairListManager.whitelist',
                  PropertyMock(return_value=['UNITTEST/BTC']))
 
     default_conf['timeframe'] = '1m'
@@ -350,17 +350,17 @@ def test_backtesting_start(default_conf, mocker, testdatadir, caplog) -> None:
     default_conf['timerange'] = '-1510694220'
 
     backtesting = Backtesting(default_conf)
+    backtesting.strategy.bot_loop_start = MagicMock()
     backtesting.start()
     # check the logs, that will contain the backtest result
     exists = [
-        'Using stake_currency: BTC ...',
-        'Using stake_amount: 0.001 ...',
         'Backtesting with data from 2017-11-14 21:17:00 '
         'up to 2017-11-14 22:59:00 (0 days)..'
     ]
     for line in exists:
         assert log_has(line, caplog)
     assert backtesting.strategy.dp._pairlists is not None
+    assert backtesting.strategy.bot_loop_start.call_count == 1
 
 
 def test_backtesting_start_no_data(default_conf, mocker, caplog, testdatadir) -> None:
@@ -372,7 +372,7 @@ def test_backtesting_start_no_data(default_conf, mocker, caplog, testdatadir) ->
     mocker.patch('freqtrade.data.history.get_timerange', get_timerange)
     patch_exchange(mocker)
     mocker.patch('freqtrade.optimize.backtesting.Backtesting.backtest')
-    mocker.patch('freqtrade.pairlist.pairlistmanager.PairListManager.whitelist',
+    mocker.patch('freqtrade.plugins.pairlistmanager.PairListManager.whitelist',
                  PropertyMock(return_value=['UNITTEST/BTC']))
 
     default_conf['timeframe'] = "1m"
@@ -392,7 +392,7 @@ def test_backtesting_no_pair_left(default_conf, mocker, caplog, testdatadir) -> 
     mocker.patch('freqtrade.data.history.get_timerange', get_timerange)
     patch_exchange(mocker)
     mocker.patch('freqtrade.optimize.backtesting.Backtesting.backtest')
-    mocker.patch('freqtrade.pairlist.pairlistmanager.PairListManager.whitelist',
+    mocker.patch('freqtrade.plugins.pairlistmanager.PairListManager.whitelist',
                  PropertyMock(return_value=[]))
 
     default_conf['timeframe'] = "1m"
@@ -415,9 +415,9 @@ def test_backtesting_pairlist_list(default_conf, mocker, caplog, testdatadir, ti
     mocker.patch('freqtrade.data.history.get_timerange', get_timerange)
     patch_exchange(mocker)
     mocker.patch('freqtrade.optimize.backtesting.Backtesting.backtest')
-    mocker.patch('freqtrade.pairlist.pairlistmanager.PairListManager.whitelist',
+    mocker.patch('freqtrade.plugins.pairlistmanager.PairListManager.whitelist',
                  PropertyMock(return_value=['XRP/BTC']))
-    mocker.patch('freqtrade.pairlist.pairlistmanager.PairListManager.refresh_pairlist')
+    mocker.patch('freqtrade.plugins.pairlistmanager.PairListManager.refresh_pairlist')
 
     default_conf['ticker_interval'] = "1m"
     default_conf['datadir'] = testdatadir
@@ -700,7 +700,7 @@ def test_backtest_start_timerange(default_conf, mocker, caplog, testdatadir):
     mocker.patch('freqtrade.optimize.backtesting.Backtesting.backtest')
     mocker.patch('freqtrade.optimize.backtesting.generate_backtest_stats')
     mocker.patch('freqtrade.optimize.backtesting.show_backtest_results')
-    mocker.patch('freqtrade.pairlist.pairlistmanager.PairListManager.whitelist',
+    mocker.patch('freqtrade.plugins.pairlistmanager.PairListManager.whitelist',
                  PropertyMock(return_value=['UNITTEST/BTC']))
     patched_configuration_load_config_file(mocker, default_conf)
 
@@ -722,8 +722,6 @@ def test_backtest_start_timerange(default_conf, mocker, caplog, testdatadir):
         'Ignoring max_open_trades (--disable-max-market-positions was used) ...',
         'Parameter --timerange detected: 1510694220-1510700340 ...',
         f'Using data directory: {testdatadir} ...',
-        'Using stake_currency: BTC ...',
-        'Using stake_amount: 0.001 ...',
         'Loading data from 2017-11-14 20:57:00 '
         'up to 2017-11-14 22:58:00 (0 days)..',
         'Backtesting with data from 2017-11-14 21:17:00 '
@@ -740,7 +738,7 @@ def test_backtest_start_multi_strat(default_conf, mocker, caplog, testdatadir):
 
     patch_exchange(mocker)
     backtestmock = MagicMock(return_value=pd.DataFrame(columns=BT_DATA_COLUMNS + ['profit_abs']))
-    mocker.patch('freqtrade.pairlist.pairlistmanager.PairListManager.whitelist',
+    mocker.patch('freqtrade.plugins.pairlistmanager.PairListManager.whitelist',
                  PropertyMock(return_value=['UNITTEST/BTC']))
     mocker.patch('freqtrade.optimize.backtesting.Backtesting.backtest', backtestmock)
     text_table_mock = MagicMock()
@@ -786,8 +784,6 @@ def test_backtest_start_multi_strat(default_conf, mocker, caplog, testdatadir):
         'Ignoring max_open_trades (--disable-max-market-positions was used) ...',
         'Parameter --timerange detected: 1510694220-1510700340 ...',
         f'Using data directory: {testdatadir} ...',
-        'Using stake_currency: BTC ...',
-        'Using stake_amount: 0.001 ...',
         'Loading data from 2017-11-14 20:57:00 '
         'up to 2017-11-14 22:58:00 (0 days)..',
         'Backtesting with data from 2017-11-14 21:17:00 '
@@ -837,7 +833,7 @@ def test_backtest_start_multi_strat_nomock(default_conf, mocker, caplog, testdat
                       'sell_reason': [SellType.ROI, SellType.ROI, SellType.STOP_LOSS]
                       }),
     ])
-    mocker.patch('freqtrade.pairlist.pairlistmanager.PairListManager.whitelist',
+    mocker.patch('freqtrade.plugins.pairlistmanager.PairListManager.whitelist',
                  PropertyMock(return_value=['UNITTEST/BTC']))
     mocker.patch('freqtrade.optimize.backtesting.Backtesting.backtest', backtestmock)
 
@@ -865,8 +861,6 @@ def test_backtest_start_multi_strat_nomock(default_conf, mocker, caplog, testdat
         'Ignoring max_open_trades (--disable-max-market-positions was used) ...',
         'Parameter --timerange detected: 1510694220-1510700340 ...',
         f'Using data directory: {testdatadir} ...',
-        'Using stake_currency: BTC ...',
-        'Using stake_amount: 0.001 ...',
         'Loading data from 2017-11-14 20:57:00 '
         'up to 2017-11-14 22:58:00 (0 days)..',
         'Backtesting with data from 2017-11-14 21:17:00 '
